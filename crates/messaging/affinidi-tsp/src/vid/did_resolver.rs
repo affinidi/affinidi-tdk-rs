@@ -19,7 +19,7 @@
 //! [`VidResolver::resolve`] serves the cached [`ResolvedVid`]. This matches the
 //! library's existing "register, then resolve" model.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
 use affinidi_did_common::verification_method::VerificationRelationship;
@@ -43,6 +43,10 @@ pub const TSP_SERVICE_TYPE: &str = "TSPTransport";
 pub struct DidVidResolver {
     client: DIDCacheClient,
     cache: RwLock<HashMap<String, ResolvedVid>>,
+    /// DIDs evicted by `refresh` and not yet re-resolved.
+    evicted: RwLock<HashSet<String>>,
+    /// DIDs re-resolved by `resolve_did` since `refresh` evicted them.
+    re_resolved: RwLock<HashSet<String>>,
 }
 
 impl DidVidResolver {
@@ -51,6 +55,8 @@ impl DidVidResolver {
         Self {
             client,
             cache: RwLock::new(HashMap::new()),
+            evicted: RwLock::new(HashSet::new()),
+            re_resolved: RwLock::new(HashSet::new()),
         }
     }
 
@@ -60,9 +66,19 @@ impl DidVidResolver {
     /// document lacks an Ed25519 authentication key or an X25519 keyAgreement
     /// key. A missing TSP service entry is not an error — `endpoints` and
     /// `mediators` are then both empty (the caller may deliver out of band).
+    ///
+    /// After [`VidResolver::refresh`] evicted `did`, this also drops the
+    /// client's cached document, so the answer comes from the provenance chain
+    /// rather than from either cache, and the next
+    /// [`VidResolver::completed_refresh`] returns it.
     pub async fn resolve_did(&self, did: &str) -> Result<ResolvedVid, TspError> {
         if let Some(cached) = self.cache.read().unwrap().get(did).cloned() {
             return Ok(cached);
+        }
+
+        let after_eviction = self.evicted.read().unwrap().contains(did);
+        if after_eviction {
+            self.client.remove(did).await;
         }
 
         let response = self
@@ -76,6 +92,9 @@ impl DidVidResolver {
             .write()
             .unwrap()
             .insert(did.to_string(), resolved.clone());
+        if after_eviction && self.evicted.write().unwrap().remove(did) {
+            self.re_resolved.write().unwrap().insert(did.to_string());
+        }
         Ok(resolved)
     }
 
@@ -109,13 +128,24 @@ impl VidResolver for DidVidResolver {
     ///
     /// Eviction still does useful work: the next [`DidVidResolver::resolve_did`]
     /// misses the cache and returns to the chain. An async caller should treat
-    /// this error as the signal to make that call.
+    /// this error as the signal to make that call. Once it has,
+    /// [`VidResolver::completed_refresh`] returns the new value, and a
+    /// `TspAgent` using this resolver treats the key state as confirmed.
     fn refresh(&self, vid: &str) -> Result<ResolvedVid, TspError> {
         self.cache.write().unwrap().remove(vid);
+        self.re_resolved.write().unwrap().remove(vid);
+        self.evicted.write().unwrap().insert(vid.to_string());
         Err(TspError::Vid(format!(
             "key state for {vid} was evicted and cannot be re-resolved synchronously; \
              call resolve_did to return to the provenance chain"
         )))
+    }
+
+    fn completed_refresh(&self, vid: &str) -> Option<ResolvedVid> {
+        if !self.re_resolved.read().unwrap().contains(vid) {
+            return None;
+        }
+        self.cache.read().unwrap().get(vid).cloned()
     }
 }
 

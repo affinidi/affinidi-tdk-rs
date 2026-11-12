@@ -1116,13 +1116,8 @@ fn decode_ml_dsa_signature_frame(
         pos,
     )
     .ok_or_else(|| TspError::InvalidMessage("missing 1AAQ ML-DSA-65 signature".into()))?;
-    if *pos > sig_group_end {
-        return Err(TspError::InvalidMessage(
-            "signature overruns the -K group".into(),
-        ));
-    }
+    expect_single_signature(*pos, sig_group_end, group_end)?;
 
-    *pos = group_end;
     Ok(Box::new(signature))
 }
 
@@ -1170,11 +1165,7 @@ fn decode_signature_frame(data: &[u8], pos: &mut usize) -> Result<[u8; SIG_LEN],
 
     let (index, signature) = wire::decode_indexed_ed25519_signature(data, pos)
         .ok_or_else(|| TspError::InvalidMessage("missing indexed Ed25519 signature".into()))?;
-    if *pos > sig_group_end {
-        return Err(TspError::InvalidMessage(
-            "signature overruns the -K group".into(),
-        ));
-    }
+    expect_single_signature(*pos, sig_group_end, group_end)?;
 
     // §9.5 allows any index — it selects among a VID's signing keys, and §3
     // leaves their order to the VID type — but we resolve exactly one key per
@@ -1194,11 +1185,36 @@ fn decode_signature_frame(data: &[u8], pos: &mut usize) -> Result<[u8; SIG_LEN],
         )));
     }
 
-    // Rev 3 tolerates further signatures in the group; we verify the first and
-    // skip the rest, since choosing among a VID's keys by index is a VID-type
-    // concern this crate does not model.
-    *pos = group_end;
     Ok(signature)
+}
+
+/// Require the `-C` attachment to hold exactly one signature: the `-K` group
+/// ends where the signature ends, and the `-C` group ends where the `-K` group
+/// ends.
+///
+/// Neither count is covered by the message signature. If the groups could
+/// declare room for more than the one signature we verify, any bytes could be
+/// placed there and the message would still verify, so one signed message
+/// would have many accepted encodings, each with its own wire digest. We
+/// resolve one key per VID, so a second signature could not be checked anyway;
+/// this needs revisiting together with the key index if multi-key VIDs are
+/// modelled.
+fn expect_single_signature(
+    signature_end: usize,
+    sig_group_end: usize,
+    group_end: usize,
+) -> Result<(), TspError> {
+    if signature_end > sig_group_end {
+        return Err(TspError::InvalidMessage(
+            "signature overruns the -K group".into(),
+        ));
+    }
+    if signature_end != sig_group_end || sig_group_end != group_end {
+        return Err(TspError::InvalidMessage(
+            "signature attachment must hold exactly one signature".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Pack a direct TSP message.
@@ -2641,6 +2657,136 @@ mod tests {
                 unpack(&bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).is_err(),
                 "corrupting attachment byte {offset} must not bypass verification"
             );
+        }
+    }
+
+    /// Re-encode a packed message's signature attachment with extra content:
+    /// `in_sig_group` bytes inside the `-K` group after the signature, then
+    /// `after_sig_group` bytes inside the `-C` group after the `-K` group. The
+    /// signed bytes are untouched, so the signature itself still verifies.
+    fn with_extra_attachment_bytes(
+        packed: &[u8],
+        in_sig_group: &[u8],
+        after_sig_group: &[u8],
+    ) -> Vec<u8> {
+        assert_eq!(in_sig_group.len() % 3, 0);
+        assert_eq!(after_sig_group.len() % 3, 0);
+        let content_end = Envelope::decode_full(packed).unwrap().content_end;
+        let signature = &packed[content_end + 6..];
+        assert_eq!(signature.len(), SIG_GROUP_QUADLETS as usize * 3);
+
+        let sig_group = SIG_GROUP_QUADLETS + (in_sig_group.len() / 3) as u32;
+        let attach_group = sig_group + 1 + (after_sig_group.len() / 3) as u32;
+        let mut bytes = packed[..content_end].to_vec();
+        wire::encode_count(wire::TSP_ATTACH_GRP, attach_group, &mut bytes);
+        wire::encode_count(wire::TSP_INDEX_SIG_GRP, sig_group, &mut bytes);
+        bytes.extend_from_slice(signature);
+        bytes.extend_from_slice(in_sig_group);
+        bytes.extend_from_slice(after_sig_group);
+        bytes
+    }
+
+    /// The `-C` and `-K` counts are not signed, so each signed message has one
+    /// accepted encoding only if the attachment must hold exactly the one
+    /// signature that is verified. Extra content in either group, including a
+    /// copy of the signature, is refused.
+    #[test]
+    fn a_signature_attachment_with_more_than_one_signature_is_rejected() {
+        let keys = gen_keys();
+        let packed = pack(
+            b"payload",
+            MessageType::Direct,
+            "did:web:alice",
+            "did:web:bob",
+            &keys.sender_sign_sk,
+            &keys.receiver_enc_pk,
+        )
+        .unwrap();
+        let content_end = Envelope::decode_full(&packed.bytes).unwrap().content_end;
+        let signature = packed.bytes[content_end + 6..].to_vec();
+
+        assert_eq!(
+            with_extra_attachment_bytes(&packed.bytes, &[], &[]),
+            packed.bytes,
+            "re-encoding with nothing extra reproduces the packed message"
+        );
+        assert!(unpack(&packed.bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).is_ok());
+
+        let filler = [b'A'; 3];
+        let variants = [
+            (
+                "a second signature in the -K group",
+                signature.clone(),
+                Vec::new(),
+            ),
+            ("filler in the -K group", filler.to_vec(), Vec::new()),
+            ("filler after the -K group", Vec::new(), filler.to_vec()),
+            ("a second -K group", Vec::new(), {
+                let mut group = Vec::new();
+                wire::encode_count(wire::TSP_INDEX_SIG_GRP, SIG_GROUP_QUADLETS, &mut group);
+                group.extend_from_slice(&signature);
+                group
+            }),
+        ];
+        for (label, in_sig_group, after_sig_group) in variants {
+            let bytes = with_extra_attachment_bytes(&packed.bytes, &in_sig_group, &after_sig_group);
+            let err = unpack(&bytes, &keys.receiver_enc_sk, &keys.sender_sign_pk).unwrap_err();
+            assert!(
+                matches!(&err, TspError::InvalidMessage(m) if m.contains("exactly one signature")),
+                "{label}: got {err:?}"
+            );
+        }
+    }
+
+    /// The attachment decoder on its own: exactly one signature decodes and
+    /// ends at the end of the `-C` group, anything after it is refused.
+    #[test]
+    fn the_signature_attachment_decoder_takes_exactly_one_signature() {
+        let mut attachment = Vec::new();
+        encode_signature_frame(&[7u8; SIG_LEN], &mut attachment);
+        let mut pos = 0;
+        assert_eq!(
+            decode_signature_frame(&attachment, &mut pos).unwrap(),
+            [7u8; SIG_LEN]
+        );
+        assert_eq!(pos, attachment.len());
+
+        let mut longer = Vec::new();
+        wire::encode_count(wire::TSP_ATTACH_GRP, ATTACH_GROUP_QUADLETS + 1, &mut longer);
+        longer.extend_from_slice(&attachment[3..]);
+        longer.extend_from_slice(b"AAA");
+        assert!(decode_signature_frame(&longer, &mut 0).is_err());
+    }
+
+    #[cfg(feature = "pq")]
+    #[test]
+    fn the_ml_dsa_signature_attachment_decoder_takes_exactly_one_signature() {
+        let signature = [5u8; crate::crypto::ml_dsa::SIG_LEN];
+        let mut attachment = Vec::new();
+        encode_ml_dsa_signature_frame(&signature, &mut attachment);
+        let mut pos = 0;
+        assert_eq!(
+            *decode_ml_dsa_signature_frame(&attachment, &mut pos).unwrap(),
+            signature
+        );
+        assert_eq!(pos, attachment.len());
+
+        let sig_group = ((attachment.len() - 6) / 3) as u32;
+        for (extra_in_sig_group, extra_after) in [(1u32, 0u32), (0, 1)] {
+            let mut longer = Vec::new();
+            wire::encode_count(
+                wire::TSP_ATTACH_GRP,
+                sig_group + 1 + extra_in_sig_group + extra_after,
+                &mut longer,
+            );
+            wire::encode_count(
+                wire::TSP_INDEX_SIG_GRP,
+                sig_group + extra_in_sig_group,
+                &mut longer,
+            );
+            longer.extend_from_slice(&attachment[6..]);
+            longer.extend_from_slice(b"AAA");
+            assert!(decode_ml_dsa_signature_frame(&longer, &mut 0).is_err());
         }
     }
 

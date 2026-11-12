@@ -58,7 +58,7 @@ pub use vid::resolver::VidResolver;
 pub use vid::{DidVidResolver, TSP_SERVICE_TYPE};
 pub use vid::{PrivateVid, ResolvedVid};
 
-use keystate::{Clock, KeyStateTracker};
+use keystate::{Clock, KeyStateTracker, RefreshStatus};
 use message::control::ControlMessage;
 use message::direct::{self, PackedMessage};
 use relationship::RelationshipEvent;
@@ -241,6 +241,7 @@ impl TspAgent {
         self.store
             .transition_relationship(our_vid, their_vid, RelationshipEvent::SendCancel)?;
         self.store.clear_thread_digest(our_vid, their_vid);
+        self.forget_key_state_if_unrelated(their_vid);
 
         Ok(packed)
     }
@@ -311,18 +312,7 @@ impl TspAgent {
                 now_ms,
             )
         {
-            match self.refresh_key_state(&envelope.sender, now_ms) {
-                Ok(Some(fresh)) => sender_resolved = fresh,
-                // Rate-limited: the allowance for this peer is already spent,
-                // so proceed on what we hold rather than resolving again.
-                Ok(None) => {}
-                Err(e) => {
-                    return Err(TspError::Discarded(format!(
-                        "key state for {} could not be confirmed after a silence: {e}",
-                        envelope.sender
-                    )));
-                }
-            }
+            sender_resolved = self.confirm_key_state_after_silence(&envelope.sender, now_ms)?;
         }
 
         // Unpack. §7.4.2, second occasion: a verification failure inside an
@@ -341,18 +331,24 @@ impl TspAgent {
                     return Err(first_error);
                 }
                 match self.refresh_key_state(&envelope.sender, now_ms) {
-                    Ok(Some(fresh)) => {
+                    Ok(KeyStateRefresh::Fresh(fresh)) => {
                         direct::unpack(wire, &our_private.decryption_key, &fresh.signing_key)?
                     }
                     // No refresh was possible, so the original failure stands.
-                    Ok(None) => return Err(first_error),
+                    Ok(KeyStateRefresh::RateLimited) => return Err(first_error),
                     Err(_) => return Err(first_error),
                 }
             }
         };
 
         // The message verified, so the key state behind it is confirmed now.
-        self.key_state.record_seen(&envelope.sender, now_ms);
+        // Silence is only measured inside a relationship, so only those
+        // senders are recorded (here, or below once a control message has
+        // formed one); the tracker grows with relationships rather than with
+        // every sender whose message verifies.
+        if established {
+            self.key_state.record_seen(&envelope.sender, now_ms);
+        }
 
         // Handle control messages
         if unpacked.message_type == MessageType::Control {
@@ -362,6 +358,14 @@ impl TspAgent {
                 .ok_or_else(|| TspError::InvalidMessage("control message has no payload".into()))?;
             let outcome =
                 self.handle_control(our_vid, &unpacked.sender, &control, unpacked.thread_digest)?;
+            if !established
+                && self
+                    .store
+                    .relationship_state(our_vid, &envelope.sender)
+                    .admits_application_message()
+            {
+                self.key_state.record_seen(&envelope.sender, now_ms);
+            }
 
             return Ok(ReceivedMessage {
                 payload: unpacked.payload,
@@ -566,26 +570,122 @@ impl TspAgent {
     ///
     /// `thread_digest` is the `SHA256` of the received message's plaintext frame
     /// (for an invite it is the value the accepter must echo back as `reply`).
-    /// Re-resolve `vid`, subject to the per-peer rate limit.
+    /// The key state to verify a message from `vid` against, after a silence
+    /// longer than the re-verification threshold (§7.4.2), or a `Discarded`
+    /// error when it cannot be confirmed.
     ///
-    /// `Ok(None)` means the limit is in force and no resolution was attempted;
-    /// the caller proceeds on the key state it already holds. §7.4.2 bounds
-    /// this because re-resolution can be provoked by an unauthenticated
-    /// message, and resolution is more expensive than the message provoking it,
-    /// so the cost would otherwise fall on the peer's infrastructure.
-    fn refresh_key_state(
+    /// Confirmed means a refresh succeeded, or, after one failed, the
+    /// resolver has since re-resolved the VID from its provenance chain
+    /// ([`VidResolver::completed_refresh`], which is how a `DidVidResolver`
+    /// re-resolved with `resolve_did` is picked up). The rate limit bounds how
+    /// often we resolve; it does not stand in for a confirmation. Inside the
+    /// limit:
+    ///
+    /// * after a refresh that succeeded, the state we hold is that refresh's,
+    ///   so it is used;
+    /// * while a refresh is in flight on another thread, the message is
+    ///   discarded rather than held: this agent is synchronous and has no
+    ///   queue to hold it in, and the sender's retry will find the outcome;
+    /// * after a refresh that failed, the message is discarded until the next
+    ///   attempt, which comes later after each failure in a row (see
+    ///   [`keystate::KeyStateTracker::next_resolution_at_ms`]).
+    fn confirm_key_state_after_silence(
         &self,
         vid: &str,
         now_ms: u64,
-    ) -> Result<Option<vid::ResolvedVid>, TspError> {
-        if !self
-            .key_state
-            .may_resolve(vid, self.key_state_policy.resolution_rate_limit, now_ms)
+    ) -> Result<ResolvedVid, TspError> {
+        if matches!(
+            self.key_state.refresh_status(vid),
+            RefreshStatus::Failed { .. }
+        ) && let Some(resolved) = self.resolver.completed_refresh(vid)
         {
-            return Ok(None);
+            self.key_state.record_confirmed_after_failed_refresh(vid);
+            return Ok(resolved);
         }
-        self.key_state.record_resolved(vid, now_ms);
-        self.resolver.refresh(vid).map(Some)
+
+        match self.refresh_key_state(vid, now_ms) {
+            Ok(KeyStateRefresh::Fresh(fresh)) => Ok(fresh),
+            Ok(KeyStateRefresh::RateLimited) => {
+                let next_in_ms = self
+                    .key_state
+                    .next_resolution_at_ms(vid, self.key_state_policy.resolution_rate_limit)
+                    .saturating_sub(now_ms);
+                match self.key_state.refresh_status(vid) {
+                    RefreshStatus::Succeeded => self.resolver.resolve(vid),
+                    RefreshStatus::InFlight => Err(TspError::Discarded(format!(
+                        "key state for {vid} is not confirmed after a silence: a refresh is in \
+                         progress; send again once it completes"
+                    ))),
+                    RefreshStatus::Failed { consecutive } => Err(TspError::Discarded(format!(
+                        "key state for {vid} is not confirmed after a silence: the last refresh \
+                         failed ({consecutive} in a row); next refresh allowed in {next_in_ms} ms"
+                    ))),
+                    RefreshStatus::NeverAttempted => Err(TspError::Discarded(format!(
+                        "key state for {vid} is not confirmed after a silence"
+                    ))),
+                }
+            }
+            Err(e) => Err(TspError::Discarded(format!(
+                "key state for {vid} could not be confirmed after a silence: the refresh \
+                 failed: {e}"
+            ))),
+        }
+    }
+
+    /// Re-resolve `vid`, subject to the per-peer rate limit.
+    ///
+    /// `RateLimited` means no resolution was attempted. §7.4.2 bounds
+    /// resolution because it can be provoked by an unauthenticated message,
+    /// and resolution is more expensive than the message provoking it, so the
+    /// cost would otherwise fall on the peer's infrastructure. Checking the
+    /// limit and stamping the attempt is one step, and the outcome is recorded
+    /// against this attempt only, so a slow older refresh cannot overwrite a
+    /// newer one's result.
+    fn refresh_key_state(&self, vid: &str, now_ms: u64) -> Result<KeyStateRefresh, TspError> {
+        let Some(token) = self.key_state.try_begin_refresh(
+            vid,
+            self.key_state_policy.resolution_rate_limit,
+            now_ms,
+        ) else {
+            return Ok(KeyStateRefresh::RateLimited);
+        };
+        match self.resolver.refresh(vid) {
+            Ok(fresh) => {
+                self.key_state.record_refresh_succeeded(&token);
+                Ok(KeyStateRefresh::Fresh(fresh))
+            }
+            Err(e) => {
+                self.key_state.record_refresh_failed(&token);
+                Err(e)
+            }
+        }
+    }
+
+    /// How many refreshes of `peer_vid`'s key state have failed in a row
+    /// since the last one that succeeded (or since the resolver re-resolved
+    /// it, see [`VidResolver::completed_refresh`]).
+    ///
+    /// A refresh runs after a silence longer than the re-verification
+    /// threshold, and on a verification failure inside a relationship. Only
+    /// the first kind gates messages: while it is unconfirmed, messages from
+    /// `peer_vid` that arrive after the silence are discarded. A failure of
+    /// the second kind can be provoked by any message that names `peer_vid`
+    /// as its sender, so a non-zero count on its own does not mean messages
+    /// are being discarded; it does mean the resolver could not reach the
+    /// peer's provenance chain.
+    pub fn key_state_refresh_failures(&self, peer_vid: &str) -> u32 {
+        self.key_state.consecutive_refresh_failures(peer_vid)
+    }
+
+    /// Drop the key-state bookkeeping for `their_vid` once no local VID holds
+    /// a relationship with it.
+    fn forget_key_state_if_unrelated(&self, their_vid: &str) {
+        let related = self.store.list_private_vids().iter().any(|our_vid| {
+            self.store.relationship_state(our_vid, their_vid) != RelationshipState::None
+        });
+        if !related {
+            self.key_state.forget(their_vid);
+        }
     }
 
     fn handle_control(
@@ -717,6 +817,7 @@ impl TspAgent {
                     RelationshipEvent::ReceiveCancel,
                 )?;
                 self.store.clear_thread_digest(our_vid, their_vid);
+                self.forget_key_state_if_unrelated(their_vid);
                 if reply_expected {
                     return Ok(ControlOutcome::ReplyToCancellation);
                 }
@@ -731,6 +832,14 @@ impl Default for TspAgent {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// What [`TspAgent::refresh_key_state`] did.
+enum KeyStateRefresh {
+    /// The VID was resolved again and this is its current key state.
+    Fresh(ResolvedVid),
+    /// The rate limit is in force, so nothing was resolved.
+    RateLimited,
 }
 
 /// What a control message asks of the receiving endpoint beyond updating state.
@@ -1518,6 +1627,11 @@ mod tests {
         current: std::sync::RwLock<std::collections::HashMap<String, ResolvedVid>>,
         rotated: std::sync::RwLock<std::collections::HashMap<String, ResolvedVid>>,
         refreshes: std::sync::atomic::AtomicUsize,
+        refresh_fails: std::sync::atomic::AtomicBool,
+        completed: std::sync::RwLock<std::collections::HashMap<String, ResolvedVid>>,
+        #[allow(clippy::type_complexity)]
+        block:
+            std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
     }
 
     impl CountingResolver {
@@ -1529,6 +1643,25 @@ mod tests {
         }
         fn refreshes(&self) -> usize {
             self.refreshes.load(std::sync::atomic::Ordering::SeqCst)
+        }
+        /// Make every refresh fail while still answering `resolve` from what
+        /// it holds, as a caching resolver does when its source is down.
+        fn set_refresh_fails(&self, fails: bool) {
+            self.refresh_fails
+                .store(fails, std::sync::atomic::Ordering::SeqCst);
+        }
+        /// Stand in for an async re-resolution that finished after a failed
+        /// refresh.
+        fn complete_refresh_with(&self, vid: ResolvedVid) {
+            self.completed.write().unwrap().insert(vid.id.clone(), vid);
+        }
+        /// The next refresh signals `entered`, then waits for `release`.
+        fn block_next_refresh(
+            &self,
+            entered: std::sync::mpsc::Sender<()>,
+            release: std::sync::mpsc::Receiver<()>,
+        ) {
+            *self.block.lock().unwrap() = Some((entered, release));
         }
     }
 
@@ -1545,6 +1678,16 @@ mod tests {
         fn refresh(&self, vid: &str) -> Result<ResolvedVid, TspError> {
             self.refreshes
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let block = self.block.lock().unwrap().take();
+            if let Some((entered, release)) = block {
+                entered.send(()).unwrap();
+                release.recv().unwrap();
+            }
+            if self.refresh_fails.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(TspError::DidResolution(format!(
+                    "{vid}: source unavailable"
+                )));
+            }
             if let Some(rotated) = self.rotated.write().unwrap().remove(vid) {
                 self.current
                     .write()
@@ -1553,6 +1696,10 @@ mod tests {
                 return Ok(rotated);
             }
             self.resolve(vid)
+        }
+
+        fn completed_refresh(&self, vid: &str) -> Option<ResolvedVid> {
+            self.completed.read().unwrap().get(vid).cloned()
         }
     }
 
@@ -1739,6 +1886,310 @@ mod tests {
         clock.advance(std::time::Duration::from_secs(60 * 60 * 25));
         bob.receive("did:example:bob", &send().bytes).unwrap();
         assert_eq!(resolver.refreshes(), 1, "a dormant relationship resuming");
+    }
+
+    /// Bob in a relationship with Alice, who has been silent past the
+    /// re-verification threshold, with a resolver whose refreshes the test
+    /// can make fail. Returns a closure that packs a message from Alice.
+    fn bob_after_a_silence() -> (
+        TspAgent,
+        std::sync::Arc<ManualClock>,
+        std::sync::Arc<CountingResolver>,
+        impl Fn() -> PackedMessage,
+    ) {
+        let a = PrivateVid::generate("did:example:alice");
+        let b = PrivateVid::generate("did:example:bob");
+
+        let resolver = std::sync::Arc::new(CountingResolver::default());
+        resolver.insert(a.to_resolved());
+
+        let (bob, clock) = bob_with_resolver();
+        let bob = bob.with_resolver(Box::new(resolver.clone()));
+        bob.add_private_vid(b.clone());
+        bob.store.set_relationship_state(
+            "did:example:bob",
+            "did:example:alice",
+            RelationshipState::Bidirectional,
+        );
+
+        let alice = TspAgent::new();
+        alice.add_private_vid(a);
+        alice.add_verified_vid(b.to_resolved());
+        let send = move || {
+            alice
+                .pack_message(
+                    "did:example:alice",
+                    "did:example:bob",
+                    b"hello",
+                    MessageType::Direct,
+                )
+                .unwrap()
+        };
+
+        bob.receive("did:example:bob", &send().bytes).unwrap();
+        clock.advance(std::time::Duration::from_secs(60 * 60 * 25));
+        (bob, clock, resolver, send)
+    }
+
+    /// After a silence, a refresh that fails leaves the key state unconfirmed,
+    /// and it stays unconfirmed until a refresh succeeds: messages inside the
+    /// rate limit are discarded too, not verified against the key we held.
+    #[test]
+    fn after_a_failed_refresh_messages_wait_for_a_successful_one() {
+        let (bob, clock, resolver, send) = bob_after_a_silence();
+        resolver.set_refresh_fails(true);
+
+        let err = bob.receive("did:example:bob", &send().bytes).unwrap_err();
+        assert!(matches!(err, TspError::Discarded(_)), "got {err:?}");
+        assert_eq!(resolver.refreshes(), 1);
+        assert_eq!(bob.key_state_refresh_failures("did:example:alice"), 1);
+
+        for _ in 0..3 {
+            clock.advance(std::time::Duration::from_secs(10));
+            let err = bob.receive("did:example:bob", &send().bytes).unwrap_err();
+            assert!(
+                matches!(&err, TspError::Discarded(m) if m.contains("not confirmed")),
+                "got {err:?}"
+            );
+        }
+        assert_eq!(
+            resolver.refreshes(),
+            1,
+            "the rate limit still bounds resolution"
+        );
+
+        resolver.set_refresh_fails(false);
+        clock.advance(std::time::Duration::from_secs(31));
+        let got = bob.receive("did:example:bob", &send().bytes).unwrap();
+        assert_eq!(got.payload, b"hello");
+        assert_eq!(resolver.refreshes(), 2);
+        assert_eq!(bob.key_state_refresh_failures("did:example:alice"), 0);
+    }
+
+    /// Consecutive failed refreshes lengthen the wait before the next one,
+    /// to a bound, and a success resets it.
+    #[test]
+    fn failed_refreshes_are_retried_with_a_bounded_backoff() {
+        let (bob, clock, resolver, send) = bob_after_a_silence();
+        resolver.set_refresh_fails(true);
+
+        assert!(bob.receive("did:example:bob", &send().bytes).is_err());
+        clock.advance(std::time::Duration::from_secs(60));
+        assert!(bob.receive("did:example:bob", &send().bytes).is_err());
+        assert_eq!(resolver.refreshes(), 2);
+        assert_eq!(bob.key_state_refresh_failures("did:example:alice"), 2);
+
+        // Two failures in a row: the next attempt waits two limits.
+        clock.advance(std::time::Duration::from_secs(60));
+        assert!(bob.receive("did:example:bob", &send().bytes).is_err());
+        assert_eq!(resolver.refreshes(), 2);
+        clock.advance(std::time::Duration::from_secs(60));
+        resolver.set_refresh_fails(false);
+        bob.receive("did:example:bob", &send().bytes).unwrap();
+        assert_eq!(resolver.refreshes(), 3);
+        assert_eq!(bob.key_state_refresh_failures("did:example:alice"), 0);
+    }
+
+    /// The fail-closed rule does not cost a peer anything after a refresh that
+    /// worked: a message that fails to verify after a successful refresh does
+    /// not stop the next good one inside the rate limit.
+    #[test]
+    fn after_a_successful_refresh_the_rate_limit_proceeds_on_the_fresh_state() {
+        let (bob, clock, resolver, send) = bob_after_a_silence();
+
+        let stranger = TspAgent::new();
+        stranger.add_private_vid(PrivateVid::generate("did:example:alice"));
+        stranger.add_verified_vid(bob.resolver.resolve("did:example:bob").unwrap());
+        let wrongly_signed = stranger
+            .pack_message(
+                "did:example:alice",
+                "did:example:bob",
+                b"hello",
+                MessageType::Direct,
+            )
+            .unwrap();
+        assert!(
+            bob.receive("did:example:bob", &wrongly_signed.bytes)
+                .is_err()
+        );
+        assert_eq!(resolver.refreshes(), 1);
+
+        clock.advance(std::time::Duration::from_secs(5));
+        bob.receive("did:example:bob", &send().bytes).unwrap();
+        assert_eq!(resolver.refreshes(), 1);
+    }
+
+    /// The documented pattern with a `DidVidResolver`: its `refresh` always
+    /// evicts and fails, and the application re-resolves with `resolve_did`.
+    /// After that the key state counts as confirmed, so the peer is not shut
+    /// out for good after one silence; before it, messages are discarded.
+    #[cfg(feature = "did-resolver")]
+    #[tokio::test]
+    async fn a_did_resolver_refreshed_by_resolve_did_confirms_key_state() {
+        use affinidi_did_resolver_cache_sdk::DIDCacheClient;
+        use affinidi_did_resolver_cache_sdk::config::DIDCacheConfigBuilder;
+        use affinidi_encoding::{ED25519_PUB, encode_multikey};
+
+        let mut a = PrivateVid::generate("placeholder");
+        a.id = format!("did:key:{}", encode_multikey(ED25519_PUB, &a.verifying_key));
+        let alice_did = a.id.clone();
+        let b = PrivateVid::generate("did:example:bob");
+
+        let client = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let resolver = std::sync::Arc::new(DidVidResolver::new(client));
+        resolver.resolve_did(&alice_did).await.unwrap();
+
+        let (bob, clock) = bob_with_resolver();
+        let bob = bob.with_resolver(Box::new(resolver.clone()));
+        bob.add_private_vid(b.clone());
+        bob.store.set_relationship_state(
+            "did:example:bob",
+            &alice_did,
+            RelationshipState::Bidirectional,
+        );
+
+        let alice = TspAgent::new();
+        alice.add_private_vid(a);
+        alice.add_verified_vid(b.to_resolved());
+        let send = || {
+            alice
+                .pack_message(&alice_did, "did:example:bob", b"hello", MessageType::Direct)
+                .unwrap()
+        };
+
+        bob.receive("did:example:bob", &send().bytes).unwrap();
+        clock.advance(std::time::Duration::from_secs(60 * 60 * 25));
+
+        let err = bob.receive("did:example:bob", &send().bytes).unwrap_err();
+        assert!(matches!(err, TspError::Discarded(_)), "got {err:?}");
+        assert!(
+            bob.receive("did:example:bob", &send().bytes).is_err(),
+            "evicted and not yet re-resolved"
+        );
+
+        resolver.resolve_did(&alice_did).await.unwrap();
+        clock.advance(std::time::Duration::from_secs(1));
+        let got = bob.receive("did:example:bob", &send().bytes).unwrap();
+        assert_eq!(got.payload, b"hello");
+        assert_eq!(bob.key_state_refresh_failures(&alice_did), 0);
+
+        // Past the rate limit, later messages are fine too: the silence is
+        // over, so no further refresh (and eviction) is due.
+        clock.advance(std::time::Duration::from_secs(120));
+        bob.receive("did:example:bob", &send().bytes).unwrap();
+    }
+
+    /// The same with a VID that was also registered locally
+    /// (`add_verified_vid`): the re-resolved value replaces the local copy,
+    /// rather than the old key being used.
+    #[test]
+    fn a_completed_refresh_replaces_a_locally_registered_copy() {
+        let alice_old = PrivateVid::generate("did:example:alice");
+        let alice_new = PrivateVid::generate("did:example:alice");
+
+        let resolver = std::sync::Arc::new(CountingResolver::default());
+        resolver.insert(alice_old.to_resolved());
+        let (bob, _clock) = bob_with_resolver();
+        let bob = bob.with_resolver(Box::new(resolver.clone()));
+        bob.add_verified_vid(alice_old.to_resolved());
+
+        resolver.set_refresh_fails(true);
+        assert!(bob.resolver.refresh("did:example:alice").is_err());
+        assert!(
+            bob.resolver
+                .completed_refresh("did:example:alice")
+                .is_none()
+        );
+
+        resolver.complete_refresh_with(alice_new.to_resolved());
+        let completed = bob.resolver.completed_refresh("did:example:alice").unwrap();
+        assert_eq!(completed.signing_key, alice_new.verifying_key);
+        assert_eq!(
+            bob.resolver
+                .resolve("did:example:alice")
+                .unwrap()
+                .signing_key,
+            alice_new.verifying_key
+        );
+    }
+
+    /// While one thread's refresh is in flight, a concurrent message after the
+    /// silence is discarded with a reason that says so, and does not start a
+    /// second refresh.
+    #[test]
+    fn a_message_during_an_in_flight_refresh_says_so() {
+        let (bob, _clock, resolver, send) = bob_after_a_silence();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        resolver.block_next_refresh(entered_tx, release_rx);
+
+        let first = send();
+        let second = send();
+        std::thread::scope(|scope| {
+            let slow = scope.spawn(|| bob.receive("did:example:bob", &first.bytes));
+            entered_rx.recv().unwrap();
+
+            let err = bob.receive("did:example:bob", &second.bytes).unwrap_err();
+            assert!(
+                matches!(&err, TspError::Discarded(m) if m.contains("in progress")),
+                "got {err:?}"
+            );
+
+            release_tx.send(()).unwrap();
+            slow.join().unwrap().unwrap();
+        });
+        assert_eq!(resolver.refreshes(), 1);
+    }
+
+    /// A sender with no relationship is not tracked, so the tracker grows with
+    /// relationships, not with every sender whose message verifies.
+    #[test]
+    fn senders_without_a_relationship_are_not_tracked() {
+        let a = PrivateVid::generate("did:example:alice");
+        let b = PrivateVid::generate("did:example:bob");
+        let bob = TspAgent::new().with_relationship_policy(RelationshipPolicy::Ungated);
+        bob.add_private_vid(b.clone());
+        bob.add_verified_vid(a.to_resolved());
+
+        let alice = TspAgent::new();
+        alice.add_private_vid(a);
+        alice.add_verified_vid(b.to_resolved());
+        let packed = alice
+            .pack_message(
+                "did:example:alice",
+                "did:example:bob",
+                b"hello",
+                MessageType::Direct,
+            )
+            .unwrap();
+        bob.receive("did:example:bob", &packed.bytes).unwrap();
+        assert!(!bob.key_state.silent_longer_than(
+            "did:example:alice",
+            std::time::Duration::ZERO,
+            u64::MAX
+        ));
+    }
+
+    /// Cancelling the only relationship with a peer drops its key-state
+    /// bookkeeping.
+    #[test]
+    fn cancelling_the_last_relationship_forgets_the_peers_key_state() {
+        let (bob, _clock, _resolver, _send) = bob_after_a_silence();
+        assert!(bob.key_state.silent_longer_than(
+            "did:example:alice",
+            std::time::Duration::ZERO,
+            u64::MAX
+        ));
+
+        bob.send_relationship_cancel("did:example:bob", "did:example:alice")
+            .unwrap();
+        assert!(!bob.key_state.silent_longer_than(
+            "did:example:alice",
+            std::time::Duration::ZERO,
+            u64::MAX
+        ));
     }
 
     /// An endpoint that does not resolve key state itself takes no action of

@@ -1,6 +1,6 @@
 //! Ed25519 signing and verification for TSP outer signatures.
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
 use crate::error::TspError;
 
@@ -14,12 +14,15 @@ pub fn sign(data: &[u8], private_key: &[u8; 32]) -> Result<[u8; 64], TspError> {
 }
 
 /// Verify an Ed25519 signature.
+///
+/// Uses the strict check, which also refuses small-order keys and `R`
+/// components, as the reference implementation does.
 pub fn verify(data: &[u8], signature: &[u8; 64], public_key: &[u8; 32]) -> Result<(), TspError> {
     let verifying_key = VerifyingKey::from_bytes(public_key)
         .map_err(|e| TspError::Verification(format!("invalid public key: {e}")))?;
     let sig = Signature::from_bytes(signature);
     verifying_key
-        .verify(data, &sig)
+        .verify_strict(data, &sig)
         .map_err(|e| TspError::Verification(format!("signature verification failed: {e}")))
 }
 
