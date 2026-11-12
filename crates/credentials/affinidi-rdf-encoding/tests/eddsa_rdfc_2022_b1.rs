@@ -53,6 +53,13 @@ fn b1_credential_canonicalization() {
         "Credential canonical N-Quads mismatch.\nGot:\n{canonical}\nExpected:\n{expected_nquads}"
     );
 
+    // Safe-mode expansion accepts the vector and gives the same dataset.
+    let safe = rdfc1::canonicalize(&jsonld::expand_and_to_rdf_safe(&credential).unwrap()).unwrap();
+    assert_eq!(
+        safe, expected_nquads,
+        "safe-mode canonical N-Quads mismatch"
+    );
+
     // Step 3: Verify SHA-256 hash
     let hash = Sha256::digest(canonical.as_bytes());
     let hash_hex = hex_encode(&hash);
@@ -98,6 +105,14 @@ _:c14n0 <https://w3id.org/security#verificationMethod> <did:key:z6MkrJVnaZkeFzdQ
     assert_eq!(
         canonical, expected_nquads,
         "Proof options canonical N-Quads mismatch.\nGot:\n{canonical}\nExpected:\n{expected_nquads}"
+    );
+
+    // Safe-mode expansion accepts the vector and gives the same dataset.
+    let safe =
+        rdfc1::canonicalize(&jsonld::expand_and_to_rdf_safe(&proof_options).unwrap()).unwrap();
+    assert_eq!(
+        safe, expected_nquads,
+        "safe-mode canonical N-Quads mismatch"
     );
 
     let hash = Sha256::digest(canonical.as_bytes());

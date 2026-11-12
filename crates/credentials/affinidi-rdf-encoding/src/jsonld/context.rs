@@ -35,20 +35,41 @@ pub enum ContainerType {
 impl Context {
     /// Process a `@context` value (string URL, object, or array) and merge into this context.
     pub fn process(&mut self, context_value: &Value) -> Result<()> {
+        self.process_with(context_value, Strictness::Lenient)
+    }
+
+    /// Process a `@context` value, refusing context features this crate does
+    /// not implement and redefinitions of protected terms.
+    ///
+    /// `override_protected` is true only for property-scoped contexts, which
+    /// JSON-LD 1.1 allows to redefine protected terms.
+    pub(crate) fn process_strict(
+        &mut self,
+        context_value: &Value,
+        override_protected: bool,
+    ) -> Result<()> {
+        self.process_with(context_value, Strictness::Strict { override_protected })
+    }
+
+    fn process_with(&mut self, context_value: &Value, mode: Strictness) -> Result<()> {
         match context_value {
             Value::Array(arr) => {
                 for item in arr {
-                    self.process(item)?;
+                    self.process_with(item, mode)?;
                 }
             }
             Value::String(url) => {
-                self.process_remote(url)?;
+                self.process_remote(url, mode)?;
             }
             Value::Object(_) => {
-                self.process_context_object(context_value)?;
+                self.process_context_object(context_value, mode)?;
             }
             Value::Null => {
-                // Reset context
+                if mode.protects_terms() && self.terms.values().any(|def| def.protected) {
+                    return Err(RdfError::context(
+                        "a null @context cannot clear protected term definitions",
+                    ));
+                }
                 self.terms = Rc::new(HashMap::new());
                 self.vocab = None;
                 self.base = None;
@@ -63,7 +84,7 @@ impl Context {
         Ok(())
     }
 
-    fn process_remote(&mut self, url: &str) -> Result<()> {
+    fn process_remote(&mut self, url: &str, mode: Strictness) -> Result<()> {
         let context_doc = get_bundled_context(url).ok_or_else(|| {
             RdfError::context(format!("unknown context URL (no bundled context): {url}"))
         })?;
@@ -71,13 +92,17 @@ impl Context {
         let inner = context_doc.get("@context").ok_or_else(|| {
             RdfError::context(format!("context document missing @context key: {url}"))
         })?;
-        self.process_context_object(inner)
+        self.process_context_object(inner, mode)
     }
 
-    fn process_context_object(&mut self, ctx: &Value) -> Result<()> {
+    fn process_context_object(&mut self, ctx: &Value, mode: Strictness) -> Result<()> {
         let obj = ctx
             .as_object()
             .ok_or_else(|| RdfError::context("@context value is not an object"))?;
+
+        if mode.is_strict() {
+            check_supported_context_entries(obj)?;
+        }
 
         // Process @vocab
         if let Some(vocab) = obj.get("@vocab") {
@@ -112,14 +137,28 @@ impl Context {
             .collect();
 
         for (key, value) in entries.iter().filter(|(_, v)| v.is_string()) {
-            let term_def = create_term_definition(key, value, is_protected, self)?;
-            Rc::make_mut(&mut self.terms).insert(key.clone(), term_def);
+            let term_def = create_term_definition(key, value, is_protected, self, mode)?;
+            self.define_term(key, term_def, mode)?;
         }
         for (key, value) in entries.iter().filter(|(_, v)| !v.is_string()) {
-            let term_def = create_term_definition(key, value, is_protected, self)?;
-            Rc::make_mut(&mut self.terms).insert(key.clone(), term_def);
+            let term_def = create_term_definition(key, value, is_protected, self, mode)?;
+            self.define_term(key, term_def, mode)?;
         }
 
+        Ok(())
+    }
+
+    fn define_term(&mut self, key: &str, term_def: TermDefinition, mode: Strictness) -> Result<()> {
+        if mode.protects_terms()
+            && let Some(existing) = self.terms.get(key)
+            && existing.protected
+            && !existing.same_definition(&term_def)
+        {
+            return Err(RdfError::context(format!(
+                "protected term '{key}' cannot be redefined"
+            )));
+        }
+        Rc::make_mut(&mut self.terms).insert(key.to_string(), term_def);
         Ok(())
     }
 
@@ -180,11 +219,120 @@ impl Context {
     }
 }
 
+/// How strictly a `@context` is processed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Strictness {
+    /// Unsupported features are ignored (the historical behaviour).
+    Lenient,
+    /// Unsupported features are refused and protected terms are enforced.
+    Strict { override_protected: bool },
+}
+
+impl Strictness {
+    fn is_strict(self) -> bool {
+        matches!(self, Strictness::Strict { .. })
+    }
+
+    fn protects_terms(self) -> bool {
+        matches!(
+            self,
+            Strictness::Strict {
+                override_protected: false
+            }
+        )
+    }
+}
+
+impl TermDefinition {
+    /// JSON-LD 1.1 treats a redefinition of a protected term as allowed only
+    /// when it is the same definition, apart from the `@protected` flag.
+    fn same_definition(&self, other: &TermDefinition) -> bool {
+        self.iri == other.iri
+            && self.type_mapping == other.type_mapping
+            && self.container == other.container
+            && self.context == other.context
+    }
+}
+
+/// Context-level keywords the expansion in this crate implements.
+const SUPPORTED_CONTEXT_KEYWORDS: &[&str] = &["@protected", "@version", "@vocab"];
+
+/// Term-definition keywords the expansion in this crate implements.
+const SUPPORTED_TERM_KEYWORDS: &[&str] = &["@container", "@context", "@id", "@protected", "@type"];
+
+fn check_supported_context_entries(obj: &serde_json::Map<String, Value>) -> Result<()> {
+    for (key, value) in obj {
+        if !key.starts_with('@') {
+            continue;
+        }
+        if !SUPPORTED_CONTEXT_KEYWORDS.contains(&key.as_str()) {
+            return Err(RdfError::context(format!(
+                "context keyword '{key}' is not supported"
+            )));
+        }
+        let valid = match key.as_str() {
+            "@vocab" => value.is_string() || value.is_null(),
+            "@protected" => value.is_boolean(),
+            _ => true,
+        };
+        if !valid {
+            return Err(RdfError::context(format!(
+                "invalid value for context keyword '{key}': {value}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn check_supported_term_definition(term: &str, obj: &serde_json::Map<String, Value>) -> Result<()> {
+    for (key, value) in obj {
+        if !SUPPORTED_TERM_KEYWORDS.contains(&key.as_str()) {
+            return Err(RdfError::context(format!(
+                "term '{term}' uses '{key}', which is not supported"
+            )));
+        }
+        let valid = match key.as_str() {
+            "@id" => value.is_string() || value.is_null(),
+            "@type" => value.is_string(),
+            "@protected" => value.is_boolean(),
+            "@container" => strict_container(value).is_some(),
+            _ => true,
+        };
+        if !valid {
+            return Err(RdfError::context(format!(
+                "term '{term}' has an unsupported '{key}' value: {value}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The container types strict processing recognises. Map containers
+/// (`@language`, `@index`, `@id`, `@type`) and combined forms are not
+/// implemented.
+fn strict_container(value: &Value) -> Option<ContainerType> {
+    match value {
+        Value::String(s) => container_from_str(s),
+        Value::Array(items) if items.len() == 1 => items[0].as_str().and_then(container_from_str),
+        _ => None,
+    }
+}
+
+fn container_from_str(value: &str) -> Option<ContainerType> {
+    match value {
+        "@set" => Some(ContainerType::Set),
+        "@list" => Some(ContainerType::List),
+        "@graph" => Some(ContainerType::Graph),
+        _ => None,
+    }
+}
+
 fn create_term_definition(
     term: &str,
     value: &Value,
     parent_protected: bool,
     ctx: &Context,
+    mode: Strictness,
 ) -> Result<TermDefinition> {
     match value {
         Value::String(iri_or_term) => {
@@ -199,10 +347,16 @@ fn create_term_definition(
             })
         }
         Value::Object(obj) => {
-            // Expanded term definition
-            let id = obj.get("@id").and_then(|v| v.as_str()).unwrap_or(term);
+            if mode.is_strict() {
+                check_supported_term_definition(term, obj)?;
+            }
 
-            let resolved_iri = resolve_iri(id, ctx);
+            // Expanded term definition. Strict processing honours an explicit
+            // `"@id": null`, which leaves the term unmapped.
+            let resolved_iri = match obj.get("@id") {
+                Some(Value::Null) if mode.is_strict() => String::new(),
+                id => resolve_iri(id.and_then(|v| v.as_str()).unwrap_or(term), ctx),
+            };
 
             let type_mapping = obj.get("@type").and_then(|v| v.as_str()).map(|t| {
                 if t.starts_with('@') {
@@ -212,12 +366,10 @@ fn create_term_definition(
                 }
             });
 
-            let container = obj.get("@container").and_then(|v| match v.as_str() {
-                Some("@set") => Some(ContainerType::Set),
-                Some("@list") => Some(ContainerType::List),
-                Some("@graph") => Some(ContainerType::Graph),
-                _ => None,
-            });
+            let container = match obj.get("@container") {
+                Some(v) if mode.is_strict() => strict_container(v),
+                v => v.and_then(|v| v.as_str()).and_then(container_from_str),
+            };
 
             let scoped_context = obj.get("@context").cloned();
 

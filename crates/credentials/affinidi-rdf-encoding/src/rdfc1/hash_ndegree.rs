@@ -9,8 +9,39 @@ use super::hash_first_degree::hex_encode;
 use super::hash_related::{Position, hash_related_blank_node};
 use super::identifier_issuer::IdentifierIssuer;
 
-/// Maximum number of permutations to explore before aborting (DoS protection).
-const MAX_PERMUTATIONS: usize = 10_000;
+/// Default limit on the Hash N-Degree Quads work of one canonicalization.
+///
+/// One unit is one call of the algorithm or one permutation examined. The
+/// W3C `rdfc10` suite needs at most a few thousand; a graph of
+/// indistinguishable blank nodes nested a few levels deep needs factorially
+/// more.
+pub const DEFAULT_MAX_NDEGREE_WORK: usize = 100_000;
+
+/// The Hash N-Degree Quads work left for one canonicalization, shared by
+/// every call and recursion level.
+#[derive(Debug)]
+pub(crate) struct WorkBudget {
+    limit: usize,
+    used: usize,
+}
+
+impl WorkBudget {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self { limit, used: 0 }
+    }
+
+    fn spend(&mut self) -> Result<()> {
+        if self.used >= self.limit {
+            return Err(RdfError::canonicalization(format!(
+                "Hash N-Degree Quads exceeded its work limit of {} steps; the dataset has \
+                 too many blank nodes that cannot be told apart",
+                self.limit
+            )));
+        }
+        self.used += 1;
+        Ok(())
+    }
+}
 
 /// Hash N-Degree Quads algorithm.
 ///
@@ -18,6 +49,11 @@ const MAX_PERMUTATIONS: usize = 10_000;
 /// explores the relationships between blank nodes to produce a unique hash.
 ///
 /// Returns `(hash, issuer)` where issuer contains the canonical mappings found.
+///
+/// This call, including its recursion, may take up to
+/// [`DEFAULT_MAX_NDEGREE_WORK`] steps. Canonicalization through
+/// [`super::canonicalize_with_options`] instead shares one limit across every
+/// call it makes.
 pub fn hash_ndegree_quads(
     blank_node_id: &str,
     blank_node_to_quads: &HashMap<String, Vec<&Quad>>,
@@ -25,6 +61,28 @@ pub fn hash_ndegree_quads(
     issuer: &IdentifierIssuer,
     blank_node_to_hash: &HashMap<String, String>,
 ) -> Result<(String, IdentifierIssuer)> {
+    let mut budget = WorkBudget::new(DEFAULT_MAX_NDEGREE_WORK);
+    hash_ndegree_quads_within(
+        blank_node_id,
+        blank_node_to_quads,
+        canonical_issuer,
+        issuer,
+        blank_node_to_hash,
+        &mut budget,
+    )
+}
+
+/// [`hash_ndegree_quads`], charging every call and permutation to `budget`.
+pub(crate) fn hash_ndegree_quads_within(
+    blank_node_id: &str,
+    blank_node_to_quads: &HashMap<String, Vec<&Quad>>,
+    canonical_issuer: &IdentifierIssuer,
+    issuer: &IdentifierIssuer,
+    blank_node_to_hash: &HashMap<String, String>,
+    budget: &mut WorkBudget,
+) -> Result<(String, IdentifierIssuer)> {
+    budget.spend()?;
+
     // Create a hash-to-related-blank-nodes map
     let mut hash_to_related: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
@@ -52,7 +110,6 @@ pub fn hash_ndegree_quads(
     // Process hash groups in sorted order (RDFC-1.0 Hash N-Degree Quads, step 5).
     let mut data_to_hash = String::new();
     let mut chosen_issuer = issuer.clone();
-    let mut permutation_count: usize = 0;
 
     for (hash, blank_node_list) in &hash_to_related {
         data_to_hash.push_str(hash);
@@ -64,12 +121,7 @@ pub fn hash_ndegree_quads(
         let mut perm_indices: Vec<usize> = (0..blank_node_list.len()).collect();
 
         loop {
-            permutation_count += 1;
-            if permutation_count > MAX_PERMUTATIONS {
-                return Err(RdfError::canonicalization(format!(
-                    "exceeded maximum permutations ({MAX_PERMUTATIONS}) — possible DoS"
-                )));
-            }
+            budget.spend()?;
 
             // Each permutation starts from a fresh copy of the current issuer.
             let mut issuer_copy = chosen_issuer.clone();
@@ -109,12 +161,13 @@ pub fn hash_ndegree_quads(
             // Phase 2: recurse into the deferred related nodes, in order.
             if !skip {
                 for related in &recursion_list {
-                    let (result_hash, result_issuer) = hash_ndegree_quads(
+                    let (result_hash, result_issuer) = hash_ndegree_quads_within(
                         related,
                         blank_node_to_quads,
                         canonical_issuer,
                         &issuer_copy,
                         blank_node_to_hash,
+                        budget,
                     )?;
                     issuer_copy = result_issuer;
                     // RDFC-1.0 step 5.4.5.2: `_:` + identifier (same delimiter

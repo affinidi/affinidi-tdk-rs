@@ -34,3 +34,18 @@ fn windsurf_jsonld_canonicalizes_to_w3c_vector() {
         "canonical N-Quads diverge from the W3C vc-di-bbs vector"
     );
 }
+
+/// Safe-mode expansion accepts the vc-di-bbs vector and gives the same
+/// canonical N-Quads.
+#[test]
+fn windsurf_jsonld_canonicalizes_to_w3c_vector_in_safe_mode() {
+    let doc: serde_json::Value = serde_json::from_str(&fixture("windDoc.json")).unwrap();
+    let expected: String = serde_json::from_str::<Vec<String>>(&fixture("addBaseDocCanon.json"))
+        .unwrap()
+        .concat();
+
+    let dataset = jsonld::expand_and_to_rdf_safe(&doc).expect("safe expand to RDF");
+    let canonical = rdfc1::canonicalize(&dataset).expect("RDFC-1.0 canonicalize");
+
+    assert_eq!(canonical, expected);
+}

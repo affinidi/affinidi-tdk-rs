@@ -1,12 +1,49 @@
+use std::collections::HashMap;
+
 use serde_json::Value;
 
 use crate::error::{RdfError, Result};
 use crate::model::*;
 
+/// Issues the blank node labels of the output dataset.
+///
+/// Labels written in the document (`_:x`) and labels generated for nodes
+/// without an `@id` come from the same counter, as in the JSON-LD "Generate
+/// Blank Node Identifier" algorithm, so a document label can never coincide
+/// with a generated one. The same document label always maps to the same
+/// output label.
+#[derive(Default)]
+struct BlankNodeIssuer {
+    counter: u64,
+    document_labels: HashMap<String, String>,
+}
+
+impl BlankNodeIssuer {
+    fn fresh(&mut self) -> BlankNode {
+        let label = format!("b{}", self.counter);
+        self.counter += 1;
+        BlankNode::new(label)
+    }
+
+    fn for_document_label(&mut self, label: &str) -> BlankNode {
+        if let Some(issued) = self.document_labels.get(label) {
+            return BlankNode::new(issued.as_str());
+        }
+        let node = self.fresh();
+        self.document_labels
+            .insert(label.to_string(), node.id.clone());
+        node
+    }
+}
+
 /// Convert expanded JSON-LD to an RDF Dataset.
+///
+/// Blank node labels in the output are issued afresh: `_:x` labels from the
+/// document are relabelled, so they cannot merge with the labels generated for
+/// nodes that have no `@id`.
 pub fn to_rdf(expanded: &Value) -> Result<Dataset> {
     let mut dataset = Dataset::new();
-    let mut blank_counter: u64 = 0;
+    let mut blank_nodes = BlankNodeIssuer::default();
 
     let arr = expanded
         .as_array()
@@ -14,7 +51,7 @@ pub fn to_rdf(expanded: &Value) -> Result<Dataset> {
 
     for node in arr {
         if let Some(obj) = node.as_object() {
-            process_node(obj, &mut dataset, &mut blank_counter, &GraphLabel::Default)?;
+            process_node(obj, &mut dataset, &mut blank_nodes, &GraphLabel::Default)?;
         }
     }
 
@@ -24,7 +61,7 @@ pub fn to_rdf(expanded: &Value) -> Result<Dataset> {
 fn process_node(
     node: &serde_json::Map<String, Value>,
     dataset: &mut Dataset,
-    blank_counter: &mut u64,
+    blank_nodes: &mut BlankNodeIssuer,
     graph: &GraphLabel,
 ) -> Result<Subject> {
     // Determine subject
@@ -32,16 +69,13 @@ fn process_node(
         let id = id_val
             .as_str()
             .ok_or_else(|| RdfError::to_rdf("@id must be a string"))?;
-        if let Some(stripped) = id.strip_prefix("_:") {
-            Subject::Blank(BlankNode::new(stripped))
+        if let Some(label) = id.strip_prefix("_:") {
+            Subject::Blank(blank_nodes.for_document_label(label))
         } else {
             Subject::Named(NamedNode::new(id))
         }
     } else {
-        // Generate a blank node
-        let id = format!("b{blank_counter}");
-        *blank_counter += 1;
-        Subject::Blank(BlankNode::new(id))
+        Subject::Blank(blank_nodes.fresh())
     };
 
     // Process @type
@@ -71,7 +105,7 @@ fn process_node(
 
         if let Some(arr) = value.as_array() {
             for item in arr {
-                let object = value_to_object(item, dataset, blank_counter, graph)?;
+                let object = value_to_object(item, dataset, blank_nodes, graph)?;
                 if let Some(obj) = object {
                     dataset.add(Quad::new(
                         subject.clone(),
@@ -91,7 +125,7 @@ fn process_node(
 fn value_to_object(
     value: &Value,
     dataset: &mut Dataset,
-    blank_counter: &mut u64,
+    blank_nodes: &mut BlankNodeIssuer,
     graph: &GraphLabel,
 ) -> Result<Option<Object>> {
     match value {
@@ -103,7 +137,7 @@ fn value_to_object(
             }
             // List object: has @list
             else if let Some(list) = obj.get("@list") {
-                let list_obj = list_to_rdf(list, dataset, blank_counter, graph)?;
+                let list_obj = list_to_rdf(list, dataset, blank_nodes, graph)?;
                 Ok(Some(list_obj))
             }
             // Node reference: has @id only
@@ -112,15 +146,15 @@ fn value_to_object(
                     .get("@id")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| RdfError::to_rdf("@id must be a string"))?;
-                if let Some(stripped) = id.strip_prefix("_:") {
-                    Ok(Some(Object::Blank(BlankNode::new(stripped))))
+                if let Some(label) = id.strip_prefix("_:") {
+                    Ok(Some(Object::Blank(blank_nodes.for_document_label(label))))
                 } else {
                     Ok(Some(Object::Named(NamedNode::new(id))))
                 }
             }
             // Nested node — recurse
             else {
-                let sub = process_node(obj, dataset, blank_counter, graph)?;
+                let sub = process_node(obj, dataset, blank_nodes, graph)?;
                 match sub {
                     Subject::Named(n) => Ok(Some(Object::Named(n))),
                     Subject::Blank(b) => Ok(Some(Object::Blank(b))),
@@ -247,7 +281,7 @@ fn canonical_xsd_double(f: f64) -> String {
 fn list_to_rdf(
     list: &Value,
     dataset: &mut Dataset,
-    blank_counter: &mut u64,
+    blank_nodes: &mut BlankNodeIssuer,
     graph: &GraphLabel,
 ) -> Result<Object> {
     let items = list
@@ -262,12 +296,10 @@ fn list_to_rdf(
     let mut current = Object::Named(NamedNode::new(rdf::NIL));
 
     for item in items.iter().rev() {
-        let item_obj = value_to_object(item, dataset, blank_counter, graph)?
+        let item_obj = value_to_object(item, dataset, blank_nodes, graph)?
             .ok_or_else(|| RdfError::to_rdf("invalid list item"))?;
 
-        let node_id = format!("b{blank_counter}");
-        *blank_counter += 1;
-        let node = BlankNode::new(&node_id);
+        let node = blank_nodes.fresh();
 
         dataset.add(Quad::new(
             node.clone(),
@@ -352,6 +384,75 @@ mod tests {
             ds.quads()[0].object,
             Object::Named(NamedNode::new("http://example.org/target"))
         );
+    }
+
+    fn blank_subjects(ds: &Dataset) -> std::collections::BTreeSet<String> {
+        ds.quads()
+            .iter()
+            .filter_map(|q| match &q.subject {
+                Subject::Blank(b) => Some(b.id.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A document label that matches a generated label (`b0`) stays a separate
+    /// node from the anonymous node that is given that label.
+    #[test]
+    fn document_blank_label_does_not_merge_with_generated_label() {
+        let expanded = json!([
+            { "http://example.org/p": [{"@value": "anonymous"}] },
+            { "@id": "_:b0", "http://example.org/p": [{"@value": "labelled"}] }
+        ]);
+
+        let ds = to_rdf(&expanded).unwrap();
+        assert_eq!(ds.quads().len(), 2);
+        assert_eq!(blank_subjects(&ds).len(), 2);
+    }
+
+    #[test]
+    fn document_blank_label_maps_to_one_node() {
+        let expanded = json!([
+            { "@id": "_:x", "http://example.org/knows": [{"@id": "_:y"}] },
+            { "@id": "_:y", "http://example.org/name": [{"@value": "Y"}] }
+        ]);
+
+        let ds = to_rdf(&expanded).unwrap();
+        let link = ds
+            .quads()
+            .iter()
+            .find(|q| q.predicate.iri == "http://example.org/knows")
+            .unwrap();
+        let named = ds
+            .quads()
+            .iter()
+            .find(|q| q.predicate.iri == "http://example.org/name")
+            .unwrap();
+        match (&link.object, &named.subject) {
+            (Object::Blank(object), Subject::Blank(subject)) => assert_eq!(object, subject),
+            other => panic!("expected blank nodes, got {other:?}"),
+        }
+        assert_ne!(link.subject, named.subject);
+    }
+
+    /// End to end: two distinct nested nodes, one labelled `_:b0` in the
+    /// document and one without an id, canonicalize as two blank nodes.
+    #[test]
+    fn document_blank_label_canonicalizes_as_separate_node() {
+        let doc = json!({
+            "@context": { "@vocab": "https://example.org/#" },
+            "@id": "https://example.org/s",
+            "knows": [
+                { "name": "Anonymous" },
+                { "@id": "_:b0", "name": "Labelled" }
+            ]
+        });
+
+        let canonical =
+            crate::rdfc1::canonicalize(&crate::jsonld::expand_and_to_rdf(&doc).unwrap()).unwrap();
+        assert!(canonical.contains("_:c14n0"), "{canonical}");
+        assert!(canonical.contains("_:c14n1"), "{canonical}");
+        assert_eq!(canonical.lines().count(), 4, "{canonical}");
     }
 
     fn num(json: &str) -> Literal {
