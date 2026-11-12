@@ -1,5 +1,11 @@
 # Affinidi VC Changelog
 
+## Unreleased (0.3.0) — affinidi-sd-jwt 0.2
+
+`affinidi-sd-jwt` moves to 0.2, and its `SdJwt` is part of this crate's API
+(`SdJwtVc::sd_jwt`), so this crate moves a minor with it (R3.6). No source
+change. See the `affinidi-sd-jwt` 0.2.0 entry for the key binding changes.
+
 ## 14th June 2026 (0.2.1)
 
 `SdJwtVcError` is now `#[non_exhaustive]` (ADR-0003), completing the sealing the

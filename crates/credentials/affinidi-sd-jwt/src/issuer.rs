@@ -53,8 +53,9 @@ pub fn issue(
 
     let mut payload = Value::Object(payload_obj);
 
-    // Only add _sd_alg when disclosures exist (C2)
-    if !disclosures.is_empty() {
+    // Add _sd_alg when disclosures exist (C2), and always for a hash other
+    // than the one a verifier assumes when it is absent
+    if !disclosures.is_empty() || hasher.alg_name() != crate::verifier::DEFAULT_SD_ALG {
         payload.as_object_mut().unwrap().insert(
             "_sd_alg".to_string(),
             Value::String(hasher.alg_name().to_string()),
@@ -398,6 +399,21 @@ mod tests {
         let payload = sd_jwt.payload().unwrap();
         // _sd_alg should NOT be present when there are no disclosures
         assert!(payload.get("_sd_alg").is_none());
+    }
+
+    #[test]
+    fn issue_no_disclosures_names_a_non_default_sd_alg() {
+        let signer = test_signer();
+        let claims = serde_json::json!({ "sub": "user123" });
+        let sd_jwt = issue(
+            &claims,
+            &serde_json::json!({}),
+            &signer,
+            &crate::hasher::Sha384Hasher,
+            None,
+        )
+        .unwrap();
+        assert_eq!(sd_jwt.payload().unwrap()["_sd_alg"], "sha-384");
     }
 
     #[test]

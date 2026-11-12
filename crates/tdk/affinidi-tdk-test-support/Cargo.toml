@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk-test-support"
-version = "0.10.0"
+version = "0.11.0"
 description = "Shared in-process test fixtures and harnesses for the Affinidi TDK workspace"
 edition.workspace = true
 authors.workspace = true
@@ -38,8 +38,8 @@ thiserror = "2"
 # ── TI5: CredentialScenario (sd-jwt-vc issue/present/verify + status list) ─
 ## sd-jwt-vc lives at `affinidi_vc::sd_jwt_vc`; sd-jwt provides the holder
 ## present / verifier APIs + the SdHasher; status-list backs revocation.
-affinidi-vc = { version = "0.2", path = "../../credentials/affinidi-vc" }
-affinidi-sd-jwt = { version = "0.1", path = "../../credentials/affinidi-sd-jwt" }
+affinidi-vc = { version = "0.3", path = "../../credentials/affinidi-vc" }
+affinidi-sd-jwt = { version = "0.2", path = "../../credentials/affinidi-sd-jwt" }
 affinidi-status-list = { version = "0.1", path = "../../credentials/affinidi-status-list" }
 ## `ed25519_pub_to_did_key` for deterministic issuer/holder/verifier DIDs;
 ## `jose::key_agreement` backs the didcomm_fuzz deterministic keypairs.

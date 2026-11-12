@@ -12,14 +12,16 @@ SD-JWT (Selective Disclosure JWT) implementation following the
 
 ```toml
 [dependencies]
-affinidi-sd-jwt = "0.1"
+affinidi-sd-jwt = "0.2"
 ```
 
 ## Features
 
 - **Issuance**: Create SD-JWTs with selectively disclosable claims (flat, nested, array elements)
 - **Presentation**: Filter disclosures to reveal only chosen claims, with optional Key Binding JWT
-- **Verification**: Verify issuer signature, reconstruct disclosed claims, verify KB-JWT
+- **Verification**: Verify issuer signature, reconstruct disclosed claims, and, when key binding
+  is required, verify the KB-JWT under the credential's `cnf.jwk` with its `aud`, `nonce` and
+  `iat` checked
 - **Decoy digests**: Add fake hashes to obscure the number of disclosable claims
 - **Pluggable hashing**: SHA-256 (default), SHA-384, SHA-512, or custom hashers
 - **Pluggable signing**: Abstract `Signer` and `Verifier` traits for any algorithm

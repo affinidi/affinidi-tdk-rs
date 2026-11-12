@@ -16,7 +16,7 @@
 ```toml
 [dependencies]
 - affinidi-sd-jwt-vc = "0.1"
-+ affinidi-vc = "0.2"
++ affinidi-vc = "0.3"
 ```
 
 ```diff

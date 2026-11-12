@@ -58,7 +58,10 @@ use affinidi_sd_jwt::{
     hasher::Sha256Hasher,
     holder::{self, KbJwtInput, select_disclosures},
     signer::{JwtSigner, JwtVerifier},
-    verifier::{self, VerificationOptions, VerificationResult},
+    verifier::{
+        self, HolderKeyVerifier, KbFreshness, KeyBindingCheck, VerificationOptions,
+        VerificationResult,
+    },
 };
 use affinidi_status_list::bitstring::{BitstringStatusList, StatusPurpose};
 use affinidi_vc::sd_jwt_vc::{self, SdJwtVc};
@@ -176,6 +179,32 @@ impl Ed25519Verifier {
             allowed_algs: allowed_algs.iter().map(|s| s.to_string()).collect(),
         }
     }
+
+    /// A verifier for an OKP/Ed25519 public JWK (`{"kty":"OKP","crv":"Ed25519","x":…}`),
+    /// accepting only the listed `alg` values.
+    pub fn from_jwk(jwk: &Value, allowed_algs: &[&str]) -> Result<Self, SdJwtError> {
+        let member = |name: &str| jwk.get(name).and_then(Value::as_str);
+        if member("kty") != Some("OKP") || member("crv") != Some("Ed25519") {
+            return Err(SdJwtError::KeyBinding(
+                "holder key must be an OKP Ed25519 JWK".to_string(),
+            ));
+        }
+        let x = member("x")
+            .ok_or_else(|| SdJwtError::KeyBinding("Ed25519 JWK has no x".to_string()))?;
+        let bytes: [u8; 32] = URL_SAFE_NO_PAD
+            .decode(x)?
+            .try_into()
+            .map_err(|_| SdJwtError::KeyBinding("Ed25519 JWK x is not 32 bytes".to_string()))?;
+        let key = VerifyingKey::from_bytes(&bytes)
+            .map_err(|e| SdJwtError::KeyBinding(format!("Ed25519 JWK x: {e}")))?;
+        Ok(Self::new(key, allowed_algs))
+    }
+}
+
+/// Builds the KB-JWT verifier from the credential's `cnf.jwk`: an
+/// [`Ed25519Verifier`] accepting only `EdDSA`.
+pub fn eddsa_holder_key(jwk: &Value) -> Result<Box<dyn JwtVerifier>, SdJwtError> {
+    Ok(Box::new(Ed25519Verifier::from_jwk(jwk, &["EdDSA"])?))
 }
 
 impl JwtVerifier for Ed25519Verifier {
@@ -402,7 +431,42 @@ impl CredentialScenario {
         claims: &Value,
         disclosure_frame: &Value,
     ) -> Result<SdJwtVc, ScenarioError> {
-        let holder_jwk = self.holder.public_jwk();
+        self.issue_signed_and_bound(
+            signer,
+            &self.holder.public_jwk(),
+            vct,
+            claims,
+            disclosure_frame,
+        )
+    }
+
+    /// Issue with `cnf.jwk` set to `holder_jwk` rather than the holder's key,
+    /// for the negative where the KB-JWT is signed by a key the credential
+    /// is not bound to.
+    pub fn issue_sd_jwt_vc_bound_to(
+        &self,
+        holder_jwk: &Value,
+        vct: &str,
+        claims: &Value,
+        disclosure_frame: &Value,
+    ) -> Result<SdJwtVc, ScenarioError> {
+        self.issue_signed_and_bound(
+            &self.issuer.signer(),
+            holder_jwk,
+            vct,
+            claims,
+            disclosure_frame,
+        )
+    }
+
+    fn issue_signed_and_bound(
+        &self,
+        signer: &dyn JwtSigner,
+        holder_jwk: &Value,
+        vct: &str,
+        claims: &Value,
+        disclosure_frame: &Value,
+    ) -> Result<SdJwtVc, ScenarioError> {
         sd_jwt_vc::issue(
             vct,
             self.issuer.did(),
@@ -411,7 +475,7 @@ impl CredentialScenario {
             disclosure_frame,
             signer,
             &self.hasher,
-            Some(&holder_jwk),
+            Some(holder_jwk),
             now(),
             None,
         )
@@ -439,8 +503,9 @@ impl CredentialScenario {
             .map_err(|e| ScenarioError::SdJwt(e.to_string()))
     }
 
-    /// Verify a presentation with the default issuer/holder verifiers (both
-    /// accepting only `EdDSA`) and KB-JWT binding to `(audience, nonce)`.
+    /// Verify a presentation with the default issuer verifier (accepting only
+    /// `EdDSA`) and KB-JWT binding to `(audience, nonce)`, with the KB-JWT
+    /// checked under the credential's `cnf.jwk` ([`eddsa_holder_key`]).
     pub fn verify(
         &self,
         presentation: &SdJwt,
@@ -450,36 +515,33 @@ impl CredentialScenario {
         self.verify_with(
             presentation,
             &self.issuer.verifier(&["EdDSA"]),
-            &self.holder.verifier(&["EdDSA"]),
+            &eddsa_holder_key,
             audience,
             nonce,
         )
     }
 
-    /// Verify with caller-supplied verifiers — for negatives such as a holder
-    /// verifier built from the wrong key, or an issuer verifier with a
-    /// restricted `alg` allowlist.
+    /// Verify with a caller-supplied issuer verifier and holder key verifier,
+    /// for negatives such as a holder key verifier that ignores `cnf.jwk`, or
+    /// an issuer verifier with a restricted `alg` allowlist. The KB-JWT's
+    /// `iat` must be within five minutes of now.
     pub fn verify_with(
         &self,
         presentation: &SdJwt,
         issuer_verifier: &dyn JwtVerifier,
-        holder_verifier: &dyn JwtVerifier,
+        holder_key: &dyn HolderKeyVerifier,
         audience: &str,
         nonce: &str,
     ) -> Result<VerificationResult, ScenarioError> {
-        let options = VerificationOptions {
-            verify_kb: true,
-            expected_audience: Some(audience),
-            expected_nonce: Some(nonce),
-        };
-        verifier::verify(
-            presentation,
-            issuer_verifier,
-            &self.hasher,
-            &options,
-            Some(holder_verifier),
-        )
-        .map_err(|e| ScenarioError::SdJwt(e.to_string()))
+        let now = i64::try_from(now()).unwrap_or(i64::MAX);
+        let options = VerificationOptions::with_key_binding(KeyBindingCheck::new(
+            audience,
+            nonce,
+            KbFreshness::new(now, 300),
+            holder_key,
+        ));
+        verifier::verify(presentation, issuer_verifier, &self.hasher, &options)
+            .map_err(|e| ScenarioError::SdJwt(e.to_string()))
     }
 }
 

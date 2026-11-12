@@ -1,5 +1,16 @@
 # Affinidi TDK Test Support
 
+## Unreleased (0.11.0) — affinidi-sd-jwt 0.2
+
+- **Changed:** `CredentialScenario::verify_with` takes a
+  `&dyn HolderKeyVerifier` in place of the holder `JwtVerifier`: the KB-JWT is
+  checked under the credential's `cnf.jwk`. `verify` uses the new
+  `eddsa_holder_key`, which builds an `EdDSA`-only verifier from an OKP Ed25519
+  JWK, and requires the KB-JWT `iat` within five minutes of now.
+- **Added:** `Ed25519Verifier::from_jwk`, `eddsa_holder_key`, and
+  `CredentialScenario::issue_sd_jwt_vc_bound_to` (issue with another `cnf.jwk`).
+- `affinidi-sd-jwt` 0.2 and `affinidi-vc` 0.3.
+
 ## Unreleased (0.10.0) — mdoc 0.5
 
 `mdoc_scenario` takes and returns `affinidi-mdoc` types, and `affinidi-mdoc`

@@ -1,5 +1,13 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.41.0) — affinidi-sd-jwt 0.2, affinidi-vc 0.3
+
+- **Changed:** the `sd-jwt` feature moves to `affinidi-sd-jwt` 0.2: key binding
+  is checked under the credential's `cnf.jwk`, and `aud`, `nonce` and `iat`
+  are required when it is requested. `verify` drops its `holder_verifier`
+  argument. The `vc` and `sd-jwt-vc` features move to `affinidi-vc` 0.3. See
+  those crates' CHANGELOGs.
+
 ## Unreleased (0.40.0) — affinidi-siopv2 0.2
 
 - **Changed:** the `siopv2` feature moves to `affinidi-siopv2` 0.2: ID Tokens

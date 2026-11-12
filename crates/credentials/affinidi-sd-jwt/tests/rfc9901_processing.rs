@@ -36,7 +36,6 @@ fn verify(payload: Value, disclosures: Vec<Disclosure>) -> Result<VerificationRe
         &HmacSha256Verifier::new(KEY),
         &Sha256Hasher,
         &Default::default(),
-        None,
     )
     .map_err(|e| e.to_string())
 }
@@ -98,7 +97,7 @@ fn rfc9901_a2_recursive_disclosures_verify() {
     assert_eq!(sd_jwt.disclosures.len(), 6);
 
     let opts = Default::default();
-    let claims = verifier::verify(&sd_jwt, &SignatureNotChecked, &Sha256Hasher, &opts, None)
+    let claims = verifier::verify(&sd_jwt, &SignatureNotChecked, &Sha256Hasher, &opts)
         .unwrap()
         .claims;
     assert_eq!(
@@ -145,7 +144,7 @@ fn own_issuer_recursive_disclosures_verify() {
 
     let opts = Default::default();
     let jwt_verifier = HmacSha256Verifier::new(KEY);
-    let all = verifier::verify(&sd_jwt, &jwt_verifier, &Sha256Hasher, &opts, None).unwrap();
+    let all = verifier::verify(&sd_jwt, &jwt_verifier, &Sha256Hasher, &opts).unwrap();
     assert_eq!(
         all.claims["address"],
         json!({"locality": "Anytown", "country": "DE"})
@@ -157,7 +156,7 @@ fn own_issuer_recursive_disclosures_verify() {
         .find(|d| d.claim_name.as_deref() == Some("address"))
         .unwrap();
     let outer_only = SdJwt::new(sd_jwt.jws.clone(), vec![outer.clone()], None);
-    let r = verifier::verify(&outer_only, &jwt_verifier, &Sha256Hasher, &opts, None).unwrap();
+    let r = verifier::verify(&outer_only, &jwt_verifier, &Sha256Hasher, &opts).unwrap();
     assert_eq!(r.claims["address"], json!({"country": "DE"}));
 }
 

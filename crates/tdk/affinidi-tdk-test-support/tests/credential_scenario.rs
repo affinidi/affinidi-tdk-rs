@@ -2,7 +2,8 @@
 //! round trip plus the W4/W5 negatives (status-list revocation, holder-binding
 //! failure, disallowed `alg`). All synchronous, no network.
 
-use affinidi_tdk_test_support::credential_scenario::CredentialScenario;
+use affinidi_sd_jwt::{JwtVerifier, SdJwtError};
+use affinidi_tdk_test_support::credential_scenario::{CredentialScenario, eddsa_holder_key};
 use serde_json::json;
 
 const VCT: &str = "https://example.com/IdentityCredential";
@@ -95,8 +96,8 @@ fn revoked_credential_is_rejected() {
 }
 
 /// Negative: holder binding fails when the KB-JWT is checked against the wrong
-/// key. Here the holder verifier is built from the issuer's key, so the
-/// holder-signed KB-JWT does not verify.
+/// key. Here the holder key verifier ignores `cnf.jwk` and returns the issuer's
+/// key, so the holder-signed KB-JWT does not verify.
 #[test]
 fn wrong_holder_key_fails_kb_binding() {
     let scenario = CredentialScenario::new();
@@ -109,18 +110,46 @@ fn wrong_holder_key_fails_kb_binding() {
         .present(&vc, &["given_name"], &aud, NONCE)
         .expect("present");
 
-    // Correct issuer verifier, but a holder verifier keyed on the *issuer's*
-    // key (the wrong key for the KB-JWT).
+    let issuer_key = |_: &serde_json::Value| -> Result<Box<dyn JwtVerifier>, SdJwtError> {
+        Ok(Box::new(scenario.issuer.verifier(&["EdDSA"])))
+    };
     let result = scenario.verify_with(
         &presentation,
         &scenario.issuer.verifier(&["EdDSA"]),
-        &scenario.issuer.verifier(&["EdDSA"]), // wrong key for the holder slot
+        &issuer_key,
         &aud,
         NONCE,
     );
     assert!(
         result.is_err(),
         "KB-JWT verified against the wrong holder key must fail"
+    );
+}
+
+/// Negative: the KB-JWT is checked under the key in the credential's
+/// `cnf.jwk`. A credential bound to the verifier's key, presented with a
+/// KB-JWT the holder signed, is refused.
+#[test]
+fn kb_jwt_must_verify_under_the_cnf_key() {
+    let scenario = CredentialScenario::new();
+    let aud = scenario.verifier.did().to_string();
+
+    let vc = scenario
+        .issue_sd_jwt_vc_bound_to(
+            &scenario.verifier.public_jwk(),
+            VCT,
+            &identity_claims(),
+            &sd_frame(),
+        )
+        .expect("issue bound to another key");
+    let presentation = scenario
+        .present(&vc, &["given_name"], &aud, NONCE)
+        .expect("present");
+
+    let result = scenario.verify(&presentation, &aud, NONCE);
+    assert!(
+        result.is_err(),
+        "a KB-JWT not signed by the cnf key must be refused"
     );
 }
 
@@ -153,7 +182,7 @@ fn disallowed_alg_is_rejected() {
     let allowed = scenario.verify_with(
         &presentation,
         &scenario.issuer.verifier(&["ES256", "EdDSA"]),
-        &scenario.holder.verifier(&["EdDSA"]),
+        &eddsa_holder_key,
         &aud,
         NONCE,
     );

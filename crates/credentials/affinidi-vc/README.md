@@ -13,7 +13,7 @@ W3C Verifiable Credentials Data Model implementation supporting both
 
 ```toml
 [dependencies]
-affinidi-vc = "0.2"
+affinidi-vc = "0.3"
 ```
 
 ## Features
