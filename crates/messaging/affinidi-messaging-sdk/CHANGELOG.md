@@ -42,6 +42,24 @@
   order), `moves` (what a change of groups moves) and `MuxGroupRouter`
   (a route per group). The mediator needs nothing for it.
 - Nothing changes for an app that uses neither.
+## 0.45.16 — TSP login signs a statement naming the mediator, the session and an expiry
+
+- **Behaviour change (R3.6):** `TspAuthHandler` no longer signs the
+  mediator's challenge string alone. It signs a statement: the RFC 8785
+  canonical JSON
+  `{"body":{"challenge","session_id"},"created_time","expires_time","from","to","typ"}`,
+  with `typ` `https://affinidi.com/atm/1.0/tsp/authenticate`, `from` the
+  profile DID and `to` the mediator DID, valid for 60 s. These are the fields
+  of the DIDComm authentication message. `POST /tsp/authenticate` now carries
+  `to`, `created_time` and `expires_time` next to `vid`, `session_id` and
+  `signature`. The signature is accepted only by the mediator it names, for
+  that session, until it expires.
+- Needs a mediator that verifies the statement (affinidi-messaging-mediator
+  0.52.0 or later). A mediator without that change refuses the login; this
+  handler does not fall back to signing the bare challenge.
+- New `TspAuthStatement` (re-exported at the crate root, `tsp` feature) with
+  `signing_bytes()`, and `protocols::tsp_auth::TSP_AUTH_TYP`, so other
+  clients can build the same bytes.
 
 ## 0.45.14 — mux: keep session attaches across reconnects (opt-in)
 
@@ -64,25 +82,6 @@
   on every connect, as before.
 - New `TspMuxSender::ready()`: the current connection's `ready` as a watch,
   `None` while the socket is down.
-## 0.45.16 — TSP login signs a statement naming the mediator, the session and an expiry
-
-- **Behaviour change (R3.6):** `TspAuthHandler` no longer signs the
-  mediator's challenge string alone. It signs a statement: the RFC 8785
-  canonical JSON
-  `{"body":{"challenge","session_id"},"created_time","expires_time","from","to","typ"}`,
-  with `typ` `https://affinidi.com/atm/1.0/tsp/authenticate`, `from` the
-  profile DID and `to` the mediator DID, valid for 60 s. These are the fields
-  of the DIDComm authentication message. `POST /tsp/authenticate` now carries
-  `to`, `created_time` and `expires_time` next to `vid`, `session_id` and
-  `signature`. The signature is accepted only by the mediator it names, for
-  that session, until it expires.
-- Needs a mediator that verifies the statement (affinidi-messaging-mediator
-  0.52.0 or later). A mediator without that change refuses the login; this
-  handler does not fall back to signing the bare challenge.
-- New `TspAuthStatement` (re-exported at the crate root, `tsp` feature) with
-  `signing_bytes()`, and `protocols::tsp_auth::TSP_AUTH_TYP`, so other
-  clients can build the same bytes.
-
 ## 0.45.13 — didcomm-mux acks go on the socket; typed tsp-mux task helpers
 
 - New `TrustTasksOps::mux_ack(profile, message_ids)`: `messaging/mux/ack` on
