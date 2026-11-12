@@ -2,6 +2,7 @@ use crate::{
     SharedData,
     config::init,
     handlers::{application_routes, health_checker_handler},
+    limits::WsLimits,
     statistics::{Statistics, statistics},
 };
 use affinidi_did_resolver_cache_sdk::{
@@ -145,6 +146,29 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
         )
     });
 
+    // Per-client rate limiting. `ConnectInfo` is attached below via
+    // `into_make_service_with_connect_info`, which the layer requires: a
+    // request it cannot attribute to an IP is refused rather than exempted.
+    // WebSocket request messages are charged to the same buckets by the
+    // WebSocket handler.
+    let rate_limiter = RateLimiterState::new(config.rate_limit_per_ip, config.rate_limit_burst);
+    if rate_limiter.is_enabled() {
+        event!(
+            Level::INFO,
+            "Rate limiting enabled: {} req/s per client, burst {}",
+            config.rate_limit_per_ip,
+            config.rate_limit_burst
+        );
+    } else {
+        event!(
+            Level::WARN,
+            "Rate limiting is DISABLED (rate_limit_per_ip = 0)"
+        );
+    }
+    let client_ip_extractor = config
+        .client_ip_extractor()
+        .map_err(|e| DIDCacheError::ConfigError(e.to_string()))?;
+
     // Create the shared application State
     let shared_state = SharedData {
         service_start_timestamp: chrono::Utc::now(),
@@ -156,6 +180,9 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
         webvh_log_cache,
         agent_name_resolver,
         agent_name_permits: Arc::new(Semaphore::new(config.agent_name_concurrency)),
+        rate_limiter: rate_limiter.clone(),
+        client_ip_extractor: client_ip_extractor.clone(),
+        ws_limits: Arc::new(WsLimits::from_config(&config)),
     };
 
     // Supervise the statistics task through the shared TaskSupervisor: a
@@ -165,6 +192,7 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
     // loop must never take the resolver down. The supervisor owns
     // cancellation, so it aborts the task when `shutdown` fires.
     let shutdown = CancellationToken::new();
+    rate_limiter.spawn_gc(shutdown.clone());
     {
         let stats = shared_state.stats.clone();
         let cache = shared_state.resolver.get_cache();
@@ -180,24 +208,6 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
     }
 
     // build our application routes
-    // Per-IP rate limiting. `ConnectInfo` is attached below via
-    // `into_make_service_with_connect_info`, which the layer requires: a
-    // request it cannot attribute to an IP is refused rather than exempted.
-    let rate_limiter = RateLimiterState::new(config.rate_limit_per_ip, config.rate_limit_burst);
-    rate_limiter.spawn_gc(shutdown.clone());
-    if rate_limiter.is_enabled() {
-        event!(
-            Level::INFO,
-            "Rate limiting enabled: {} req/s per IP, burst {}",
-            config.rate_limit_per_ip,
-            config.rate_limit_burst
-        );
-    } else {
-        event!(
-            Level::WARN,
-            "Rate limiting is DISABLED (rate_limit_per_ip = 0)"
-        );
-    }
 
     let app: Router = application_routes(&shared_state, &config);
 
@@ -227,7 +237,7 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
         // healthcheck route in builder order, which means it wraps that too —
         // deliberate, since an unlimited healthcheck is itself a cheap way to
         // hold a connection open.
-        .layer(RateLimitLayer::new(rate_limiter));
+        .layer(RateLimitLayer::new(rate_limiter).client_ip_extractor(client_ip_extractor));
 
     let listen_address = config
         .listen_address

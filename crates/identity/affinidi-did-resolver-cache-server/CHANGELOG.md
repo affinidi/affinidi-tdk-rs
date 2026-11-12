@@ -1,5 +1,52 @@
 # Affinidi DID Resolver Cache Server
 
+## Unreleased (0.10.0) — config keys read where written; WebSocket limits
+
+Breaking (R3.6): the config file is checked strictly, and `SharedData` and
+`Config` have new public fields.
+
+- **Fixed:** the shipped `conf/cache-conf.toml` set `rate_limit_per_ip` and
+  `rate_limit_burst` after the `[cache]` header, which in TOML makes them
+  `cache.rate_limit_per_ip` / `cache.rate_limit_burst`. The loader reads them
+  at the top level, so both were dropped and the built-in defaults (100 / 50)
+  applied whatever the file or `RATE_LIMIT_PER_IP` / `RATE_LIMIT_BURST` said.
+  They are now above `[cache]` and take effect.
+- **Behaviour (stricter):** an unknown key at the top level or in `[cache]`
+  fails startup with an error naming the key, instead of being ignored. A
+  config file copied from an earlier release that still has the two keys under
+  `[cache]` fails to start until they are moved above it.
+- **Changed:** WebSocket request messages are charged to the client's
+  rate-limit bucket, the same one its HTTP requests use (before, only the
+  upgrade request was charged). A message over the limit gets a
+  `WSResponseError` for that request ("Too many requests; retry after Ns") and
+  the connection stays open.
+- **Added:** WebSocket connection limits, each a config key:
+  - `ws_max_connections` (default 4096): over it, a new connection is refused
+    with 503 before the upgrade.
+  - `ws_max_connections_per_ip` (default 64): per client address; over it,
+    429 before the upgrade.
+  - `ws_idle_timeout` (default 120 s): a connection that receives no frame
+    (pings included) for this long is closed with code 1001. The resolver SDK
+    pings every 20 s and reconnects on close.
+  - `ws_send_timeout` (default 10 s): a response send that does not finish in
+    time closes the connection.
+  - `ws_max_message_size` (default `0`: `2 * max_did_size + 1024`, 3072 bytes
+    with the default `max_did_size`; it was `max_did_size + 1024`): the largest
+    message and frame accepted.
+  For the four limits, `0` or an unparseable value keeps the default.
+- **Added:** `trusted_proxies` (comma-separated CIDRs; default empty) and
+  `client_ipv6_prefix` (default 64). Behind listed proxies the client is read
+  from `X-Forwarded-For`, for the HTTP rate limit, the WebSocket message charge
+  and the per-address connection cap alike. IPv6 clients are now charged and
+  counted by their /64 instead of by address. An invalid value, or a `/0`
+  range, fails startup.
+- **Changed:** an error reading from a WebSocket (an oversized message among
+  them) closes the connection instead of being logged and skipped.
+- **Changed (API):** `SharedData` gains `rate_limiter`, `client_ip_extractor`
+  and `ws_limits`; `Config` gains the settings above and
+  `Config::client_ip_extractor()`. New `limits` module (`WsLimits`,
+  `ConnectionSlot`, `ConnectionRefused`) and `config::parse_config_str`.
+
 ## Unreleased (0.9.16) — did:webs
 
 Resolves `did:webs`: the SDK's `did-webs` feature is on, and the SDK floor is

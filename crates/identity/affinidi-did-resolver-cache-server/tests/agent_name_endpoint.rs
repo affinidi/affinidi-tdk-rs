@@ -5,8 +5,10 @@
 
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 use affinidi_did_resolver_cache_server::{
-    SharedData, config::Config, handlers::application_routes, statistics::Statistics,
+    SharedData, config::Config, handlers::application_routes, limits::WsLimits,
+    statistics::Statistics,
 };
+use affinidi_rate_limit::{ClientIpExtractor, RateLimiterState};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -46,6 +48,9 @@ async fn app_with_permits(enable_agent_names: bool, permits: usize) -> axum::Rou
             None
         },
         agent_name_permits: Arc::new(Semaphore::new(permits)),
+        rate_limiter: RateLimiterState::new(0, 0),
+        client_ip_extractor: ClientIpExtractor::direct_peer(),
+        ws_limits: Arc::new(WsLimits::from_config(&Config::default())),
     };
 
     application_routes(&state, &config)
@@ -157,6 +162,9 @@ async fn sheds_lookups_once_the_fetch_ceiling_is_reached() {
         webvh_log_cache: None,
         agent_name_resolver: Some(Arc::new(agent_names::HttpRedirectResolver::new())),
         agent_name_permits: permits.clone(),
+        rate_limiter: RateLimiterState::new(0, 0),
+        client_ip_extractor: ClientIpExtractor::direct_peer(),
+        ws_limits: Arc::new(WsLimits::from_config(&Config::default())),
     };
     let config = Config {
         enable_agent_names: true,
