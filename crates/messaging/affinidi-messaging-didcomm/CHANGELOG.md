@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased (0.15.12) — bounded JWS parsing
+
+- **Behaviour:** `jws::verify::parse_jws` refuses a JWS with more than
+  `DEFAULT_MAX_JWS_SIGNATURES` (16) signatures, checked before any signature
+  entry is decoded. Each parsed signature holds its own payload-length
+  signing input, so the count was what set the memory a JWS could take to
+  parse. `verify_bound` and `DIDCommAgent::unpack` go through `parse_jws` and
+  get the same bound. So does `affinidi-messaging-sdk`'s unpack until it
+  passes its own `UnpackPolicy::max_signatures` to `parse_jws_with_limits`:
+  a policy above 16 is held to 16 until then (R3.6).
+- New `parse_jws_with_limits` and `JwsLimits` (`#[non_exhaustive]`) let a
+  caller set the signature count and an optional cap on the encoded payload
+  length; both are checked before the per-signature loop.
+- The payload is decoded before the signature entries, so a JWS whose
+  payload is not base64url is refused before any signing input is built.
 ## Unreleased (0.15.11) — did:scid sender binding
 
 - **Behaviour (`messaging-core` adapter):** the plaintext `from` is checked

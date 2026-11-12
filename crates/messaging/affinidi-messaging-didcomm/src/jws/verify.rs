@@ -255,19 +255,86 @@ pub enum VerifyKey {
     Secp256k1(Vec<u8>),
 }
 
+/// Signature count [`parse_jws`] accepts. DIDComm messages are normally
+/// signed once; this leaves room for co-signed messages.
+pub const DEFAULT_MAX_JWS_SIGNATURES: usize = 16;
+
+/// Bounds [`parse_jws_with_limits`] checks before it builds anything per
+/// signature. Each signature gets its own copy of the signing input, which is
+/// as long as the payload, so parsing costs about `signatures × payload`
+/// bytes; these bounds are checked first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct JwsLimits {
+    /// Most signature entries accepted.
+    pub max_signatures: usize,
+    /// Most bytes accepted in the base64url-encoded payload. `None` leaves
+    /// the payload length unchecked.
+    pub max_encoded_payload_len: Option<usize>,
+}
+
+impl JwsLimits {
+    /// Accept at most `max_signatures` signatures and any payload length.
+    pub fn new(max_signatures: usize) -> Self {
+        Self {
+            max_signatures,
+            max_encoded_payload_len: None,
+        }
+    }
+
+    /// Also accept at most `max_encoded_payload_len` bytes of base64url
+    /// payload.
+    pub fn with_max_encoded_payload_len(mut self, max_encoded_payload_len: usize) -> Self {
+        self.max_encoded_payload_len = Some(max_encoded_payload_len);
+        self
+    }
+}
+
+impl Default for JwsLimits {
+    fn default() -> Self {
+        Self::new(DEFAULT_MAX_JWS_SIGNATURES)
+    }
+}
+
 /// Parse a JWS (General JSON Serialization) into its payload and **all**
 /// signature entries, without verifying any of them.
 ///
 /// Unlike [`verify_jws`] (which only touches `signatures[0]`), this preserves
 /// every signature so the caller can verify each one. Errors only on
-/// structural / base64 problems; an empty `signatures` array is rejected.
+/// structural / base64 problems; an empty `signatures` array is rejected, and
+/// so is one with more than [`DEFAULT_MAX_JWS_SIGNATURES`] entries. Use
+/// [`parse_jws_with_limits`] to choose the bounds.
 pub fn parse_jws(jws_str: &str) -> Result<ParsedJws, DIDCommError> {
+    parse_jws_with_limits(jws_str, &JwsLimits::default())
+}
+
+/// [`parse_jws`] with caller-chosen bounds. The signature count and payload
+/// length are checked before any signature entry is decoded.
+pub fn parse_jws_with_limits(jws_str: &str, limits: &JwsLimits) -> Result<ParsedJws, DIDCommError> {
     let jws: Jws = serde_json::from_str(jws_str)
         .map_err(|e| DIDCommError::InvalidMessage(format!("invalid JWS JSON: {e}")))?;
 
     if jws.signatures.is_empty() {
         return Err(DIDCommError::InvalidMessage("no signatures in JWS".into()));
     }
+    if jws.signatures.len() > limits.max_signatures {
+        return Err(DIDCommError::InvalidMessage(format!(
+            "JWS carries {} signatures, more than the {} accepted",
+            jws.signatures.len(),
+            limits.max_signatures
+        )));
+    }
+    if let Some(max_len) = limits.max_encoded_payload_len
+        && jws.payload.len() > max_len
+    {
+        return Err(DIDCommError::InvalidMessage(format!(
+            "JWS payload is {} encoded bytes, more than the {max_len} accepted",
+            jws.payload.len()
+        )));
+    }
+
+    let payload = Base64UrlUnpadded::decode_vec(&jws.payload)
+        .map_err(|e| DIDCommError::InvalidMessage(format!("invalid payload base64: {e}")))?;
 
     let mut signatures = Vec::with_capacity(jws.signatures.len());
     for sig_entry in &jws.signatures {
@@ -318,9 +385,6 @@ pub fn parse_jws(jws_str: &str) -> Result<ParsedJws, DIDCommError> {
             signature,
         });
     }
-
-    let payload = Base64UrlUnpadded::decode_vec(&jws.payload)
-        .map_err(|e| DIDCommError::InvalidMessage(format!("invalid payload base64: {e}")))?;
 
     Ok(ParsedJws {
         payload,
@@ -954,5 +1018,78 @@ mod tests {
             .is_err(),
             "wrong P-256 key must fail"
         );
+    }
+
+    fn jws_with_signatures(count: usize, payload: &[u8]) -> String {
+        let protected = Base64UrlUnpadded::encode_string(br#"{"alg":"EdDSA"}"#);
+        let signature = Base64UrlUnpadded::encode_string(&[0u8; 64]);
+        let entries: Vec<_> = (0..count)
+            .map(|_| serde_json::json!({ "protected": protected, "signature": signature }))
+            .collect();
+        serde_json::json!({
+            "payload": Base64UrlUnpadded::encode_string(payload),
+            "signatures": entries,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn parse_jws_accepts_up_to_the_default_signature_count() {
+        let parsed = parse_jws(&jws_with_signatures(DEFAULT_MAX_JWS_SIGNATURES, b"{}")).unwrap();
+        assert_eq!(parsed.signatures.len(), DEFAULT_MAX_JWS_SIGNATURES);
+    }
+
+    #[test]
+    fn parse_jws_refuses_more_than_the_default_signature_count() {
+        let jws = jws_with_signatures(DEFAULT_MAX_JWS_SIGNATURES + 1, b"{}");
+        assert!(matches!(
+            parse_jws(&jws),
+            Err(DIDCommError::InvalidMessage(_))
+        ));
+    }
+
+    #[test]
+    fn parse_jws_with_limits_uses_the_given_signature_count() {
+        let jws = jws_with_signatures(3, b"{}");
+        assert!(parse_jws_with_limits(&jws, &JwsLimits::new(2)).is_err());
+        assert_eq!(
+            parse_jws_with_limits(&jws, &JwsLimits::new(3))
+                .unwrap()
+                .signatures
+                .len(),
+            3
+        );
+
+        let many = jws_with_signatures(DEFAULT_MAX_JWS_SIGNATURES + 4, b"{}");
+        let limits = JwsLimits::new(DEFAULT_MAX_JWS_SIGNATURES + 4);
+        assert!(parse_jws_with_limits(&many, &limits).is_ok());
+    }
+
+    #[test]
+    fn parse_jws_refuses_a_bad_payload_before_reading_signatures() {
+        let mut jws: serde_json::Value =
+            serde_json::from_str(&jws_with_signatures(2, b"{}")).unwrap();
+        jws["payload"] = "not base64!".into();
+        let error = parse_jws(&jws.to_string()).err().unwrap();
+        assert!(error.to_string().contains("payload"), "{error}");
+    }
+
+    #[test]
+    fn parse_jws_with_limits_refuses_a_long_payload() {
+        let payload = vec![b'a'; 300];
+        let encoded_len = Base64UrlUnpadded::encoded_len(&payload);
+        let jws = jws_with_signatures(1, &payload);
+
+        let at_limit = JwsLimits::default().with_max_encoded_payload_len(encoded_len);
+        assert_eq!(
+            parse_jws_with_limits(&jws, &at_limit).unwrap().payload,
+            payload
+        );
+
+        let below = JwsLimits::default().with_max_encoded_payload_len(encoded_len - 1);
+        assert!(matches!(
+            parse_jws_with_limits(&jws, &below),
+            Err(DIDCommError::InvalidMessage(_))
+        ));
     }
 }
