@@ -129,11 +129,12 @@ fn mdoc_disallowed_alg_is_rejected() {
         "an issuerAuth alg outside the allowlist must be rejected"
     );
 
-    // Sanity: the same credential verifies once ES256 is the expected alg,
-    // proving it's the allowlist — not a broken signature — doing the rejecting.
-    let allowed = scenario.verify_mdoc_with_alg(&response, Algorithm::ES256);
+    // Naming ES256 as the expected alg does not help: the Ed25519 verifier
+    // only checks EdDSA, so a header that labels the signature ES256 is
+    // refused whatever the caller expects.
+    let relabelled = scenario.verify_mdoc_with_alg(&response, Algorithm::ES256);
     assert!(
-        allowed.is_ok(),
-        "ES256-expected verify should accept the Ed25519 signature"
+        relabelled.is_err(),
+        "an issuerAuth alg the verifier does not implement must be rejected"
     );
 }

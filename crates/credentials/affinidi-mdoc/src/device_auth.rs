@@ -124,19 +124,20 @@ impl DeviceAuthentication {
     /// ["DeviceAuthentication", SessionTranscript, DocType, DeviceNameSpacesBytes]
     /// ```
     pub fn to_cbor_value(&self) -> Result<ciborium::Value> {
-        let transcript_val = self.session_transcript.to_cbor_value()?;
+        let ns_bytes = encode_namespaces_bytes(&self.device_namespaces)?;
+        self.to_cbor_value_with_namespaces(&ns_bytes)
+    }
 
-        // Encode DeviceNameSpaces as Tag24
-        let ns_cbor = encode_device_namespaces(&self.device_namespaces)?;
-        let mut ns_bytes = Vec::new();
-        ciborium::into_writer(&ns_cbor, &mut ns_bytes)
-            .map_err(|e| MdocError::DeviceAuth(format!("DeviceNameSpaces encoding: {e}")))?;
+    /// The `DeviceAuthentication` array around already-encoded
+    /// `DeviceNameSpaces` bytes, so a verifier signs over what it received.
+    fn to_cbor_value_with_namespaces(&self, ns_bytes: &[u8]) -> Result<ciborium::Value> {
+        let transcript_val = self.session_transcript.to_cbor_value()?;
 
         Ok(ciborium::Value::Array(vec![
             ciborium::Value::Text("DeviceAuthentication".to_string()),
             transcript_val,
             ciborium::Value::Text(self.doc_type.clone()),
-            ciborium::Value::Tag(24, Box::new(ciborium::Value::Bytes(ns_bytes))),
+            ciborium::Value::Tag(24, Box::new(ciborium::Value::Bytes(ns_bytes.to_vec()))),
         ]))
     }
 
@@ -144,7 +145,12 @@ impl DeviceAuthentication {
     ///
     /// This is the data that gets signed or MACed for device authentication.
     pub fn to_device_authentication_bytes(&self) -> Result<Vec<u8>> {
-        let value = self.to_cbor_value()?;
+        let ns_bytes = encode_namespaces_bytes(&self.device_namespaces)?;
+        self.device_authentication_bytes_with_namespaces(&ns_bytes)
+    }
+
+    fn device_authentication_bytes_with_namespaces(&self, ns_bytes: &[u8]) -> Result<Vec<u8>> {
+        let value = self.to_cbor_value_with_namespaces(ns_bytes)?;
         let mut inner_bytes = Vec::new();
         ciborium::into_writer(&value, &mut inner_bytes)
             .map_err(|e| MdocError::DeviceAuth(format!("DeviceAuthentication encoding: {e}")))?;
@@ -192,7 +198,8 @@ impl DeviceSigned {
     /// # Arguments
     ///
     /// * `device_auth` — The DeviceAuthentication structure
-    /// * `mac_key` — 32-byte HMAC-SHA-256 key (derived from ECDH)
+    /// * `mac_key` — 32-byte HMAC-SHA-256 key (derived from ECDH); a reader
+    ///   derives the same key with [`derive_emac_key`]
     pub fn mac(device_auth: &DeviceAuthentication, mac_key: &[u8; 32]) -> Result<Self> {
         let auth_bytes = device_auth.to_device_authentication_bytes()?;
         let namespaces_bytes = encode_namespaces_bytes(&device_auth.device_namespaces)?;
@@ -241,19 +248,43 @@ impl DeviceSigned {
         })
     }
 
-    /// Verify the device authentication (signature or MAC).
+    /// The `DeviceNameSpaces` carried in [`Self::namespaces_bytes`].
     ///
-    /// For COSE_Sign1: pass a `CoseVerifier` with the device's public key.
-    /// For COSE_Mac0: pass `None` as verifier and provide `mac_key`.
+    /// Strict: anything other than a map of text keys to maps of text keys is
+    /// an error rather than being skipped.
+    pub fn device_namespaces(&self) -> Result<DeviceNameSpaces> {
+        decode_device_namespaces(&self.namespaces_bytes)
+    }
+
+    /// `DeviceAuthenticationBytes` over the received namespace bytes, after
+    /// checking they carry the namespaces `device_auth` names.
+    fn received_authentication_bytes(&self, device_auth: &DeviceAuthentication) -> Result<Vec<u8>> {
+        if self.device_namespaces()? != device_auth.device_namespaces {
+            return Err(MdocError::DeviceAuth(
+                "device-signed namespaces differ from the ones being verified".into(),
+            ));
+        }
+        device_auth.device_authentication_bytes_with_namespaces(&self.namespaces_bytes)
+    }
+
+    /// Verify a COSE_Sign1 device signature.
+    ///
+    /// Pass a `CoseVerifier` built from the device key in the verified MSO
+    /// (`deviceKeyInfo.deviceKey`, see [`crate::CoseKey::to_verifier`]). The
+    /// signature covers the namespace bytes as received, and the protected
+    /// `alg` must be present and agree with the verifier. MAC-based device
+    /// authentication goes through [`Self::verify_mac`].
     pub fn verify(
         &self,
         device_auth: &DeviceAuthentication,
         verifier: &dyn CoseVerifier,
     ) -> Result<bool> {
-        let auth_bytes = device_auth.to_device_authentication_bytes()?;
+        let auth_bytes = self.received_authentication_bytes(device_auth)?;
 
         match &self.device_auth {
             DeviceAuth::Signature(sign1) => {
+                crate::cose::checked_algorithm(&sign1.protected.header, verifier, None)
+                    .map_err(MdocError::DeviceAuth)?;
                 sign1
                     .verify_detached_signature(&auth_bytes, &[], |signature, tbs_data| {
                         match verifier.verify(tbs_data, signature) {
@@ -289,7 +320,7 @@ impl DeviceSigned {
             }
         };
 
-        let auth_bytes = device_auth.to_device_authentication_bytes()?;
+        let auth_bytes = self.received_authentication_bytes(device_auth)?;
 
         // Reconstruct protected header for MAC_structure
         let protected = HeaderBuilder::new()
@@ -333,6 +364,126 @@ fn encode_namespaces_bytes(namespaces: &DeviceNameSpaces) -> Result<Vec<u8>> {
     ciborium::into_writer(&ns_cbor, &mut bytes)
         .map_err(|e| MdocError::DeviceAuth(format!("DeviceNameSpaces encoding: {e}")))?;
     Ok(bytes)
+}
+
+/// Derive the `EMacKey` a reader uses to check a `deviceMac`, per
+/// ISO/IEC 18013-5 §9.1.3.5:
+///
+/// ```text
+/// Zab     = ECDH(EReaderKey.priv, SDeviceKey.pub)
+/// EMacKey = HKDF-SHA-256(IKM = Zab, salt = SHA-256(SessionTranscriptBytes),
+///                        info = "EMacKey", L = 32)
+/// ```
+///
+/// `device_key` must be the device key from the **verified MSO**
+/// (`deviceKeyInfo.deviceKey`), not the ephemeral key from device engagement:
+/// that is what ties the MAC to the issuer-signed credential.
+/// `reader_ephemeral_private_key` is the reader's ephemeral private scalar
+/// (big-endian) for this session. P-256 (feature `es256`) and P-384
+/// (`es384`) are supported; any other curve is an error.
+pub fn derive_emac_key(
+    device_key: &crate::cose_key::CoseKey,
+    reader_ephemeral_private_key: &[u8],
+    session_transcript: &SessionTranscript,
+) -> Result<[u8; 32]> {
+    let shared_secret = ecdh_shared_secret(device_key, reader_ephemeral_private_key)?;
+    let transcript_bytes = session_transcript.to_cbor_bytes()?;
+    let tagged = ciborium::Value::Tag(24, Box::new(ciborium::Value::Bytes(transcript_bytes)));
+    let mut session_transcript_bytes = Vec::new();
+    ciborium::into_writer(&tagged, &mut session_transcript_bytes)
+        .map_err(|e| MdocError::DeviceAuth(format!("SessionTranscriptBytes encoding: {e}")))?;
+    let salt = {
+        use sha2::Digest;
+        Sha256::digest(&session_transcript_bytes)
+    };
+    let mut key = [0u8; 32];
+    hkdf::Hkdf::<Sha256>::new(Some(&salt), &shared_secret)
+        .expand(b"EMacKey", &mut key)
+        .map_err(|e| MdocError::DeviceAuth(format!("EMacKey derivation: {e}")))?;
+    Ok(key)
+}
+
+#[allow(unused_variables)]
+fn ecdh_shared_secret(
+    device_key: &crate::cose_key::CoseKey,
+    reader_ephemeral_private_key: &[u8],
+) -> Result<Vec<u8>> {
+    device_key.validate()?;
+    match device_key.crv {
+        #[cfg(feature = "es256")]
+        crate::cose_key::Curve::P256 => {
+            let secret = p256::SecretKey::from_slice(reader_ephemeral_private_key)
+                .map_err(|_| MdocError::DeviceAuth("invalid P-256 reader key".into()))?;
+            let public = p256::PublicKey::from_sec1_bytes(&uncompressed_point(device_key))
+                .map_err(|_| MdocError::DeviceAuth("invalid P-256 device key".into()))?;
+            let shared = p256::ecdh::diffie_hellman(secret.to_nonzero_scalar(), public.as_affine());
+            Ok(shared.raw_secret_bytes().to_vec())
+        }
+        #[cfg(feature = "es384")]
+        crate::cose_key::Curve::P384 => {
+            let secret = p384::SecretKey::from_slice(reader_ephemeral_private_key)
+                .map_err(|_| MdocError::DeviceAuth("invalid P-384 reader key".into()))?;
+            let public = p384::PublicKey::from_sec1_bytes(&uncompressed_point(device_key))
+                .map_err(|_| MdocError::DeviceAuth("invalid P-384 device key".into()))?;
+            let shared = p384::ecdh::diffie_hellman(secret.to_nonzero_scalar(), public.as_affine());
+            Ok(shared.raw_secret_bytes().to_vec())
+        }
+        other => Err(MdocError::DeviceAuth(format!(
+            "no EMacKey derivation for {other:?} in this build"
+        ))),
+    }
+}
+
+#[cfg(any(feature = "es256", feature = "es384"))]
+fn uncompressed_point(key: &crate::cose_key::CoseKey) -> Vec<u8> {
+    let mut point = vec![0x04];
+    point.extend_from_slice(&key.x);
+    point.extend_from_slice(key.y.as_deref().unwrap_or_default());
+    point
+}
+
+/// Decode `DeviceNameSpaces` bytes, refusing anything that is not a map of
+/// text keys to maps of text keys.
+pub(crate) fn decode_device_namespaces(bytes: &[u8]) -> Result<DeviceNameSpaces> {
+    let value: ciborium::Value = ciborium::from_reader(bytes)
+        .map_err(|e| MdocError::DeviceAuth(format!("DeviceNameSpaces decode: {e}")))?;
+    let ciborium::Value::Map(entries) = value else {
+        return Err(MdocError::DeviceAuth(
+            "DeviceNameSpaces must be a CBOR map".into(),
+        ));
+    };
+    let mut namespaces = BTreeMap::new();
+    for (ns_key, items_value) in entries {
+        let ciborium::Value::Text(ns) = ns_key else {
+            return Err(MdocError::DeviceAuth(
+                "DeviceNameSpaces keys must be text".into(),
+            ));
+        };
+        let ciborium::Value::Map(item_entries) = items_value else {
+            return Err(MdocError::DeviceAuth(format!(
+                "DeviceSignedItems for `{ns}` must be a CBOR map"
+            )));
+        };
+        let mut items = BTreeMap::new();
+        for (item_key, item_value) in item_entries {
+            let ciborium::Value::Text(identifier) = item_key else {
+                return Err(MdocError::DeviceAuth(format!(
+                    "DeviceSignedItems keys in `{ns}` must be text"
+                )));
+            };
+            if items.insert(identifier, item_value).is_some() {
+                return Err(MdocError::DeviceAuth(format!(
+                    "duplicate device-signed element in `{ns}`"
+                )));
+            }
+        }
+        if namespaces.insert(ns, items).is_some() {
+            return Err(MdocError::DeviceAuth(
+                "duplicate namespace in DeviceNameSpaces".into(),
+            ));
+        }
+    }
+    Ok(namespaces)
 }
 
 /// Encode DeviceNameSpaces as a CBOR map of maps.

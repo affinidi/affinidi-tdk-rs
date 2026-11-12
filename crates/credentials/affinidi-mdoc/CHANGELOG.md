@@ -1,5 +1,58 @@
 # Affinidi mdoc Changelog
 
+## Unreleased (0.5.0) — digests over received bytes; `DeviceResponse::verify`
+
+**Behaviour change (R3.6).** Reader-side checks are stricter, and some
+responses that 0.4 accepted are now rejected.
+
+- **Fixed — digests are taken over the item bytes as received.**
+  `IssuerSigned::verify_digests` and `DeviceResponse::verify_digests` hashed a
+  re-encoding of each decoded `IssuerSignedItem`, so an item from an encoder
+  with a different map key order or integer widths failed to verify. They now
+  hash `Tag24::inner_bytes`, as the codec docs already stated. New:
+  `Tag24::digest(alg)` and `MobileSecurityObject::verify_tagged_item_digest`;
+  `verify_item_digest` is unchanged and documented as issuance-side.
+- **New — `DeviceResponse::verify(&VerifyOptions) -> VerifiedMdoc`** runs the
+  ISO 18013-5 §9.3 reader checks together: status OK; `issuerAuth` protected
+  `alg` in an allowed list; issuer key from `IssuerKey::Trusted(verifier)` or
+  `IssuerKey::Resolve(closure)`, which is handed the `x5chain` and `kid` and
+  must validate the chain; signature; the MSO is taken from the verified
+  payload, not the `mso` field; document docType = MSO docType = expected
+  docType; `validityInfo` against a caller-supplied `now` and leeway; digests;
+  and, unless `DeviceBinding::NotChecked` is passed, holder binding against
+  `deviceKeyInfo.deviceKey`: a `deviceSignature` with a verifier built from
+  that key, a `deviceMac` with an EMacKey derived inside `verify` from that
+  key and the reader's ephemeral private key. New module `verify`.
+- **New — `device_auth::derive_emac_key`** (ISO 18013-5 §9.1.3.5: ECDH with
+  the MSO device key, HKDF-SHA-256 with salt SHA-256(SessionTranscriptBytes)
+  and info `"EMacKey"`), for P-256 and P-384. Enables the `ecdh` feature of
+  the existing `p256` / `p384` dependencies; no new crates.
+- **New — `cose::x5chain`, `IssuerSigned::x5chain`, `DeviceResponse::x5chain`**
+  return the (unverified) chain from label 33; a chain present in both the
+  protected and unprotected headers is an error.
+- **New — `CoseKey::to_verifier`** builds an ES256 / ES384 / EdDSA verifier
+  from a COSE_Key, honouring its `alg` and `key_ops`.
+- **New — `CoseVerifier::algorithm()`** (defaulted to `None`); the built-in
+  verifiers return their algorithm.
+- **New — `ValidityInfo::check_with_leeway`.**
+- **Breaking — `alg` is checked everywhere.** `cose::verify_issuer_auth`,
+  `DeviceSigned::verify` and `reader_auth::verify_reader_auth` reject a COSE
+  structure with no protected `alg`, a non-registered one, or one that differs
+  from `CoseVerifier::algorithm()` when the verifier names one.
+- **Breaking — `DeviceResponse::from_cbor_bytes`** rejects a document whose
+  own `docType` is missing or differs from the MSO `docType` (it was ignored).
+- **Breaking — `ValidityInfo::check`** also requires `signed` to parse, not lie
+  in the future, and not be later than `validFrom`. `check_with_leeway` uses
+  checked arithmetic, so an extreme leeway cannot overflow.
+- **Breaking — device-signed namespaces.** `DeviceSigned::verify` and
+  `verify_mac` sign over the received `nameSpaces` bytes and require them to
+  decode to the namespaces in the `DeviceAuthentication` passed in; malformed
+  `DeviceNameSpaces` are an error instead of being skipped. New:
+  `DeviceSigned::device_namespaces()`.
+
+The piecemeal methods remain. `verify_digests` still trusts the `mso` field;
+prefer `DeviceResponse::verify` on the reader side.
+
 ## Unreleased (0.4.0) — OpenID4VP 1.0 Final handovers
 
 Fixes [#960](https://github.com/affinidi/affinidi-tdk-rs/issues/960); the fix is

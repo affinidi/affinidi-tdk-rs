@@ -12,7 +12,7 @@ licences (mDL) and eIDAS 2.0 attestations.
 
 ```toml
 [dependencies]
-affinidi-mdoc = "0.1"
+affinidi-mdoc = "0.5"
 ```
 
 ## Features
@@ -23,6 +23,12 @@ affinidi-mdoc = "0.1"
 - **Namespace-based attributes**: Organized by doc type and namespace
 - **IssuerSigned / DeviceResponse**: Full credential and presentation structures
 - **Selective disclosure**: Holder reveals only chosen attributes per namespace
+- **Reader verification**: `DeviceResponse::verify` checks the `issuerAuth`
+  algorithm and signature (issuer key from a caller-supplied verifier, or from
+  a resolver handed the `x5chain`), docType, validity, item digests over the
+  bytes as received, and the device signature against the device key in the
+  signed MSO. Validating the `x5chain` against trust anchors is the resolver's
+  job; this crate does not do X.509 path validation.
 
 ## eIDAS PID Namespace
 

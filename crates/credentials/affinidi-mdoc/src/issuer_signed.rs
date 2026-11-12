@@ -177,11 +177,16 @@ impl IssuerSigned {
         })
     }
 
-    /// Verify all digests in the MSO match the Tag24-wrapped items.
+    /// Verify every item against its digest in `self.mso`, hashing the item
+    /// bytes as received.
+    ///
+    /// This trusts `self.mso` as it stands; it does not check the issuer
+    /// signature. Use [`DeviceResponse::verify`] on the reader side, which
+    /// checks digests against the MSO taken from the verified signature.
     pub fn verify_digests(&self) -> Result<bool> {
         for (ns, items) in &self.namespaces {
             for tagged_item in items {
-                if !self.mso.verify_item_digest(ns, &tagged_item.inner)? {
+                if !self.mso.verify_tagged_item_digest(ns, tagged_item)? {
                     return Ok(false);
                 }
             }
@@ -192,6 +197,11 @@ impl IssuerSigned {
     /// Verify the issuerAuth COSE_Sign1 signature and return the decoded MSO.
     pub fn verify_issuer_auth(&self, verifier: &dyn CoseVerifier) -> Result<MobileSecurityObject> {
         verify_issuer_auth(&self.issuer_auth, verifier)
+    }
+
+    /// The unverified `x5chain` of `issuerAuth`, leaf first. See [`crate::cose::x5chain`].
+    pub fn x5chain(&self) -> Result<Vec<Vec<u8>>> {
+        crate::cose::x5chain(&self.issuer_auth)
     }
 }
 
@@ -255,21 +265,24 @@ impl DeviceResponse {
         })
     }
 
-    /// Verify that all disclosed items have valid digests in the MSO.
+    /// Verify every disclosed item against its digest in `self.mso`, hashing
+    /// the item bytes as received.
+    ///
+    /// This trusts `self.mso` as it stands; it does not check the issuer
+    /// signature. Prefer [`Self::verify`], which runs every reader check and
+    /// takes the MSO from the verified signature.
     pub fn verify_digests(&self) -> Result<bool> {
-        for (ns, items) in &self.disclosed {
-            for tagged_item in items {
-                if !self.mso.verify_item_digest(ns, &tagged_item.inner)? {
-                    return Ok(false);
-                }
-            }
-        }
-        Ok(true)
+        verify_disclosed_digests(&self.mso, &self.disclosed)
     }
 
     /// Verify the issuerAuth signature.
     pub fn verify_issuer_auth(&self, verifier: &dyn CoseVerifier) -> Result<MobileSecurityObject> {
         verify_issuer_auth(&self.issuer_auth, verifier)
+    }
+
+    /// The unverified `x5chain` of `issuerAuth`, leaf first. See [`crate::cose::x5chain`].
+    pub fn x5chain(&self) -> Result<Vec<Vec<u8>>> {
+        crate::cose::x5chain(&self.issuer_auth)
     }
 
     /// Get the disclosed attribute names for a namespace.
@@ -329,14 +342,7 @@ impl DeviceResponse {
             crate::error::MdocError::DeviceAuth("no device_signed present".into())
         })?;
 
-        // Reconstruct DeviceAuthentication with empty namespaces
-        // (the verifier uses the namespaces_bytes from DeviceSigned to reconstruct)
-        let ns_value: ciborium::Value = ciborium::from_reader(&device_signed.namespaces_bytes[..])
-            .map_err(|e| {
-                crate::error::MdocError::DeviceAuth(format!("DeviceNameSpaces decode: {e}"))
-            })?;
-
-        let device_namespaces = decode_device_namespaces(&ns_value)?;
+        let device_namespaces = device_signed.device_namespaces()?;
 
         let device_auth = DeviceAuthentication::new(
             session_transcript.clone(),
@@ -348,32 +354,19 @@ impl DeviceResponse {
     }
 }
 
-/// Decode DeviceNameSpaces from a CBOR Value.
-fn decode_device_namespaces(value: &ciborium::Value) -> Result<DeviceNameSpaces> {
-    let entries = match value {
-        ciborium::Value::Map(m) => m,
-        _ => return Ok(BTreeMap::new()),
-    };
-
-    let mut result = BTreeMap::new();
-    for (k, v) in entries {
-        let ns = match k {
-            ciborium::Value::Text(s) => s.clone(),
-            _ => continue,
-        };
-        let items_map = match v {
-            ciborium::Value::Map(m) => m,
-            _ => continue,
-        };
-        let mut items = BTreeMap::new();
-        for (ik, iv) in items_map {
-            if let ciborium::Value::Text(id) = ik {
-                items.insert(id.clone(), iv.clone());
+/// Check every disclosed item against `mso`, hashing the bytes as received.
+pub(crate) fn verify_disclosed_digests(
+    mso: &MobileSecurityObject,
+    disclosed: &BTreeMap<String, Vec<Tag24<IssuerSignedItem>>>,
+) -> Result<bool> {
+    for (ns, items) in disclosed {
+        for tagged_item in items {
+            if !mso.verify_tagged_item_digest(ns, tagged_item)? {
+                return Ok(false);
             }
         }
-        result.insert(ns, items);
     }
-    Ok(result)
+    Ok(true)
 }
 
 #[cfg(test)]

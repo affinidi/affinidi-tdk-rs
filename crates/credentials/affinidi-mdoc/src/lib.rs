@@ -49,6 +49,14 @@
  * | ES384 | -35 | P-384 | `es384` | [`es384_cose::Es384CoseSigner`] | [`es384_cose::Es384CoseVerifier`] |
  * | EdDSA | -8 | Ed25519 | `eddsa` | [`eddsa_cose::EdDsaCoseSigner`] | [`eddsa_cose::EdDsaCoseVerifier`] |
  *
+ * # Verifying a presentation
+ *
+ * Decoding checks structure only. A reader calls
+ * [`DeviceResponse::verify`] with [`VerifyOptions`]: it checks the
+ * `issuerAuth` algorithm and signature, the docType, the validity window, the
+ * item digests over the bytes as received and, unless explicitly waived, the
+ * device signature against the device key in the signed MSO.
+ *
  * # Device Authentication
  *
  * Two methods are supported per ISO 18013-5 §9.1.3:
@@ -70,6 +78,7 @@
  * - [`device_auth`] — DeviceAuthentication, DeviceSigned, COSE_Mac0 (§9.1.3)
  * - [`reader_auth`] — ReaderAuthentication and ItemsRequest (§9.1.4)
  * - [`session`] — Session key derivation and AES-256-GCM encryption
+ * - [`verify`] — Reader-side verification of a `DeviceResponse` (§9.3)
  * - [`mdl`] — mDL driving privileges and schema validation (feature: `mdl`)
  */
 
@@ -104,6 +113,7 @@ pub mod reader_auth;
 pub mod session;
 pub mod session_transcript;
 pub mod tag24;
+pub mod verify;
 
 pub use cose::{CoseSigner, CoseVerifier};
 pub use cose_key::{CoseKey, Curve, KeyOp, KeyType};
@@ -118,3 +128,4 @@ pub use reader_auth::{ItemsRequest, ReaderAuthentication};
 pub use session::SessionKeys;
 pub use session_transcript::{Handover, SessionTranscript};
 pub use tag24::Tag24;
+pub use verify::{DeviceBinding, IssuerAuthHeaders, IssuerKey, VerifiedMdoc, VerifyOptions};

@@ -113,6 +113,10 @@ impl EdDsaCoseVerifier {
 }
 
 impl CoseVerifier for EdDsaCoseVerifier {
+    fn algorithm(&self) -> Option<coset::iana::Algorithm> {
+        Some(coset::iana::Algorithm::EdDSA)
+    }
+
     fn verify(&self, data: &[u8], signature: &[u8]) -> Result<bool> {
         let sig = Signature::from_slice(signature)
             .map_err(|e| MdocError::Cose(format!("invalid EdDSA signature: {e}")))?;

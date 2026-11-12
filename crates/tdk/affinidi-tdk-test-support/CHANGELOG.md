@@ -1,5 +1,13 @@
 # Affinidi TDK Test Support
 
+## Unreleased (0.10.0) — mdoc 0.5
+
+`mdoc_scenario` takes and returns `affinidi-mdoc` types, and `affinidi-mdoc`
+moves to 0.5, so this crate moves a minor with it. No library source change.
+The `mdoc_disallowed_alg_is_rejected` test now expects a mislabelled
+`issuerAuth` to be refused even when the caller names its declared `alg`, as
+mdoc 0.5 checks the header against the verifier's algorithm.
+
 ## Unreleased (0.9.0) — mdoc 0.4
 
 `mdoc_scenario` takes and returns `affinidi-mdoc` types (`SessionTranscript`,
