@@ -216,6 +216,13 @@ async fn delete_batch(
         return;
     }
     let alias = profile.inner.alias.clone();
+    // On a mux connection, ack on the socket: only the mediator instance that
+    // holds the connection knows its members, so a REST delete of a member's
+    // message that lands on another instance is refused, and the message is
+    // redelivered on every reconnect. REST stays the fallback.
+    let Some(ids) = ack_on_mux_socket(atm, profile, ids, recent).await else {
+        return;
+    };
     let count = ids.len();
     let request = DeleteMessageRequest { message_ids: ids };
 
@@ -293,6 +300,68 @@ async fn delete_batch(
             }
         }
     }
+}
+
+/// Delete `ids` with `messaging/mux/ack` on the profile's mux connection, when
+/// it has a ready one. `None` when the mediator answered every chunk (each id
+/// then acked, gone, or refused and left for redelivery). Otherwise the ids
+/// the caller still has to delete over REST: all of them when there is no mux
+/// connection, or, when an ack fails, that chunk and every one after it. Ids
+/// from chunks already answered are not sent again.
+async fn ack_on_mux_socket(
+    atm: &ATM,
+    profile: &Arc<ATMProfile>,
+    ids: Vec<String>,
+    recent: &mut RecentDeletes,
+) -> Option<Vec<String>> {
+    use crate::tasks::messaging::mux::ack::v0_1::AckRefusalReason;
+    let Some(ready) = profile.mux_ready().await else {
+        return Some(ids);
+    };
+    if ready.borrow().is_none() {
+        return Some(ids);
+    }
+    let alias = profile.inner.alias.as_str();
+    let max = crate::protocols::trust_tasks::MUX_ACK_MAX;
+    let mut start = 0;
+    while start < ids.len() {
+        let chunk = &ids[start..ids.len().min(start + max)];
+        let answer = match atm.trust_tasks().mux_ack(profile, chunk).await {
+            Ok(answer) => answer,
+            Err(e) => {
+                // A failed socket is likely to fail the next chunk too, so
+                // stop here. The failed chunk goes to REST as well: its ack
+                // may have reached the mediator before the answer was lost,
+                // and REST answers `not_found` for anything already gone.
+                debug!(
+                    remaining = ids.len() - start,
+                    "deletion handler: mux ack failed ({e}); deleting the rest over REST"
+                );
+                return Some(ids[start..].to_vec());
+            }
+        };
+        for id in &answer.acked {
+            recent.record(alias, id.as_str());
+        }
+        let mut refused = Vec::new();
+        for r in &answer.refused {
+            match r.reason {
+                // Already gone: the expected answer for a redelivered copy.
+                AckRefusalReason::NotFound => recent.record(alias, r.message_id.as_str()),
+                AckRefusalReason::NotPermitted => refused.push(r.message_id.as_str()),
+            }
+        }
+        if !refused.is_empty() {
+            warn!(
+                deleted = answer.acked.len(),
+                failed = refused.len(),
+                "deletion handler: the mediator refused to delete some ids (a member \
+                 without `delete` on this connection): {refused:?}"
+            );
+        }
+        start += chunk.len();
+    }
+    None
 }
 
 pub enum DeletionHandlerCommands {
