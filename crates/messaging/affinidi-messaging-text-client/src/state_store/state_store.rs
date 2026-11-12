@@ -19,7 +19,9 @@ use tokio::sync::{
     broadcast,
     mpsc::{self, UnboundedReceiver, UnboundedSender},
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
+
+const STATE_FILE: &str = "config.json";
 
 pub struct StateStore {
     state_tx: UnboundedSender<State>,
@@ -58,7 +60,19 @@ impl StateStore {
         };
 
         // Load any profiles from existing chats.
-        let mut state = State::read_from_file("config.json").unwrap_or_default();
+        let mut state = match State::load(STATE_FILE) {
+            Ok(state) => state,
+            Err(e) => {
+                error!(
+                    "Cannot read {}: {}. Fix or move the file aside; it is not overwritten",
+                    STATE_FILE, e
+                );
+                eprintln!(
+                    "Cannot read {STATE_FILE}: {e}. Fix or move the file aside; it is not overwritten"
+                );
+                return Ok(Interrupted::SystemError);
+            }
+        };
         state.initialization = true;
 
         tdk.secrets_resolver().insert_vec(&state.secrets).await;
@@ -103,6 +117,7 @@ impl StateStore {
         };
 
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
+        let mut last_saved = None;
 
         let result = loop {
             tokio::select! {
@@ -234,10 +249,13 @@ impl StateStore {
                     break interrupted;
                 }
             }
+            if let Err(e) = state.save_if_changed(STATE_FILE, &mut last_saved) {
+                warn!("Failed to save state to {}: {}", STATE_FILE, e);
+            }
             self.state_tx.send(state.clone())?;
         };
 
-        let _ = state.save_to_file("config.json");
+        let _ = state.save_to_file(STATE_FILE);
 
         Ok(result)
     }
