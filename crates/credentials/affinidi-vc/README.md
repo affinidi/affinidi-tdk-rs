@@ -24,8 +24,11 @@ affinidi-vc = "0.3"
 - Proof-format agnostic (works with Data Integrity, JWT, SD-JWT-VC, COSE)
 - JSON-LD context validation
 - Credential status integration point
-- `sd_jwt_vc` module — SD-JWT VC issuance and verification (merged in from the
-  former `affinidi-sd-jwt-vc` crate)
+- `sd_jwt_vc` module — SD-JWT VC issuance, and verification with
+  `sd_jwt_vc::verify`: issuer signature, disclosures, key binding under `cnf.jwk`
+  when requested, `vct`/`iss`, and `iat`/`exp`/`nbf`. The `status` claim is
+  returned for the caller to check; no status list is fetched. (Merged in from
+  the former `affinidi-sd-jwt-vc` crate.)
 
 ## Related Crates
 
