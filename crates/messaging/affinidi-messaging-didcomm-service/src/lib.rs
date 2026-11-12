@@ -21,9 +21,12 @@ pub use middleware::{
 };
 pub use problem_report::{ProblemReport, ServiceProblemReport};
 pub use response::DIDCommResponse;
-pub use router::{MessageHandler, Router, handler_fn};
+pub use router::{MessageHandler, Router, UNSUPPORTED_TYPE_COMMENT, handler_fn};
 pub use service::{
     AffinidiMessageService, DIDCommService, ListenerEvent, ListenerState, ListenerStatus,
 };
-pub use transport::{build_problem_report, build_response, send_problem_report, send_response};
+pub use transport::{
+    PROBLEM_REPORT_TYPE, build_problem_report, build_response, is_problem_report_type,
+    send_problem_report, send_response,
+};
 pub use utils::{get_parent_thread_id, get_thread_id, new_message_id};

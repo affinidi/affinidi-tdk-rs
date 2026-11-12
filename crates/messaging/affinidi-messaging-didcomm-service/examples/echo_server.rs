@@ -8,7 +8,8 @@ use affinidi_messaging_didcomm_service::{
     DIDCommResponse, DIDCommService, DIDCommServiceConfig, DIDCommServiceError, ErrorHandler,
     Extension, HandlerContext, ListenerConfig, MESSAGE_PICKUP_STATUS_TYPE, MessagePolicy, Next,
     ProblemReport, RequestLogging, RestartPolicy, RetryConfig, Router, ServiceProblemReport,
-    TRUST_PING_TYPE, handler_fn, ignore_handler, middleware_fn, trust_ping_handler,
+    TRUST_PING_TYPE, UNSUPPORTED_TYPE_COMMENT, handler_fn, ignore_handler, is_problem_report_type,
+    middleware_fn, trust_ping_handler,
 };
 use affinidi_messaging_sdk::protocols::mediator::acls::AccessListModeType;
 use affinidi_secrets_resolver::secrets::Secret;
@@ -97,8 +98,13 @@ async fn fallback_handler(
         message.typ,
         ctx.sender_did.as_deref().unwrap_or("<anon>")
     );
+    // Like the Router's own default: never answer a problem report or a
+    // pickup status, and do not repeat the type back.
+    if is_problem_report_type(&message.typ) || message.typ == MESSAGE_PICKUP_STATUS_TYPE {
+        return Ok(None);
+    }
     Ok(Some(DIDCommResponse::problem_report(
-        ProblemReport::bad_request(format!("Unsupported message type: {}", message.typ)),
+        ProblemReport::bad_request(UNSUPPORTED_TYPE_COMMENT),
     )))
 }
 

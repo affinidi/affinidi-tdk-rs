@@ -13,6 +13,15 @@ use crate::utils::new_message_id;
 
 pub const PROBLEM_REPORT_TYPE: &str = "https://didcomm.org/report-problem/2.0/problem-report";
 
+/// Whether `message_type` is a DIDComm problem report, of any
+/// `report-problem` protocol version.
+pub fn is_problem_report_type(message_type: &str) -> bool {
+    message_type
+        .strip_prefix("https://didcomm.org/report-problem/")
+        .and_then(|rest| rest.split_once('/'))
+        .is_some_and(|(_, name)| name == "problem-report")
+}
+
 pub fn build_response(
     ctx: &HandlerContext,
     response_type: String,
@@ -35,6 +44,13 @@ pub fn build_response(
     Ok(builder.finalize())
 }
 
+/// Builds a problem report addressed to the message's sender.
+///
+/// Do not use this, or [`send_problem_report`], to answer a message that is
+/// itself a problem report (see [`is_problem_report_type`]): two services
+/// that do so can keep a pair of reports going. Replies returned from a
+/// handler are checked for this by the listener; these functions are not,
+/// because [`HandlerContext`] does not carry the inbound message type.
 pub fn build_problem_report(
     ctx: &HandlerContext,
     report: &ProblemReport,
@@ -92,6 +108,8 @@ pub async fn send_response(
     Ok(())
 }
 
+/// Builds and sends a problem report to the message's sender. See
+/// [`build_problem_report`]: not for answering a problem report.
 pub async fn send_problem_report(
     ctx: &HandlerContext,
     report: &ProblemReport,
@@ -164,4 +182,26 @@ pub(crate) async fn send_message(
 
     trace!(profile = %profile.inner.alias, "Message sent successfully");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn problem_report_types_are_recognised_by_protocol_and_name() {
+        assert!(is_problem_report_type(PROBLEM_REPORT_TYPE));
+        assert!(is_problem_report_type(
+            "https://didcomm.org/report-problem/1.0/problem-report"
+        ));
+        assert!(!is_problem_report_type(
+            "https://didcomm.org/report-problem/2.0/other"
+        ));
+        assert!(!is_problem_report_type(
+            "https://example.com/report-problem/2.0/problem-report"
+        ));
+        assert!(!is_problem_report_type(
+            "https://didcomm.org/trust-ping/2.0/ping"
+        ));
+    }
 }

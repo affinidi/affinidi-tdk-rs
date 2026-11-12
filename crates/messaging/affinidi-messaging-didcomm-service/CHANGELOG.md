@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased (0.30.2) — no reply to problem reports; error text kept local
+
+Follows 0.30.1 (#1083); merge that first.
+
+- **Behaviour (R3.6):** with no matching route and no fallback, `Router`
+  no longer answers a problem report (any `report-problem` version) or a
+  message pickup `status`; it logs the type at debug and sends nothing.
+  Other unmatched types still get `e.p.msg.bad-request`, now with the fixed
+  comment `UNSUPPORTED_TYPE_COMMENT` instead of one that repeats the type.
+- **Behaviour (R3.6):** the listener never sends a problem report in reply
+  to a problem report, whatever the handler returned, so two services cannot
+  keep a pair of reports going.
+- **Behaviour (R3.6):** `DefaultErrorHandler` sends `e.p.msg.internal-error`
+  with the fixed comment `INTERNAL_ERROR_COMMENT`; the error text is only in
+  the warning it logs. Problem report codes are unchanged; a peer that read
+  the comment gets the fixed text.
+- `PROBLEM_REPORT_TYPE`, `is_problem_report_type` and
+  `UNSUPPORTED_TYPE_COMMENT` are re-exported from the crate root.
+  `build_problem_report` / `send_problem_report` document that they are not
+  for answering a problem report; they are called directly by handlers and
+  are not checked (`HandlerContext` does not carry the inbound type).
+- `examples/echo_server.rs`'s fallback follows the same rules as `Router`.
+
 ## 0.30.1 — log names a repeated TSP invite
 
 The debug line for an inbound TSP control message that was not recorded now
