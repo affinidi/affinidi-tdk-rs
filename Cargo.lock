@@ -2596,7 +2596,7 @@ dependencies = [
 
 [[package]]
 name = "did-ebsi"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "affinidi-did-common",
  "bs58",
@@ -2605,6 +2605,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "tokio",
  "tracing",
 ]
 

@@ -1,5 +1,15 @@
 # did:ebsi
 
+## Unreleased (0.1.7) — a size limit on the fetched document
+
+- `resolve_ebsi_did` reads the registry's response under a 1 MiB limit (new
+  `MAX_DOCUMENT_BYTES` constant). A response that declares a larger
+  `Content-Length` is refused before its body is read, and the body is
+  counted as it arrives, so one sent without a `Content-Length` stops being
+  read at the limit. Before, the whole body was read into memory, however
+  large, until the 20 s request timeout. A larger response now fails with
+  `EbsiError::Http` (behaviour change, R3.6; no signature change).
+
 ## 0.1.6 — the fetched document must name the requested DID
 
 - Resolution now refuses a fetched DID document whose `id` is not the DID
