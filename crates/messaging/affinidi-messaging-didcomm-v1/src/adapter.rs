@@ -353,6 +353,30 @@ mod tests {
         ));
     }
 
+    /// After a peer is re-added with a new verkey, a message authenticated by
+    /// its previous verkey is no longer attributed to it.
+    #[tokio::test]
+    async fn previous_verkey_is_not_attributed_after_peer_is_re_added() {
+        let (alice, mut bob) = adapters();
+        let packed = alice
+            .pack(b"before rotation", "did:example:alice", "did:example:bob")
+            .await
+            .unwrap();
+
+        let rotated = PrivateIdentity::generate("did:example:alice").unwrap();
+        bob.agent_mut().add_peer(rotated.to_resolved());
+
+        let received = bob.unpack(&packed).await.unwrap();
+        assert_eq!(received.sender, None);
+        assert!(!received.verified);
+        assert!(matches!(
+            bob.agent()
+                .unpack(std::str::from_utf8(&packed).unwrap())
+                .unwrap(),
+            UnpackResult::AuthcryptUnknownSender { .. }
+        ));
+    }
+
     #[tokio::test]
     async fn wrap_for_relay_addresses_the_final_recipient_by_verkey() {
         let (mut alice, bob) = adapters();
