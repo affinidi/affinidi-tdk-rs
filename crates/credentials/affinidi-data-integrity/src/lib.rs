@@ -570,19 +570,32 @@ fn hashing_jcs(transformed_document: &str, canonical_proof_config: &str) -> Vec<
 /// Runs both document and proof config through the RDFC pipeline
 /// (JSON-LD expansion → RDF Dataset → RDFC-1.0 canonicalization → SHA-256)
 /// and concatenates the two 32-byte hashes.
+///
+/// Expansion runs in safe mode for both inputs. VC Data Integrity 1.0 §2.4.3
+/// (Securing Data Losslessly) requires implementations that use JSON-LD
+/// processing to "throw an error ... when data is dropped by a JSON-LD
+/// processor, such as when an undefined term is detected in an input
+/// document". Lenient expansion would drop such a term from the hashed
+/// dataset while it stays in the JSON, unsigned. Signing and verifying use the
+/// same pipeline, so a document this crate signs is one it can verify.
 fn hashing_rdfc(
     document: &serde_json::Value,
     proof_config: &serde_json::Value,
 ) -> Result<Vec<u8>, DataIntegrityError> {
-    let doc_hash = affinidi_rdf_encoding::expand_canonicalize_and_hash(document)
+    let doc_hash = rdfc_hash_safe(document)
         .map_err(|e| DataIntegrityError::Canonicalization(format!("RDFC document hash: {e}")))?;
 
-    let proof_hash =
-        affinidi_rdf_encoding::expand_canonicalize_and_hash(proof_config).map_err(|e| {
-            DataIntegrityError::Canonicalization(format!("RDFC proof config hash: {e}"))
-        })?;
+    let proof_hash = rdfc_hash_safe(proof_config).map_err(|e| {
+        DataIntegrityError::Canonicalization(format!("RDFC proof config hash: {e}"))
+    })?;
 
     Ok([proof_hash.as_slice(), doc_hash.as_slice()].concat())
+}
+
+/// Safe-mode JSON-LD expansion, RDFC-1.0 canonicalization, SHA-256.
+fn rdfc_hash_safe(document: &serde_json::Value) -> affinidi_rdf_encoding::Result<[u8; 32]> {
+    let dataset = affinidi_rdf_encoding::jsonld::expand_and_to_rdf_safe(document)?;
+    affinidi_rdf_encoding::rdfc1::canonicalize_and_hash(&dataset)
 }
 
 // -----------------------------------------------------------------------
@@ -897,9 +910,15 @@ mod tests {
         let err = proof
             .verify_with_public_key(&doc, secret.get_public_bytes(), VerifyOptions::new())
             .unwrap_err();
+        // The document has no `@context`, so the RDFC path now stops at
+        // canonicalization (its terms are undefined) before the signature.
         assert!(
-            matches!(err, crate::DataIntegrityError::InvalidSignature { .. }),
-            "expected InvalidSignature after cryptosuite tampering, got: {err:?}"
+            matches!(
+                err,
+                crate::DataIntegrityError::InvalidSignature { .. }
+                    | crate::DataIntegrityError::Canonicalization(_)
+            ),
+            "expected rejection after cryptosuite tampering, got: {err:?}"
         );
     }
 
