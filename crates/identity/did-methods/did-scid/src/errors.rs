@@ -8,6 +8,10 @@ pub enum DIDSCIDError {
     #[error("did:webs error: {0}")]
     WebsError(String),
 
+    /// The DID is deactivated, so it has no document whose keys may be used.
+    #[error("{0} is deactivated")]
+    Deactivated(String),
+
     /// The DID names a `did:scid` format this implementation does not
     /// resolve. Distinct from [`Self::UnsupportedFormat`], which means the
     /// string is not a `did:scid` at all.
