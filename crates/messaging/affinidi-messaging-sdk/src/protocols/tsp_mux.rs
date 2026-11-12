@@ -723,6 +723,8 @@ struct Shared {
     /// Thread ids of requests failed by a drop (newest last, bounded).
     abandoned: std::sync::Mutex<std::collections::VecDeque<String>>,
     state: watch::Sender<TspMuxState>,
+    /// The current connection's `ready`: `None` while it is down or gone.
+    ready: watch::Sender<Option<MuxReady>>,
 }
 
 impl Shared {
@@ -744,6 +746,7 @@ impl Shared {
     /// An ack's answer is never stored, so whether a failed ack went through
     /// is not known: acking again is safe.
     fn lose(&self, reason: &str) {
+        self.ready.send_replace(None);
         self.state.send_replace(TspMuxState::Reconnecting {
             attempt: 1,
             reason: reason.to_string(),
@@ -765,6 +768,7 @@ impl Shared {
 
     /// The connection ended: say so, and fail every request still waiting.
     fn finish(&self, reason: String) {
+        self.ready.send_replace(None);
         self.state.send_replace(TspMuxState::Closed {
             reason: reason.clone(),
         });
@@ -1053,6 +1057,40 @@ impl TspMuxSender {
     pub fn state(&self) -> watch::Receiver<TspMuxState> {
         self.shared.state.subscribe()
     }
+
+    /// The current connection's `ready` (session id and attach nonce), as a
+    /// watch: `None` while the socket is down or closed, and a new value on
+    /// every reconnect of a managed socket.
+    pub fn ready(&self) -> watch::Receiver<Option<MuxReady>> {
+        self.shared.ready.subscribe()
+    }
+
+    /// Keep `members` attached to this connection across reconnects
+    /// (`reattach_on_reconnect`, opt-in): sign fresh attach statements with
+    /// this socket's `ATM` for each new connection, attach them on the
+    /// socket, and attach again before they expire. Stops when the returned
+    /// handle is dropped. See [`super::mux_keep`].
+    pub fn keep_attached(
+        &self,
+        members: Vec<super::mux_keep::MuxKeepAttach>,
+    ) -> Result<super::mux_keep::MuxKeepAttached, ATMError> {
+        let sender = self.clone();
+        super::mux_keep::spawn_keep(
+            self.shared.atm.clone(),
+            self.shared.principal.clone(),
+            self.shared.mediator.clone(),
+            members,
+            self.ready(),
+            move |statements| {
+                let sender = sender.clone();
+                async move {
+                    let r = sender.attach(statements).await?;
+                    serde_json::to_value(&r)
+                        .map_err(|e| ATMError::MsgReceiveError(format!("attach answer: {e}")))
+                }
+            },
+        )
+    }
 }
 
 /// Why [`pump`] stopped.
@@ -1240,6 +1278,7 @@ async fn run(
                 Ok((new_ws, ready)) => {
                     ws = new_ws;
                     up_since = tokio::time::Instant::now();
+                    shared.ready.send_replace(Some(ready.clone()));
                     shared.state.send_replace(TspMuxState::Open);
                     debug!(principal = %shared.principal, session = %ready.session_id, "tsp-mux reconnected");
                     if frames
@@ -1574,6 +1613,7 @@ fn start(
     let (out_tx, out_rx) = mpsc::channel(16);
     let (frames_tx, frames_rx) = mpsc::channel(FRAME_BUFFER);
     let (state, _) = watch::channel(TspMuxState::Open);
+    let (ready_tx, _) = watch::channel(Some(ready.clone()));
     let shared = Arc::new(Shared {
         atm,
         profile,
@@ -1583,6 +1623,7 @@ fn start(
         pending: std::sync::Mutex::new(HashMap::new()),
         abandoned: std::sync::Mutex::new(std::collections::VecDeque::new()),
         state,
+        ready: ready_tx,
     });
     tokio::spawn(run(
         ws,
@@ -2394,6 +2435,8 @@ mod tests {
         let policy = TspMuxReconnect::default()
             .with_delays(Duration::from_millis(300), Duration::from_secs(1));
         let mut sock = open_on(dialer, &k, Some(policy)).await;
+        let ready_watch = sock.sender().ready();
+        assert!(ready_watch.borrow().is_some(), "ready while open");
         let mut state = sock.state();
         let down = state_becomes(&mut state, |s| {
             matches!(s, TspMuxState::Reconnecting { .. })
@@ -2403,6 +2446,7 @@ mod tests {
             matches!(&down, TspMuxState::Reconnecting { attempt: 1, reason } if reason.contains("instance shutting down")),
             "{down:?}"
         );
+        assert!(ready_watch.borrow().is_none(), "no ready while down");
         let err = sock.send(b"while down").await.unwrap_err();
         assert!(matches!(err, ATMError::Disconnected(_)), "{err}");
 
@@ -2416,6 +2460,11 @@ mod tests {
         };
         assert_eq!(ready.mux_nonce, NONCE);
         assert_eq!(sock.ready(), &*ready);
+        assert_eq!(
+            ready_watch.borrow().as_ref(),
+            Some(&*ready),
+            "the new ready, for re-attaching"
+        );
         assert_eq!(*sock.state().borrow(), TspMuxState::Open);
         assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2);
         sock.close().await.unwrap();

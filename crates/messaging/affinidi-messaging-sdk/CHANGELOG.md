@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.45.14 — mux: keep session attaches across reconnects (opt-in)
+
+- New `protocols::mux_keep`: `MuxKeepAttached` keeps a set of member DIDs
+  (`MuxKeepAttach { member_did, scope, lifetime_secs }`) attached to a mux
+  connection. For every new connection it signs fresh attach statements
+  with this `ATM`'s keys for the members, bound to that connection's
+  `sessionId` and `muxNonce`, and attaches them. It attaches again at 75 %
+  of the shortest lifetime (capped by the connection's
+  `maxAttachLifetimeSeconds`), and retries a failed attach after 10 s.
+  Dropping the handle stops it.
+  - DIDComm: `protocols::mux_keep::keep_attached(atm, profile, members)`.
+  - `tsp-mux`: `TspMuxSender::keep_attached(members)`, which pays off on a
+    managed socket (`connect_websocket_mux_managed`).
+- `MuxKeepAttached::status()` is a watch of where it stands (R6.2):
+  `Waiting` (no connection up), `Attached { mux_nonce, response }`,
+  `Failed { mux_nonce, error }` or `Ended`.
+- Nothing changes for an app that doesn't call it: session attaches are
+  still never re-attached by default (design §5.8). Stored grants come back
+  on every connect, as before.
+- New `TspMuxSender::ready()`: the current connection's `ready` as a watch,
+  `None` while the socket is down.
+
 ## 0.45.13 — didcomm-mux acks go on the socket; typed tsp-mux task helpers
 
 - New `TrustTasksOps::mux_ack(profile, message_ids)`: `messaging/mux/ack` on

@@ -25,6 +25,7 @@ pub mod discover_features;
 pub mod mediator;
 pub mod message_pickup;
 pub mod mux;
+pub mod mux_keep;
 pub mod oob_discovery;
 pub mod routing;
 pub mod trust_ping;
