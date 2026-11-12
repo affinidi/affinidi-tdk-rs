@@ -1,5 +1,22 @@
 # Affinidi TSP Changelog
 
+## 0.3.4 — HPKE refuses an all-zero X25519 shared secret; derived secrets are wiped
+
+The classical HPKE-Base suite (`crypto::hpke`, DHKEM(X25519, HKDF-SHA256)) now
+refuses an all-zero X25519 output, as RFC 9180 §7.1.4 requires of `Encap` and
+`Decap`. That output means the recipient key (on seal) or `enc` (on open) has
+small order, so the "shared" secret is a constant known in advance. Sealing to
+such a key, or opening a message whose `enc` is such a point, returns
+`TspError::Hpke`. `crypto::sealed_box` already applied the same check.
+
+The DH output, the KEM shared secret, the key-schedule `secret`, the AEAD key
+and base nonce, and the `LabeledExtract` input and PRK are now held in
+`Zeroizing` and wiped when dropped. Before, only the DH output was.
+
+No API change: the functions involved are crate-private. Behaviour change
+(R3.6): a peer key of small order is refused instead of being used. No real
+X25519 key has small order.
+
 ## 0.3.3 — one encoding per signed message; key state confirmed before use after a silence
 
 **Signature attachment.** The `-C` attachment group and the `-K` indexed

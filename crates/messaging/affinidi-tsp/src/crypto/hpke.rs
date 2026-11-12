@@ -26,7 +26,7 @@ use chacha20poly1305::{AeadInOut, ChaCha20Poly1305, KeyInit, aead::array::Array 
 use hkdf::Hkdf;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::TspError;
 
@@ -108,9 +108,9 @@ fn seal_with_ephemeral(
     let (key, base_nonce) = key_schedule(&shared_secret, info)?;
 
     let mut ciphertext = plaintext.to_vec();
-    let cipher = ChaCha20Poly1305::new_from_slice(&key)
+    let cipher = ChaCha20Poly1305::new_from_slice(key.as_slice())
         .map_err(|e| TspError::Hpke(format!("ChaCha20Poly1305 invalid key: {e}")))?;
-    let nonce = GenericArray::from(base_nonce);
+    let nonce = GenericArray::from(*base_nonce);
     cipher
         .encrypt_in_place(&nonce, aad, &mut ciphertext)
         .map_err(|e| TspError::Hpke(format!("ChaCha20Poly1305 seal failed: {e}")))?;
@@ -151,9 +151,9 @@ pub fn open(
     let (key, base_nonce) = key_schedule(&shared_secret, info)?;
 
     let mut plaintext = ciphertext.to_vec();
-    let cipher = ChaCha20Poly1305::new_from_slice(&key)
+    let cipher = ChaCha20Poly1305::new_from_slice(key.as_slice())
         .map_err(|e| TspError::Hpke(format!("ChaCha20Poly1305 invalid key: {e}")))?;
-    let nonce = GenericArray::from(base_nonce);
+    let nonce = GenericArray::from(*base_nonce);
     cipher
         .decrypt_in_place(&nonce, aad, &mut plaintext)
         .map_err(|_| {
@@ -172,20 +172,34 @@ pub fn open(
 /// Base mode differs from Auth in both halves: one DH instead of two, and a
 /// KEM context of `enc ‖ pkRm` rather than `enc ‖ pkRm ‖ pkSm`. The sender's
 /// static key does not participate at all.
-fn encap(sk_e: &StaticSecret, pk_r: &PublicKey) -> Result<([u8; N_SECRET], [u8; 32]), TspError> {
+///
+/// A recipient key of small order gives an all-zero DH output, which
+/// RFC 9180 §7.1.4 requires `Encap` to refuse.
+fn encap(
+    sk_e: &StaticSecret,
+    pk_r: &PublicKey,
+) -> Result<(Zeroizing<[u8; N_SECRET]>, [u8; 32]), TspError> {
     let pk_e = PublicKey::from(sk_e);
 
-    let mut dh = *sk_e.diffie_hellman(pk_r).as_bytes();
+    let dh = sk_e.diffie_hellman(pk_r);
+    if !dh.was_contributory() {
+        return Err(all_zero_dh());
+    }
 
     let enc = pk_e.to_bytes();
     let mut kem_context = [0u8; 64]; // enc || pkRm
     kem_context[..32].copy_from_slice(&enc);
     kem_context[32..].copy_from_slice(pk_r.as_bytes());
 
-    let shared_secret = extract_and_expand(&dh, &kem_context)?;
-    dh.zeroize();
+    let shared_secret = extract_and_expand(dh.as_bytes(), &kem_context)?;
 
     Ok((shared_secret, enc))
+}
+
+fn all_zero_dh() -> TspError {
+    TspError::Hpke(
+        "X25519 produced an all-zero shared secret (the peer key has small order)".into(),
+    )
 }
 
 /// DeriveKeyPair for DHKEM(X25519, HKDF-SHA256) (RFC 9180 §7.1.3).
@@ -195,57 +209,62 @@ fn encap(sk_e: &StaticSecret, pk_r: &PublicKey) -> Result<([u8; N_SECRET], [u8; 
 /// sampling: every 32-byte string is a scalar once clamped, and the clamping
 /// happens inside the DH.
 fn derive_key_pair(ikm: &[u8; 32]) -> Result<StaticSecret, TspError> {
-    let mut dkp_prk = labeled_extract(KEM_SUITE_ID, &[], b"dkp_prk", ikm)?;
+    let dkp_prk = labeled_extract(KEM_SUITE_ID, &[], b"dkp_prk", ikm)?;
     let mut sk = [0u8; 32];
-    labeled_expand(KEM_SUITE_ID, &dkp_prk, b"sk", &[], &mut sk)?;
-    dkp_prk.zeroize();
+    labeled_expand(KEM_SUITE_ID, dkp_prk.as_slice(), b"sk", &[], &mut sk)?;
     let secret = StaticSecret::from(sk);
     sk.zeroize();
     Ok(secret)
 }
 
 /// Decap: recover the shared secret using the recipient's private key.
-fn decap(enc: &[u8; 32], sk_r: &StaticSecret) -> Result<[u8; N_SECRET], TspError> {
+///
+/// An `enc` of small order gives an all-zero DH output, which RFC 9180
+/// §7.1.4 requires `Decap` to refuse.
+fn decap(enc: &[u8; 32], sk_r: &StaticSecret) -> Result<Zeroizing<[u8; N_SECRET]>, TspError> {
     let pk_e = PublicKey::from(*enc);
     let pk_r = PublicKey::from(sk_r);
 
-    let mut dh = *sk_r.diffie_hellman(&pk_e).as_bytes();
+    let dh = sk_r.diffie_hellman(&pk_e);
+    if !dh.was_contributory() {
+        return Err(all_zero_dh());
+    }
 
     let mut kem_context = [0u8; 64]; // enc || pkRm
     kem_context[..32].copy_from_slice(enc);
     kem_context[32..].copy_from_slice(pk_r.as_bytes());
 
-    let shared_secret = extract_and_expand(&dh, &kem_context)?;
-    dh.zeroize();
-
-    Ok(shared_secret)
+    extract_and_expand(dh.as_bytes(), &kem_context)
 }
 
 /// KEM ExtractAndExpand (RFC 9180 §4.1)
-fn extract_and_expand(dh: &[u8], kem_context: &[u8]) -> Result<[u8; N_SECRET], TspError> {
+fn extract_and_expand(
+    dh: &[u8],
+    kem_context: &[u8],
+) -> Result<Zeroizing<[u8; N_SECRET]>, TspError> {
     let kem_suite_id = KEM_SUITE_ID;
 
     // eae_prk = LabeledExtract("", "eae_prk", dh)  (RFC 9180 §4.1)
     let prk = labeled_extract(kem_suite_id, &[], b"eae_prk", dh)?;
 
     // shared_secret = LabeledExpand(eae_prk, "shared_secret", kem_context, Nsecret)
-    let mut shared_secret = [0u8; N_SECRET];
+    let mut shared_secret = Zeroizing::new([0u8; N_SECRET]);
     labeled_expand(
         kem_suite_id,
-        &prk,
+        prk.as_slice(),
         b"shared_secret",
         kem_context,
-        &mut shared_secret,
+        shared_secret.as_mut_slice(),
     )?;
 
     Ok(shared_secret)
 }
 
+/// The AEAD key and base nonce from [`key_schedule`], wiped on drop.
+type KeyAndNonce = (Zeroizing<[u8; N_K]>, Zeroizing<[u8; N_N]>);
+
 /// HPKE KeySchedule (RFC 9180 §5.1) — derives encryption key and nonce.
-fn key_schedule(
-    shared_secret: &[u8; N_SECRET],
-    info: &[u8],
-) -> Result<([u8; N_K], [u8; N_N]), TspError> {
+fn key_schedule(shared_secret: &[u8; N_SECRET], info: &[u8]) -> Result<KeyAndNonce, TspError> {
     let suite_id = HPKE_SUITE_ID;
 
     // For Base mode without PSK: psk = "" and psk_id = ""
@@ -261,24 +280,30 @@ fn key_schedule(
     // ks_context = mode || psk_id_hash || info_hash (1 + 32 + 32 = 65 bytes, fixed size)
     let mut ks_context = [0u8; 1 + N_H + N_H];
     ks_context[0] = MODE_BASE;
-    ks_context[1..1 + N_H].copy_from_slice(&psk_id_hash);
-    ks_context[1 + N_H..].copy_from_slice(&info_hash);
+    ks_context[1..1 + N_H].copy_from_slice(psk_id_hash.as_slice());
+    ks_context[1 + N_H..].copy_from_slice(info_hash.as_slice());
 
     // secret = LabeledExtract(shared_secret, "secret", psk)
     let secret = labeled_extract(suite_id, shared_secret, b"secret", psk)?;
 
     // key = LabeledExpand(secret, "key", ks_context, Nk)
-    let mut key = [0u8; N_K];
-    labeled_expand(suite_id, &secret, b"key", &ks_context, &mut key)?;
-
-    // base_nonce = LabeledExpand(secret, "base_nonce", ks_context, Nn)
-    let mut base_nonce = [0u8; N_N];
+    let mut key = Zeroizing::new([0u8; N_K]);
     labeled_expand(
         suite_id,
-        &secret,
+        secret.as_slice(),
+        b"key",
+        &ks_context,
+        key.as_mut_slice(),
+    )?;
+
+    // base_nonce = LabeledExpand(secret, "base_nonce", ks_context, Nn)
+    let mut base_nonce = Zeroizing::new([0u8; N_N]);
+    labeled_expand(
+        suite_id,
+        secret.as_slice(),
         b"base_nonce",
         &ks_context,
-        &mut base_nonce,
+        base_nonce.as_mut_slice(),
     )?;
 
     Ok((key, base_nonce))
@@ -287,13 +312,18 @@ fn key_schedule(
 /// LabeledExtract (RFC 9180 §4)
 /// labeled_ikm = "HPKE-v1" || suite_id || label || ikm
 /// return Extract(salt, labeled_ikm)
+///
+/// `ikm` is the DH output or a seed on some calls, so the copy in
+/// `labeled_ikm` and the PRK are wiped.
 fn labeled_extract(
     suite_id: &[u8],
     salt: &[u8],
     label: &[u8],
     ikm: &[u8],
-) -> Result<[u8; N_H], TspError> {
-    let mut labeled_ikm = Vec::with_capacity(7 + suite_id.len() + label.len() + ikm.len());
+) -> Result<Zeroizing<[u8; N_H]>, TspError> {
+    let mut labeled_ikm = Zeroizing::new(Vec::with_capacity(
+        7 + suite_id.len() + label.len() + ikm.len(),
+    ));
     labeled_ikm.extend_from_slice(b"HPKE-v1");
     labeled_ikm.extend_from_slice(suite_id);
     labeled_ikm.extend_from_slice(label);
@@ -301,9 +331,10 @@ fn labeled_extract(
 
     // HKDF-Extract: RFC 9180 LabeledExtract returns the PRK = Extract(salt, labeled_ikm)
     // directly (NOT Expand(PRK, "")). Use Hkdf::extract to get the raw PRK.
-    let (prk, _) = Hkdf::<Sha256>::extract(Some(salt), &labeled_ikm);
-    let mut out = [0u8; N_H];
+    let (mut prk, _) = Hkdf::<Sha256>::extract(Some(salt), labeled_ikm.as_slice());
+    let mut out = Zeroizing::new([0u8; N_H]);
     out.copy_from_slice(&prk);
+    prk.as_mut_slice().zeroize();
 
     Ok(out)
 }
@@ -388,16 +419,16 @@ mod tests {
 
         let shared_secret = decap(&enc, &StaticSecret::from(sk_rm)).unwrap();
         assert_eq!(
-            hex::encode(shared_secret),
+            hex::encode(*shared_secret),
             "0bbe78490412b4bbea4812666f7916932b828bba79942424abb65244930d69a7",
         );
 
         let (key, base_nonce) = key_schedule(&shared_secret, &info).unwrap();
         assert_eq!(
-            hex::encode(key),
+            hex::encode(*key),
             "ad2744de8e17f4ebba575b3f5f5a8fa1f69c2a07f6e7500bc60ca6e3e3ec1c91",
         );
-        assert_eq!(hex::encode(base_nonce), "5c4d98150661b848853b547f");
+        assert_eq!(hex::encode(*base_nonce), "5c4d98150661b848853b547f");
     }
 
     /// RFC 9180 Appendix A.2 again, from the sender's side: `ikmE` derives
@@ -422,6 +453,52 @@ mod tests {
             hex::encode(sealed.ciphertext),
             "1c5250d8034ec2b784ba2cfd69dbdb8af406cfe3ff938e131f0def8c8b60b4db21993c62ce81883d2dd1b51a28"
         );
+    }
+
+    /// X25519 points of small order: each gives an all-zero DH output with
+    /// every scalar.
+    const SMALL_ORDER_POINTS: [[u8; 32]; 2] = [[0u8; 32], {
+        let mut point = [0u8; 32];
+        point[0] = 1;
+        point
+    }];
+
+    #[test]
+    fn seal_refuses_a_small_order_recipient_key() {
+        for recipient_pk in SMALL_ORDER_POINTS {
+            let result = seal(b"secret", b"aad", &recipient_pk, b"YTSP-");
+            assert!(
+                matches!(result, Err(TspError::Hpke(ref message)) if message.contains("all-zero")),
+                "{:?}",
+                result.err()
+            );
+        }
+    }
+
+    #[test]
+    fn open_refuses_a_small_order_enc() {
+        let recipient_sk = StaticSecret::random_from_rng(&mut rand_10::rng());
+        let sealed = seal(
+            b"secret",
+            b"aad",
+            PublicKey::from(&recipient_sk).as_bytes(),
+            b"YTSP-",
+        )
+        .unwrap();
+
+        for enc in SMALL_ORDER_POINTS {
+            let result = open(
+                &sealed.ciphertext,
+                b"aad",
+                &enc,
+                &recipient_sk.to_bytes(),
+                b"YTSP-",
+            );
+            assert!(
+                matches!(result, Err(TspError::Hpke(ref message)) if message.contains("all-zero")),
+                "{result:?}"
+            );
+        }
     }
 
     #[test]
