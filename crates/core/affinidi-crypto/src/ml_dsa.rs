@@ -11,12 +11,14 @@ use rand_10::{RngExt, SeedableRng};
 use crate::{CryptoError, KeyType, error::Result};
 
 /// Generated ML-DSA key pair. `private_bytes` is always the 32-byte seed.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct KeyPair {
     pub key_type: KeyType,
     pub private_bytes: Vec<u8>,
     pub public_bytes: Vec<u8>,
 }
+
+key_pair_hygiene!();
 
 fn random_seed() -> [u8; 32] {
     // Seed a CSPRNG directly from the OS (no thread-local RNG) — key seeds must
@@ -259,6 +261,23 @@ pub fn verify_ml_dsa_87(public_key: &[u8], data: &[u8], signature: &[u8]) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ml_dsa_debug_hides_private_key() {
+        let keypair = generate_ml_dsa_44(None);
+        crate::key_pair_test_support::assert_debug_hides_private(
+            &format!("{keypair:?}"),
+            &keypair.private_bytes,
+        );
+    }
+
+    #[test]
+    fn ml_dsa_zeroize_wipes_private_key() {
+        use zeroize::Zeroize;
+        let mut keypair = generate_ml_dsa_44(None);
+        keypair.zeroize();
+        assert!(keypair.private_bytes.is_empty());
+    }
 
     #[test]
     fn ml_dsa_44_roundtrip() {

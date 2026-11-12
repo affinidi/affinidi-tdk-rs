@@ -10,12 +10,14 @@ use slh_dsa::{Sha2_128s, Signature, SigningKey, VerifyingKey};
 use crate::{CryptoError, KeyType, error::Result};
 
 /// Generated SLH-DSA-SHA2-128s key pair.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct KeyPair {
     pub key_type: KeyType,
     pub private_bytes: Vec<u8>,
     pub public_bytes: Vec<u8>,
 }
+
+key_pair_hygiene!();
 
 /// Generates an SLH-DSA-SHA2-128s key pair.
 pub fn generate_slh_dsa_sha2_128s() -> KeyPair {
@@ -52,6 +54,23 @@ pub fn verify_slh_dsa_sha2_128s(public_key: &[u8], data: &[u8], signature: &[u8]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slh_dsa_debug_hides_private_key() {
+        let keypair = generate_slh_dsa_sha2_128s();
+        crate::key_pair_test_support::assert_debug_hides_private(
+            &format!("{keypair:?}"),
+            &keypair.private_bytes,
+        );
+    }
+
+    #[test]
+    fn slh_dsa_zeroize_wipes_private_key() {
+        use zeroize::Zeroize;
+        let mut keypair = generate_slh_dsa_sha2_128s();
+        keypair.zeroize();
+        assert!(keypair.private_bytes.is_empty());
+    }
 
     fn hex(s: &str) -> Vec<u8> {
         (0..s.len())
