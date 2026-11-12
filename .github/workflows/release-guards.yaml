@@ -30,13 +30,21 @@ on:
       - opened
       - synchronize
 
+# Read-only: the jobs read the checkout and write nothing back. Fork pull
+# requests get the read-only token and no secrets (`pull_request`, never
+# `pull_request_target`). Third-party actions are pinned to commit SHAs (tag in
+# the trailing comment): a tag or branch can be repointed upstream.
+permissions:
+  contents: read
+
 jobs:
   guards:
     name: release guards
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           # Full history so the version-bump guard can diff against, and read
           # manifests from, the PR's base commit.
           fetch-depth: 0

@@ -18,13 +18,31 @@ on:
   # On demand, e.g. to confirm a security fix on `main` without waiting a day.
   workflow_dispatch:
 
+# Read-only by default. The one job that needs more grants it itself, so a job
+# added later starts read-only rather than with the repository default.
+permissions:
+  contents: read
+
 jobs:
   # Everything except tests and coverage. Split out from the aggregate
   # `checks.yaml` so coverage can be scheduled separately — see the `coverage`
   # job below for why.
   rust-pipeline:
     uses: affinidi/pipeline-rust/.github/workflows/checks-no-test.yaml@main
-    secrets: inherit
+    # A caller's grant caps what the called jobs may request, so this is the
+    # union of what checks-no-test's jobs ask for: `audit` opens and annotates
+    # RustSec issues on scheduled runs (issues: write) and `deprecation-check`
+    # comments on the PR (pull-requests: write). Everything else reads.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    # Only the secrets checks-no-test declares (the security scan's), rather
+    # than every secret the repository holds.
+    secrets:
+      SNYK_SCANNER_TOKEN: ${{ secrets.SNYK_SCANNER_TOKEN }}
+      SNYK_SCANNER_REGION: ${{ secrets.SNYK_SCANNER_REGION }}
+      SNYK_GLOBAL_POLICY: ${{ secrets.SNYK_GLOBAL_POLICY }}
     with:
       toolchain: "1.95.0"
       # line-tables-only: file and line numbers in backtraces, without full
@@ -32,9 +50,14 @@ jobs:
       # disk, and the vta-sdk crossing's second trust-tasks-rs (~3 GB) killed
       # the runner mid-build (#940). Local builds keep the default.
       rustflags: "-D warnings --cfg tracing_unstable -C debuginfo=line-tables-only"
-      # quinn-proto (RUSTSEC-2024-0373), paste (RUSTSEC-2024-0436, below) and
-      # crypto-bigint 0.5 (RUSTSEC-2026-0387, below) are
-      # suppressed.
+      # paste (RUSTSEC-2024-0436) and crypto-bigint 0.5 (RUSTSEC-2026-0387) are
+      # suppressed, for the reasons below. Every entry must still match
+      # Cargo.lock: `cargo audit` with no ignores should report each one, and
+      # an entry it no longer reports is deleted rather than kept.
+      #
+      # RUSTSEC-2024-0373 (quinn-proto) was removed 2026-11-13: the lockfile has
+      # quinn-proto 0.11.19, inside the advisory's patched range (>= 0.11.7),
+      # so the entry matched nothing.
       #
       # The four entries that used to sit here went with did:cheqd in cache-sdk
       # 0.8.36: RUSTSEC-2026-0258 (h2 DoS) and RUSTSEC-2023-0126 (im) arrived via
@@ -47,19 +70,21 @@ jobs:
       # is deliberately empty; `release.yaml` carries a second copy of *this* one,
       # so change them together.
       #
-      # RUSTSEC-2024-0436 (paste, unmaintained; no vulnerability) is accepted:
+      # RUSTSEC-2024-0436 (paste, unmaintained; no vulnerability) is accepted,
+      # last confirmed 2026-11-13:
       # it is in Cargo.lock only through optional `image` features (AVIF:
       # ravif -> rav1e; OpenEXR: exr -> pulp). text-client uses `image` with
       # both off, so it is never compiled. The latest releases (image 0.25.10, rav1e 0.8.1, pulp 0.22.3) still use it.
       # Clears when rav1e and pulp move off `paste`: delete it then (#779).
       #
       # RUSTSEC-2026-0387 (crypto-bigint, constant-time timing variability) is
-      # accepted for 0.5.5 only: 0.7.x is on 0.7.6, the fix. 0.5.5 is reached
+      # accepted for 0.5.5 only, last confirmed 2026-11-13: 0.7.x is on 0.7.10,
+      # past the fix in 0.7.6. 0.5.5 is reached
       # solely through affinidi-bbs -> bls12_381_plus 0.9, which links
       # elliptic-curve 0.13 (non-optionally) beside 0.14 for legacy trait
       # compatibility; the advisory names no 0.5.x fix and no newer
       # bls12_381_plus exists. Delete it when bls12_381_plus drops 0.13.
-      auditIgnore: "RUSTSEC-2024-0373,RUSTSEC-2024-0436,RUSTSEC-2026-0387"
+      auditIgnore: "RUSTSEC-2024-0436,RUSTSEC-2026-0387"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       # PR-only. `verify-publish` resolves each crate from the registry in
       # isolation, which is a useful pre-merge gate but is *expected* to fail on
@@ -76,7 +101,6 @@ jobs:
   # Tests run on every event, including PRs — this is the gate that matters.
   test:
     uses: affinidi/pipeline-rust/.github/workflows/test.yaml@main
-    secrets: inherit
     with:
       toolchain: "1.95.0"
       # line-tables-only: file and line numbers in backtraces, without full
@@ -103,7 +127,6 @@ jobs:
   coverage:
     if: github.event_name != 'pull_request'
     uses: affinidi/pipeline-rust/.github/workflows/coverage.yaml@main
-    secrets: inherit
     with:
       toolchain: "1.95.0"
       rustflags: "-D warnings --cfg tracing_unstable"

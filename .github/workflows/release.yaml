@@ -9,16 +9,40 @@ on:
   # fix; a dispatch resolves `@main` afresh.
   workflow_dispatch:
 
+# Nothing by default; the release job grants exactly what publishing needs.
+permissions: {}
+
 jobs:
   rust-pipeline:
     uses: affinidi/pipeline-rust/.github/workflows/release.yaml@main
-    secrets: inherit
+    # A caller's grant caps what the called jobs may request. The pipeline's
+    # `release` job asks for these two: id-token: write mints the crates.io
+    # trusted-publishing token, and contents: write is its tag-pushing grant
+    # (it pushes the tags with the release bot's app token). Its `rust-scan`
+    # job asks only for contents: read, which this covers.
+    permissions:
+      contents: write
+      id-token: write
+    # Only the secrets the pipeline's release workflow declares, rather than
+    # every secret the repository holds.
+    secrets:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      SNYK_SCANNER_TOKEN: ${{ secrets.SNYK_SCANNER_TOKEN }}
+      SNYK_SCANNER_REGION: ${{ secrets.SNYK_SCANNER_REGION }}
+      SNYK_GLOBAL_POLICY: ${{ secrets.SNYK_GLOBAL_POLICY }}
+      RELEASE_BOT_APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
+      RELEASE_BOT_PRIVATE_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
     with:
       toolchain: "1.95.0"
       rustflags: "-D warnings --cfg tracing_unstable"
-      # quinn-proto (RUSTSEC-2024-0373), paste (RUSTSEC-2024-0436, below) and
-      # crypto-bigint 0.5 (RUSTSEC-2026-0387, below) are
-      # suppressed.
+      # paste (RUSTSEC-2024-0436) and crypto-bigint 0.5 (RUSTSEC-2026-0387) are
+      # suppressed, for the reasons below. Every entry must still match
+      # Cargo.lock: `cargo audit` with no ignores should report each one, and
+      # an entry it no longer reports is deleted rather than kept.
+      #
+      # RUSTSEC-2024-0373 (quinn-proto) was removed 2026-11-13: the lockfile has
+      # quinn-proto 0.11.19, inside the advisory's patched range (>= 0.11.7),
+      # so the entry matched nothing.
       #
       # RUSTSEC-2026-0258 (h2, unbounded empty DATA frames) was the reason this
       # list existed. It is now genuinely fixed rather than suppressed: h2 0.3.27
@@ -31,19 +55,21 @@ jobs:
       # (2023-0126) out of the graph, so their entries went with it. Anything
       # re-entering the graph should fail the build rather than be inherited.
       #
-      # RUSTSEC-2024-0436 (paste, unmaintained; no vulnerability) is accepted:
+      # RUSTSEC-2024-0436 (paste, unmaintained; no vulnerability) is accepted,
+      # last confirmed 2026-11-13:
       # it is in Cargo.lock only through optional `image` features (AVIF:
       # ravif -> rav1e; OpenEXR: exr -> pulp). text-client uses `image` with
       # both off, so it is never compiled. The latest releases (image 0.25.10, rav1e 0.8.1, pulp 0.22.3) still use it.
       # Clears when rav1e and pulp move off `paste`: delete it then (#779).
       #
       # RUSTSEC-2026-0387 (crypto-bigint, constant-time timing variability) is
-      # accepted for 0.5.5 only: 0.7.x is on 0.7.6, the fix. 0.5.5 is reached
+      # accepted for 0.5.5 only, last confirmed 2026-11-13: 0.7.x is on 0.7.10,
+      # past the fix in 0.7.6. 0.5.5 is reached
       # solely through affinidi-bbs -> bls12_381_plus 0.9, which links
       # elliptic-curve 0.13 (non-optionally) beside 0.14 for legacy trait
       # compatibility; the advisory names no 0.5.x fix and no newer
       # bls12_381_plus exists. Delete it when bls12_381_plus drops 0.13.
-      auditIgnore: "RUSTSEC-2024-0373,RUSTSEC-2024-0436,RUSTSEC-2026-0387"
+      auditIgnore: "RUSTSEC-2024-0436,RUSTSEC-2026-0387"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       release_debug: true
       # `workspace_publish: true` uses `cargo publish --workspace`, which errors on
