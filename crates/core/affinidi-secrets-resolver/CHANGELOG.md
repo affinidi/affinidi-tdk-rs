@@ -1,5 +1,49 @@
 # Affinidi Secrets Manager
 
+## Unreleased (0.5.16) — `ThreadedSecretsResolver` waits for room instead of dropping commands
+
+`ThreadedSecretsResolver` sent every command with `try_send` on a 32-slot
+channel and, when the channel was full, logged a warning and carried on:
+`insert_vec` lost every secret past the 32nd that was queued before the task
+ran (on a current-thread runtime, all of them past the first 32), and reads
+answered "not found" (`None`, `vec![]`, `0`, `true`) while the secrets were
+still there. Callers could not tell either from a missing key.
+
+- Every command now waits for room on the channel (`send().await`) instead
+  of being dropped. Each operation, from queueing its command to the task's
+  answer (and, for inserts and removals, the task's confirmation), is bounded
+  by one `SECRETS_TASK_TIMEOUT`. `insert_vec` sends the batch as one `AddSecrets` command
+  and returns once the task has stored it; `remove_secret` returns once the
+  task has removed the key.
+- New fallible methods that report a stopped or unresponsive task instead of
+  folding it into "not found": `try_insert_vec`, `try_get_secret`,
+  `try_find_secrets`, `try_remove_secret` and `try_len`. `Ok(None)` /
+  `Ok(vec![])` mean the task does not hold the key.
+- New `SecretsResolverError::SecretsTaskClosed` and
+  `SecretsResolverError::SecretsTaskTimeout` (the enum is `#[non_exhaustive]`)
+  and `SECRETS_TASK_TIMEOUT` (5s), the bound on each whole operation.
+- The `SecretsResolver` trait signatures are unchanged. Its methods on
+  `ThreadedSecretsResolver` now log a stopped or unresponsive task at
+  `error` level; reads still return `None` / `vec![]` / `0` in that case,
+  since the trait has no error channel.
+
+Behaviour change (R3.6):
+
+- Inserts and removals now wait for the task to confirm them, up to
+  `SECRETS_TASK_TIMEOUT` (5s) in all, where they used to return at once (and
+  sometimes lose the command). Reads wait up to 5s in all, where they used to
+  give up after one second for the answer.
+- Inserts and removals now use `tokio::time`, as reads already did, so they
+  need a runtime with the time driver enabled (`enable_time()` / `enable_all()`,
+  which `#[tokio::main]` and `#[tokio::test]` turn on). Without it they panic.
+- A caller that passes its own channel to `ThreadedSecretsResolver::new(Some(tx))`
+  must answer `SecretsStored`, which inserts and removals now send to confirm
+  they were applied; otherwise they time out (`SecretsTaskTimeout`, logged at
+  `error` by the trait methods). `SecretsTask` does this already.
+
+No caller in this workspace relies on the old timing, and none passes its own
+channel.
+
 ## Unreleased (0.5.15) — `Secret::from_str` renamed to say what it takes
 
 `Secret::from_str(key_id, &Value)` was named and documented as if it parsed a
