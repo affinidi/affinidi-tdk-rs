@@ -1,0 +1,75 @@
+name: checks-crate-features
+# Tests crate features that no workspace member turns on, so neither the main
+# `checks.yaml` (default features, through the shared pipeline-rust workflow)
+# nor the facade matrix in `checks-features.yaml` ever compiles them.
+#
+# Runs on every PR that touches a crate or the lockfile: these features sit
+# under credentials/, protocols/, identity/ and messaging/, so a path list
+# narrower than that would miss the change that breaks one.
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/checks-crate-features.yaml"
+
+# Runs fork pull requests with the read-only token and no secrets
+# (`pull_request`, never `pull_request_target`).
+permissions:
+  contents: read
+
+jobs:
+  feature-tests:
+    name: ${{ matrix.crate }} [${{ matrix.features }}]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crate: affinidi-oid4vc-core
+            features: jwe
+          - crate: affinidi-openid4vp
+            features: direct-post-jwt
+          - crate: affinidi-did-webs
+            features: create
+          - crate: affinidi-data-integrity
+            features: bbs-2023,post-quantum
+          - crate: affinidi-tsp
+            features: pq
+          - crate: affinidi-crypto
+            features: post-quantum,slh-dsa
+          - crate: affinidi-mdoc
+            features: es384,mdl
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install native deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libssl-dev libdbus-1-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.95.0"
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: crate-features-${{ matrix.crate }}
+          # Only main writes the cache; a pull request reads it but never
+          # saves one that another branch could restore.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: cargo test -p ${{ matrix.crate }} --features ${{ matrix.features }}
+        env:
+          RUSTFLAGS: "--cfg tracing_unstable"
+        run: cargo test --locked -p ${{ matrix.crate }} --features "${{ matrix.features }}"

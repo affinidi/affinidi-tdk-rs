@@ -8,6 +8,9 @@ name: checks-features
 #   - `didcomm-service (tsp)` — `affinidi-messaging-didcomm-service`'s
 #     non-default `tsp` feature.
 #
+# Per-crate features nothing in the workspace enables are tested in
+# `checks-crate-features.yaml`.
+#
 # The mediator's secrets-backend feature matrix moved with the mediator to
 # affinidi/affinidi-messaging-mediator.
 
@@ -17,10 +20,11 @@ on:
       - opened
       - synchronize
     paths:
-      - "crates/tdk/affinidi-tdk/**"
-      - "crates/messaging/affinidi-messaging-didcomm-service/**"
-      - "crates/messaging/affinidi-messaging-sdk/**"
-      - "crates/messaging/affinidi-tsp/**"
+      # The facade re-exports crates from every area, so a change to any of
+      # them (or to the lockfile) can break a facade feature combination.
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/checks-features.yaml"
 
 jobs:
