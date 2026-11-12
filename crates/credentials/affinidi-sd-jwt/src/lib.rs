@@ -41,7 +41,10 @@ pub use error::SdJwtError;
 pub use hasher::{SdHasher, Sha256Hasher, Sha384Hasher, Sha512Hasher};
 pub use holder::KbJwtInput;
 pub use signer::{JwtSigner, JwtVerifier};
-pub use verifier::{VerificationOptions, VerificationResult};
+pub use verifier::{
+    DEFAULT_SD_ALG, HolderKeyVerifier, KB_JWT_TYP, KbFreshness, KeyBindingCheck,
+    VerificationOptions, VerificationResult,
+};
 
 /// An SD-JWT: a signed JWT with selective disclosures and optional key binding.
 ///

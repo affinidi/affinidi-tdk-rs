@@ -783,7 +783,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-sd-jwt"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "affinidi-sd-jwt",
  "base64 0.23.1",
@@ -799,7 +799,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-sd-jwt-vc"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "affinidi-vc",
 ]
@@ -873,7 +873,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.40.0"
+version = "0.41.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -939,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk-test-support"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -1014,7 +1014,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-vc"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "affinidi-sd-jwt",
  "chrono",

@@ -1,5 +1,57 @@
 # Affinidi SD-JWT Changelog
 
+## Unreleased (0.2.0) — key binding checked under `cnf.jwk`, with `aud`, `nonce` and `iat` required
+
+Breaking (R3.6): `verify` changes signature and a requested key binding check
+is stricter.
+
+- **Changed:** `verifier::verify(sd_jwt, issuer_verifier, hasher, options)`.
+  The `holder_verifier` argument is gone. The KB-JWT verifier is now built from
+  the `cnf.jwk` of the signature-verified issuer payload, through the new
+  `HolderKeyVerifier` trait (any `Fn(&Value) -> Result<Box<dyn JwtVerifier>>`
+  closure implements it). Before, the caller passed a verifier that was never
+  compared with `cnf.jwk`, so a KB-JWT checked against any other key was
+  reported as bound.
+- **Changed:** `VerificationOptions` is now `{ key_binding: Option<KeyBindingCheck> }`.
+  `KeyBindingCheck` has required `audience`, `nonce`, `freshness`
+  (`KbFreshness`) and `holder_key` members. Before, `expected_audience` and
+  `expected_nonce` were documented as required with `verify_kb` but were only
+  compared when given, so a KB-JWT for any audience and nonce was reported as
+  verified. An empty expected audience or nonce is refused.
+- **Changed:** with key binding, the KB-JWT must carry an integer `iat` inside
+  the freshness window (RFC 9901 §4.3, §7.3). `verify_with_kb_freshness` is
+  removed; its window is now the `freshness` member.
+- **Fixed:** the freshness window saturates instead of overflowing, and a
+  negative `iat` is refused. An `iat` of `i64::MIN` used to overflow
+  `now - iat` (a panic with overflow checks, a pass without them).
+- **Behaviour (stricter):** a payload with no `_sd_alg` uses `sha-256` (RFC 9901
+  §4.1.1), so another hasher is refused with an `_sd_alg mismatch` error rather
+  than a later digest error. A non-string `_sd_alg` is refused.
+- **Changed:** `issuer::issue` writes `_sd_alg` whenever the hasher is not
+  `sha-256`, even with no disclosures, so such an SD-JWT still verifies.
+- **Added:** `DEFAULT_SD_ALG`, `HolderKeyVerifier`, `KeyBindingCheck`,
+  `VerificationOptions::with_key_binding`. `KbFreshness`, `KeyBindingCheck`,
+  `HolderKeyVerifier`, `KB_JWT_TYP` and `DEFAULT_SD_ALG` are re-exported from
+  the crate root. Test utilities gain `oct_jwk` and `hmac_verifier_from_jwk`.
+- Without a `KeyBindingCheck`, a KB-JWT that is present is still reported as
+  `kb_verified: Some(false)` and `is_verified()` is false, as before.
+
+Migration:
+
+```rust
+// 0.1
+let opts = VerificationOptions { verify_kb: true, expected_audience: Some(aud), expected_nonce: Some(nonce) };
+verify(&sd_jwt, &issuer_verifier, &hasher, &opts, Some(&holder_verifier))?;
+// 0.2
+let opts = VerificationOptions::with_key_binding(KeyBindingCheck {
+    audience: aud,
+    nonce,
+    freshness: KbFreshness::new(now, 300),
+    holder_key: &|jwk: &serde_json::Value| my_verifier_from_jwk(jwk),
+});
+verify(&sd_jwt, &issuer_verifier, &hasher, &opts)?;
+```
+
 ## Unreleased (0.1.8) — RFC 9901 §7.1 disclosure processing
 
 Fixes #962. `holder::resolve_claims`, and so `verifier::verify`, now perform

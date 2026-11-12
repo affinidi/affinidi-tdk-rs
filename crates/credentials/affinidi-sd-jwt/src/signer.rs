@@ -124,6 +124,27 @@ pub mod test_utils {
         }
     }
 
+    /// An `oct` JWK carrying `key`, for the `cnf.jwk` of a test credential.
+    pub fn oct_jwk(key: &[u8]) -> serde_json::Value {
+        serde_json::json!({ "kty": "oct", "k": URL_SAFE_NO_PAD.encode(key) })
+    }
+
+    /// A [`HolderKeyVerifier`](crate::verifier::HolderKeyVerifier) for tests:
+    /// the HMAC verifier for an `oct` JWK made by [`oct_jwk`].
+    pub fn hmac_verifier_from_jwk(
+        jwk: &serde_json::Value,
+    ) -> Result<Box<dyn JwtVerifier>, SdJwtError> {
+        if jwk.get("kty").and_then(serde_json::Value::as_str) != Some("oct") {
+            return Err(SdJwtError::KeyBinding("test holder key must be oct".into()));
+        }
+        let key = jwk
+            .get("k")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| SdJwtError::KeyBinding("oct JWK has no k".into()))?;
+        let key = URL_SAFE_NO_PAD.decode(key)?;
+        Ok(Box::new(HmacSha256Verifier::new(&key)))
+    }
+
     impl JwtVerifier for HmacSha256Verifier {
         fn verify_jwt(&self, jws: &str) -> Result<serde_json::Value, SdJwtError> {
             let parts: Vec<&str> = jws.splitn(3, '.').collect();

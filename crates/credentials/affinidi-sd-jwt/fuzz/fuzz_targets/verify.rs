@@ -19,7 +19,6 @@ fuzz_target!(|data: &[u8]| {
             jwt_verifier(),
             &hasher,
             &VerificationOptions::default(),
-            None,
         );
     }
 });

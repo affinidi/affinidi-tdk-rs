@@ -212,7 +212,9 @@ fn spec_example_full_flow() {
     use affinidi_sd_jwt::hasher::Sha256Hasher;
     use affinidi_sd_jwt::holder::{self, KbJwtInput};
     use affinidi_sd_jwt::issuer;
-    use affinidi_sd_jwt::signer::test_utils::{HmacSha256Signer, HmacSha256Verifier};
+    use affinidi_sd_jwt::signer::test_utils::{
+        HmacSha256Signer, HmacSha256Verifier, hmac_verifier_from_jwk, oct_jwk,
+    };
     use affinidi_sd_jwt::verifier;
 
     let hasher = Sha256Hasher;
@@ -222,12 +224,8 @@ fn spec_example_full_flow() {
     let signer = HmacSha256Signer::new(issuer_key);
     let jwt_verifier = HmacSha256Verifier::new(issuer_key);
     let holder_signer = HmacSha256Signer::new(holder_key);
-    let holder_verifier = HmacSha256Verifier::new(holder_key);
 
-    let holder_jwk = json!({
-        "kty": "oct",
-        "k": "holder-public-key"
-    });
+    let holder_jwk = oct_jwk(holder_key);
 
     // Step 1: Issuer creates SD-JWT
     let claims = json!({
@@ -279,19 +277,14 @@ fn spec_example_full_flow() {
     assert_eq!(parsed.disclosures.len(), 2);
     assert!(parsed.kb_jwt.is_some());
 
-    let opts = affinidi_sd_jwt::VerificationOptions {
-        verify_kb: true,
-        expected_audience: Some("https://verifier.example.com"),
-        expected_nonce: Some("XZOUco1u_gEPknxS78sWWg"),
-    };
-    let result = verifier::verify(
-        &parsed,
-        &jwt_verifier,
-        &hasher,
-        &opts,
-        Some(&holder_verifier),
-    )
-    .unwrap();
+    let opts =
+        affinidi_sd_jwt::VerificationOptions::with_key_binding(affinidi_sd_jwt::KeyBindingCheck {
+            audience: "https://verifier.example.com",
+            nonce: "XZOUco1u_gEPknxS78sWWg",
+            freshness: affinidi_sd_jwt::KbFreshness::new(1700000000, 300),
+            holder_key: &hmac_verifier_from_jwk,
+        });
+    let result = verifier::verify(&parsed, &jwt_verifier, &hasher, &opts).unwrap();
 
     assert!(result.is_verified());
     assert_eq!(result.claims["given_name"], "John");
@@ -620,8 +613,7 @@ fn empty_disclosure_frame() {
     let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
     assert!(sd_jwt.disclosures.is_empty());
 
-    let result =
-        verifier::verify(&sd_jwt, &jwt_verifier, &hasher, &Default::default(), None).unwrap();
+    let result = verifier::verify(&sd_jwt, &jwt_verifier, &hasher, &Default::default()).unwrap();
     assert!(result.is_verified());
     assert_eq!(result.claims["sub"], "user");
     assert_eq!(result.claims["name"], "Alice");
@@ -652,8 +644,7 @@ fn all_claims_disclosed() {
     assert_eq!(sd_jwt.disclosures.len(), 3);
 
     // Verify with all disclosures
-    let result =
-        verifier::verify(&sd_jwt, &jwt_verifier, &hasher, &Default::default(), None).unwrap();
+    let result = verifier::verify(&sd_jwt, &jwt_verifier, &hasher, &Default::default()).unwrap();
     assert!(result.is_verified());
     assert_eq!(result.claims["given_name"], "John");
     assert_eq!(result.claims["family_name"], "Doe");
@@ -694,8 +685,7 @@ fn deeply_nested_disclosures() {
     let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
     assert_eq!(sd_jwt.disclosures.len(), 2);
 
-    let result =
-        verifier::verify(&sd_jwt, &jwt_verifier, &hasher, &Default::default(), None).unwrap();
+    let result = verifier::verify(&sd_jwt, &jwt_verifier, &hasher, &Default::default()).unwrap();
     assert!(result.is_verified());
     assert_eq!(
         result.claims["address"]["formatted"]["line1"],
