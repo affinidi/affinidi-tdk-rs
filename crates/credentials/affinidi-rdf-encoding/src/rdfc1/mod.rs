@@ -21,11 +21,48 @@ pub fn canonicalize(dataset: &Dataset) -> Result<String> {
     Ok(canonicalize_with_label_map(dataset)?.0)
 }
 
+/// Limits for one canonicalization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CanonicalizeOptions {
+    /// The most Hash N-Degree Quads work (calls plus permutations examined)
+    /// the whole canonicalization may do before it fails. Defaults to
+    /// [`hash_ndegree::DEFAULT_MAX_NDEGREE_WORK`].
+    pub max_ndegree_work: usize,
+}
+
+impl Default for CanonicalizeOptions {
+    fn default() -> Self {
+        Self {
+            max_ndegree_work: hash_ndegree::DEFAULT_MAX_NDEGREE_WORK,
+        }
+    }
+}
+
+impl CanonicalizeOptions {
+    /// Set the Hash N-Degree Quads work limit.
+    pub fn with_max_ndegree_work(mut self, max_ndegree_work: usize) -> Self {
+        self.max_ndegree_work = max_ndegree_work;
+        self
+    }
+}
+
 /// Canonicalize and also return the **label map** — `input blank-node id →
 /// canonical c14n label` — needed by selective-disclosure schemes (vc-di-bbs /
 /// vc-di-ecdsa) to correlate selected statements with canonical statements.
+///
+/// Uses the default [`CanonicalizeOptions`].
 pub fn canonicalize_with_label_map(
     dataset: &Dataset,
+) -> Result<(String, BTreeMap<String, String>)> {
+    canonicalize_with_options(dataset, &CanonicalizeOptions::default())
+}
+
+/// [`canonicalize_with_label_map`] with explicit limits. The Hash N-Degree
+/// Quads work limit covers the whole canonicalization, not each call.
+pub fn canonicalize_with_options(
+    dataset: &Dataset,
+    options: &CanonicalizeOptions,
 ) -> Result<(String, BTreeMap<String, String>)> {
     // An RDF dataset is a SET of quads: deduplicate identical quads up front so
     // a duplicate in the input cannot perturb first-degree hashes or appear
@@ -87,6 +124,7 @@ pub fn canonicalize_with_label_map(
     }
 
     // Step 4: Run N-degree algorithm for non-unique hashes
+    let mut budget = hash_ndegree::WorkBudget::new(options.max_ndegree_work);
     for bn_ids in hash_to_blank_nodes.values() {
         if bn_ids.len() <= 1 {
             continue;
@@ -103,12 +141,13 @@ pub fn canonicalize_with_label_map(
             let mut temp_issuer = temp_issuer;
             temp_issuer.issue(bn_id);
 
-            let (hash, result_issuer) = hash_ndegree::hash_ndegree_quads(
+            let (hash, result_issuer) = hash_ndegree::hash_ndegree_quads_within(
                 bn_id,
                 &blank_node_to_quads,
                 &canonical_issuer,
                 &temp_issuer,
                 &blank_node_to_hash,
+                &mut budget,
             )?;
             hash_path_list.push((hash, result_issuer));
         }
@@ -212,6 +251,57 @@ fn relabel_quad(quad: &Quad, issuer: &IdentifierIssuer) -> Quad {
 mod tests {
     use super::*;
     use crate::model::*;
+
+    /// A tree of blank nodes that cannot be told apart: `fan_out` children
+    /// per node, `depth` levels below the root.
+    fn indistinguishable_tree(fan_out: usize, depth: usize) -> Dataset {
+        fn grow(ds: &mut Dataset, parent: &str, fan_out: usize, depth: usize, next: &mut usize) {
+            if depth == 0 {
+                return;
+            }
+            for _ in 0..fan_out {
+                let child = format!("n{next}");
+                *next += 1;
+                ds.add(Quad::new(
+                    BlankNode::new(parent),
+                    NamedNode::new("http://example.org/p"),
+                    BlankNode::new(child.as_str()),
+                    GraphLabel::Default,
+                ));
+                grow(ds, &child, fan_out, depth - 1, next);
+            }
+        }
+        let mut ds = Dataset::new();
+        let mut next = 1;
+        grow(&mut ds, "n0", fan_out, depth, &mut next);
+        ds
+    }
+
+    /// The limit is shared by every Hash N-Degree Quads call. Each call in
+    /// this graph examines at most a few dozen permutations, yet together
+    /// they exceed a limit of 1,000.
+    #[test]
+    fn work_limit_covers_the_whole_canonicalization() {
+        let ds = indistinguishable_tree(5, 2);
+
+        let limited = CanonicalizeOptions::default().with_max_ndegree_work(1_000);
+        let err = canonicalize_with_options(&ds, &limited).unwrap_err();
+        assert!(err.to_string().contains("work limit"), "{err}");
+
+        let (canonical, labels) =
+            canonicalize_with_options(&ds, &CanonicalizeOptions::default()).unwrap();
+        assert_eq!(canonical.lines().count(), 30);
+        assert_eq!(labels.len(), 31);
+    }
+
+    /// Seven children with seven children each needs several hundred
+    /// thousand steps; the default limit stops it.
+    #[test]
+    fn default_work_limit_stops_a_deep_indistinguishable_graph() {
+        let ds = indistinguishable_tree(7, 2);
+        let err = canonicalize(&ds).unwrap_err();
+        assert!(err.to_string().contains("work limit"), "{err}");
+    }
 
     #[test]
     fn canonicalize_no_blank_nodes() {

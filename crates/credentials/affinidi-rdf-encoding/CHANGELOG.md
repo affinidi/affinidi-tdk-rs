@@ -1,5 +1,75 @@
 # Affinidi RDF Encoding Changelog
 
+## 0.1.8 — safe mode refuses what it cannot convert; RDFC-1.0 work limit per canonicalization; fresh blank node labels
+
+**Safe-mode expansion** (`expand_document_safe`, `expand_and_to_rdf_safe`)
+used to skip several inputs without an error, so the JSON and the RDF dataset
+built from it could differ. It now refuses:
+
+- keywords used as keys, and terms aliased to keywords, other than `@context`,
+  `@id` and `@type` (`@graph`, `@list`, `@set`, `@reverse`, `@included`,
+  `@nest`, `@index`, …). These were skipped with everything under them;
+- an `@id` that is not a string, a relative IRI, a compact IRI, or `_:` with
+  no label; a relative IRI under `@type: @id` coercion;
+- a nested object that expands to nothing (for example `{}`), which dropped
+  the statement linking it to its parent;
+- value objects with members other than `@value`, `@type` and `@language`,
+  with both `@type` and `@language`, with a non-string `@type` or
+  `@language`, or with a `@value` that is not a string, number or boolean
+  (other than under `@json`);
+- terms with an `@list` or `@graph` container, which were expanded as plain
+  values. The VC v2 `verifiableCredential` term is a `@graph` container, so a
+  presentation that embeds credentials is refused in safe mode;
+- context features expansion does not implement: `@base`, `@language`,
+  `@direction`, `@import`, `@propagate`, map containers (`@language`,
+  `@index`, `@id`, `@type`), and `@reverse`, `@nest`, `@index`, `@prefix` in
+  term definitions;
+- a redefinition of a protected term, or a `null` context over protected
+  terms, except in a property-scoped context, as JSON-LD 1.1 requires.
+
+Safe mode also now follows JSON-LD 1.1 for type-scoped contexts: they apply to
+the node that carries the type, not to nodes nested inside it, and node types
+are expanded with the context from before the type-scoped contexts. Type-scoped
+contexts are applied in lexicographic order of the types, and a datatype
+coercion applies to booleans as it does to numbers and strings. The README
+lists the supported subset. Lenient expansion is unchanged.
+
+**RDFC-1.0.** The Hash N-Degree Quads limit was a count of permutations kept
+per call, so nested calls each had their own allowance and the total was
+unbounded. The limit now covers the whole canonicalization: every call and
+every permutation examined counts against one budget, 100,000 steps by
+default. The W3C `rdfc10` suite needs about 3,000. `CanonicalizeOptions` and
+`rdfc1::canonicalize_with_options` set a different limit. The public
+`hash_ndegree::hash_ndegree_quads` keeps its signature and applies the
+default limit to its own call.
+
+**Blank node labels.** `to_rdf` used `_:x` labels from the document as they
+were and named nodes without an `@id` `b0`, `b1`, …, so a document node
+labelled `_:b0` and an anonymous node became one node. Both now come from one
+issuer: every document label is relabelled to a fresh `bN`, and a label used
+twice in the document still refers to one node.
+
+Behaviour change (R3.6):
+
+- Safe mode refuses the inputs above, which it used to accept. Documents that
+  use only bundled VC contexts and VC terms are unaffected; the W3C
+  vc-di-eddsa B.1 and vc-di-bbs vectors now also run through safe mode and
+  give the same canonical N-Quads.
+- In safe mode, a nested node that used a term defined only by the type of an
+  enclosing node now expands as a conforming processor expands it (to
+  `@vocab`, or an error if there is none). Its canonical form, and so any
+  signature over it, changes.
+- A dataset whose canonicalization needs more than 100,000 Hash N-Degree
+  Quads steps returns `RdfError::CanonicalizationError`.
+- A document that uses an explicit `_:` label that collides with a generated
+  one now gives two nodes instead of one, so its canonical form changes.
+  Other documents canonicalize as before; the labels in the non-canonical
+  `to_rdf` output change.
+
+API: `rdfc1::CanonicalizeOptions`, `rdfc1::canonicalize_with_options` and
+`rdfc1::hash_ndegree::DEFAULT_MAX_NDEGREE_WORK` are added. Nothing is
+removed or changed in signature. No new dependencies.
+
 ## Unreleased (0.1.7) — `sha2` 0.11
 
 No behaviour change and no public API change: these are private dependencies

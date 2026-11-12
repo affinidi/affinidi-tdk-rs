@@ -1,6 +1,6 @@
 use serde_json::{Map, Value, json};
 
-use super::context::Context;
+use super::context::{ContainerType, Context};
 use crate::error::{RdfError, Result};
 
 /// Expand a JSON-LD document to its expanded form (lenient mode).
@@ -18,9 +18,26 @@ pub fn expand_document(document: &Value) -> Result<Value> {
 
 /// Expand a JSON-LD document in **safe mode**.
 ///
-/// Identical to [`expand_document`] except that a property whose key does not
-/// map to an absolute IRI or a JSON-LD keyword — i.e. a term that lenient
-/// expansion would silently drop — raises an error instead.
+/// Identical to [`expand_document`] for the documents it accepts, except that
+/// anything lenient expansion would silently drop or expand differently from
+/// a conforming JSON-LD 1.1 processor raises an error instead:
+///
+/// - a property whose key does not map to an absolute IRI;
+/// - a keyword used as a key, or a term aliased to a keyword, other than
+///   `@context`, `@id` and `@type` (for example `@graph`, `@list`,
+///   `@reverse`, `@included`, `@nest`, `@index`);
+/// - an `@id` that is not a string, not a blank node identifier, not an
+///   absolute IRI, or is a compact IRI;
+/// - a nested object that expands to nothing;
+/// - a value object with members other than `@value`, `@type` and
+///   `@language`, or with a value, type or language this crate cannot convert;
+/// - a term with an `@container` of `@list` or `@graph`;
+/// - context features this crate does not implement (`@base`, `@language`,
+///   `@import`, `@propagate`, `@direction`, map containers, `@reverse`,
+///   `@nest`, `@index`, `@prefix`) and redefinitions of protected terms.
+///
+/// Safe mode also follows JSON-LD 1.1 for type-scoped contexts: they apply to
+/// the node that carries the type and are not carried into nested nodes.
 ///
 /// This is required by the W3C Verifiable Credential Data Integrity algorithms:
 /// canonicalization must not discard unmapped terms, otherwise a credential can
@@ -36,7 +53,7 @@ fn expand_document_inner(document: &Value, safe: bool) -> Result<Value> {
 
     // Process top-level @context
     if let Some(ctx_val) = document.get("@context") {
-        context.process(ctx_val)?;
+        process_context(&mut context, ctx_val, safe, false)?;
     }
 
     let result = expand_element(document, &context, safe)?;
@@ -46,6 +63,21 @@ fn expand_document_inner(document: &Value, safe: bool) -> Result<Value> {
         Value::Array(_) => Ok(result),
         Value::Null => Ok(json!([])),
         _ => Ok(json!([result])),
+    }
+}
+
+/// Process a `@context` value. Safe mode refuses features this crate does not
+/// implement; `override_protected` is set for property-scoped contexts only.
+fn process_context(
+    context: &mut Context,
+    value: &Value,
+    safe: bool,
+    override_protected: bool,
+) -> Result<()> {
+    if safe {
+        context.process_strict(value, override_protected)
+    } else {
+        context.process(value)
     }
 }
 
@@ -89,17 +121,27 @@ fn expand_object(obj: &Value, parent_context: &Context, safe: bool) -> Result<Va
     // Process local @context if present
     let mut context = parent_context.clone();
     if let Some(ctx_val) = map.get("@context") {
-        context.process(ctx_val)?;
+        process_context(&mut context, ctx_val, safe, false)?;
     }
 
     // Check if this is a value object (@value present)
     if map.contains_key("@value") {
-        return expand_value_object(map, &context);
+        return expand_value_object(map, &context, safe);
     }
 
-    // Determine @type values and apply scoped contexts from type definitions
-    let type_context = build_type_scoped_context(map, &context)?;
-    let context = type_context.unwrap_or(context);
+    // Determine @type values and apply scoped contexts from type definitions.
+    // JSON-LD 1.1 expands the types themselves, and nested node objects, with
+    // the context as it was before the type-scoped contexts were applied.
+    // Safe mode follows that; lenient mode keeps its historical behaviour of
+    // using the type-scoped context throughout.
+    let (context, pre_type_context) = match build_type_scoped_context(map, &context, safe)? {
+        Some(scoped) => (scoped, Some(context)),
+        None => (context, None),
+    };
+    let outer_context = match &pre_type_context {
+        Some(pre_type) if safe => pre_type,
+        _ => &context,
+    };
 
     let mut result: Map<String, Value> = Map::new();
 
@@ -111,15 +153,11 @@ fn expand_object(obj: &Value, parent_context: &Context, safe: bool) -> Result<Va
         if key == "@id" || key == "id" {
             if let Some(id_def) = context.get_term(key) {
                 if id_def.iri == "@id" {
-                    if let Some(id_str) = value.as_str() {
-                        result.insert("@id".to_string(), json!(id_str));
-                    }
+                    expand_id(value, &context, safe, &mut result)?;
                     continue;
                 }
             } else if key == "@id" {
-                if let Some(id_str) = value.as_str() {
-                    result.insert("@id".to_string(), json!(id_str));
-                }
+                expand_id(value, &context, safe, &mut result)?;
                 continue;
             }
         }
@@ -127,12 +165,12 @@ fn expand_object(obj: &Value, parent_context: &Context, safe: bool) -> Result<Va
         if key == "@type" || key == "type" {
             if let Some(type_def) = context.get_term(key) {
                 if type_def.iri == "@type" {
-                    let expanded_types = expand_type_value(value, &context, safe)?;
+                    let expanded_types = expand_type_value(value, outer_context, safe)?;
                     result.insert("@type".to_string(), expanded_types);
                     continue;
                 }
             } else if key == "@type" {
-                let expanded_types = expand_type_value(value, &context, safe)?;
+                let expanded_types = expand_type_value(value, outer_context, safe)?;
                 result.insert("@type".to_string(), expanded_types);
                 continue;
             }
@@ -141,6 +179,11 @@ fn expand_object(obj: &Value, parent_context: &Context, safe: bool) -> Result<Va
         // Expand the property key
         let expanded_key = match context.expand_iri(key) {
             Some(iri) if iri.starts_with('@') => {
+                if safe {
+                    return Err(RdfError::expansion(format!(
+                        "safe mode: '{key}' ({iri}) is not supported here and would be dropped"
+                    )));
+                }
                 continue; // Skip keyword aliases
             }
             Some(iri) if iri.contains("://") || iri.starts_with("urn:") => iri,
@@ -162,19 +205,33 @@ fn expand_object(obj: &Value, parent_context: &Context, safe: bool) -> Result<Va
         let term_def = context.get_term(key);
         let type_mapping = term_def.and_then(|td| td.type_mapping.as_deref());
 
-        // Apply scoped context from the term definition
-        let prop_context = if let Some(td) = term_def {
-            if let Some(ref scoped_ctx) = td.context {
-                context.with_scoped_context(scoped_ctx)?
-            } else {
-                context.clone()
+        if safe {
+            let container = match term_def.and_then(|td| td.container.as_ref()) {
+                Some(ContainerType::List) => Some("@list"),
+                Some(ContainerType::Graph) => Some("@graph"),
+                _ => None,
+            };
+            if let Some(container) = container {
+                return Err(RdfError::expansion(format!(
+                    "safe mode: term '{key}' has an {container} container, which is not supported"
+                )));
             }
+        }
+
+        // Apply the scoped context from the term definition. Values (strings,
+        // value objects) see the full active context; nested node objects see
+        // the context from before any type-scoped context (safe mode).
+        let scoped_ctx = term_def.and_then(|td| td.context.as_ref());
+        let value_context = with_property_scope(&context, scoped_ctx, safe)?;
+        let node_context = if safe && pre_type_context.is_some() {
+            with_property_scope(outer_context, scoped_ctx, safe)?
         } else {
-            context.clone()
+            value_context.clone()
         };
 
         // Expand the value
-        let expanded_value = expand_property_value(value, type_mapping, &prop_context, safe)?;
+        let expanded_value =
+            expand_property_value(value, type_mapping, &value_context, &node_context, safe)?;
 
         if expanded_value != Value::Null {
             // Merge into result
@@ -206,10 +263,82 @@ fn expand_object(obj: &Value, parent_context: &Context, safe: bool) -> Result<Va
     Ok(Value::Object(result))
 }
 
+/// Layer a property-scoped context, if any, over `context`.
+fn with_property_scope(context: &Context, scoped: Option<&Value>, safe: bool) -> Result<Context> {
+    let mut child = context.clone();
+    if let Some(scoped) = scoped {
+        process_context(&mut child, scoped, safe, true)?;
+    }
+    Ok(child)
+}
+
+/// Add a node's `@id` to `result`. Safe mode refuses an id this crate would
+/// carry into the dataset differently from a conforming processor.
+fn expand_id(
+    value: &Value,
+    context: &Context,
+    safe: bool,
+    result: &mut Map<String, Value>,
+) -> Result<()> {
+    match value.as_str() {
+        Some(id) => {
+            if safe {
+                check_node_id(id, context)?;
+            }
+            result.insert("@id".to_string(), json!(id));
+            Ok(())
+        }
+        None if safe => Err(RdfError::expansion(format!(
+            "safe mode: @id {value} is not a string and would be dropped"
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// Safe mode accepts a node identifier only if it is a blank node identifier
+/// or an absolute IRI. A relative IRI has no base to resolve against, and a
+/// compact IRI whose prefix is a defined term would be expanded by a
+/// conforming processor but is kept verbatim here.
+fn check_node_id(id: &str, context: &Context) -> Result<()> {
+    if let Some(label) = id.strip_prefix("_:") {
+        if label.is_empty() {
+            return Err(RdfError::expansion(
+                "safe mode: blank node identifier '_:' has an empty label",
+            ));
+        }
+        return Ok(());
+    }
+    if !has_iri_scheme(id) {
+        return Err(RdfError::expansion(format!(
+            "safe mode: @id '{id}' is not an absolute IRI"
+        )));
+    }
+    if let Some((prefix, suffix)) = id.split_once(':')
+        && !suffix.starts_with("//")
+        && context.get_term(prefix).is_some()
+    {
+        return Err(RdfError::expansion(format!(
+            "safe mode: @id '{id}' is a compact IRI, which is not supported"
+        )));
+    }
+    Ok(())
+}
+
+/// True if `value` starts with an RFC 3986 scheme followed by `:`.
+fn has_iri_scheme(value: &str) -> bool {
+    let Some((scheme, _)) = value.split_once(':') else {
+        return false;
+    };
+    let mut chars = scheme.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
 /// Build a context with scoped contexts from @type values applied.
 fn build_type_scoped_context(
     map: &Map<String, Value>,
     context: &Context,
+    safe: bool,
 ) -> Result<Option<Context>> {
     // Find the type key (could be "type" or "@type")
     let type_value = if let Some(v) = map.get("@type") {
@@ -225,11 +354,16 @@ fn build_type_scoped_context(
     };
 
     // Collect type strings
-    let types: Vec<&str> = match type_value {
+    let mut types: Vec<&str> = match type_value {
         Value::String(s) => vec![s.as_str()],
         Value::Array(arr) => arr.iter().filter_map(|v| v.as_str()).collect(),
         _ => return Ok(None),
     };
+    // JSON-LD 1.1 applies type-scoped contexts in lexicographic order of the
+    // type values.
+    if safe {
+        types.sort_unstable();
+    }
 
     // Apply scoped contexts from type term definitions
     let mut new_context = context.clone();
@@ -239,7 +373,7 @@ fn build_type_scoped_context(
         if let Some(term_def) = context.get_term(type_name)
             && let Some(ref scoped_ctx) = term_def.context
         {
-            new_context.process(scoped_ctx)?;
+            process_context(&mut new_context, scoped_ctx, safe, false)?;
             had_scoped = true;
         }
     }
@@ -311,8 +445,15 @@ fn expand_type_iri(type_name: &str, context: &Context, safe: bool) -> Result<Str
     Ok(type_name.to_string())
 }
 
+/// Members a value object may carry in safe mode.
+const VALUE_OBJECT_MEMBERS: &[&str] = &["@value", "@type", "@language"];
+
 /// Expand a value object ({ "@value": ... }).
-fn expand_value_object(map: &Map<String, Value>, context: &Context) -> Result<Value> {
+fn expand_value_object(map: &Map<String, Value>, context: &Context, safe: bool) -> Result<Value> {
+    if safe {
+        check_value_object(map, context)?;
+    }
+
     let mut result: Map<String, Value> = Map::new();
 
     if let Some(val) = map.get("@value") {
@@ -335,11 +476,81 @@ fn expand_value_object(map: &Map<String, Value>, context: &Context) -> Result<Va
     Ok(Value::Object(result))
 }
 
+/// Safe mode accepts only value objects that convert to exactly one RDF
+/// literal the way a conforming processor would.
+fn check_value_object(map: &Map<String, Value>, context: &Context) -> Result<()> {
+    if let Some(extra) = map
+        .keys()
+        .find(|key| !VALUE_OBJECT_MEMBERS.contains(&key.as_str()))
+    {
+        return Err(RdfError::expansion(format!(
+            "safe mode: value object member '{extra}' is not supported and would be dropped"
+        )));
+    }
+
+    let value = map.get("@value");
+    let type_value = map.get("@type");
+    let language = map.get("@language");
+
+    if type_value.is_some() && language.is_some() {
+        return Err(RdfError::expansion(
+            "safe mode: a value object cannot have both @type and @language",
+        ));
+    }
+
+    let is_json = match type_value {
+        None => false,
+        Some(Value::String(t)) if t == "@json" => true,
+        Some(Value::String(t)) => {
+            let datatype = context.expand_iri(t).unwrap_or_default();
+            if datatype.starts_with('@') || !has_iri_scheme(&datatype) {
+                return Err(RdfError::expansion(format!(
+                    "safe mode: value object @type '{t}' does not expand to an absolute IRI"
+                )));
+            }
+            false
+        }
+        Some(other) => {
+            return Err(RdfError::expansion(format!(
+                "safe mode: value object @type {other} is not a string"
+            )));
+        }
+    };
+
+    match language {
+        None => {}
+        Some(Value::String(_)) if value.is_some_and(Value::is_string) => {}
+        Some(Value::String(_)) => {
+            return Err(RdfError::expansion(
+                "safe mode: a value object with @language must have a string @value",
+            ));
+        }
+        Some(other) => {
+            return Err(RdfError::expansion(format!(
+                "safe mode: value object @language {other} is not a string"
+            )));
+        }
+    }
+
+    let is_scalar = value.is_some_and(|v| v.is_string() || v.is_number() || v.is_boolean());
+    if !is_json && !is_scalar {
+        return Err(RdfError::expansion(
+            "safe mode: value object @value is not a string, number or boolean",
+        ));
+    }
+
+    Ok(())
+}
+
 /// Expand a property value with type coercion.
+///
+/// `context` is used for values; `node_context` for nested node objects,
+/// which in safe mode do not inherit the parent's type-scoped contexts.
 fn expand_property_value(
     value: &Value,
     type_mapping: Option<&str>,
     context: &Context,
+    node_context: &Context,
     safe: bool,
 ) -> Result<Value> {
     // `@json`-typed values are kept verbatim as a JSON literal (the whole value,
@@ -352,7 +563,8 @@ fn expand_property_value(
         Value::Array(arr) => {
             let mut result = Vec::new();
             for item in arr {
-                let expanded = expand_property_value(item, type_mapping, context, safe)?;
+                let expanded =
+                    expand_property_value(item, type_mapping, context, node_context, safe)?;
                 match expanded {
                     Value::Null => {}
                     Value::Array(items) => result.extend(items),
@@ -361,13 +573,31 @@ fn expand_property_value(
             }
             Ok(Value::Array(result))
         }
-        Value::Object(_) => {
-            // Recursively expand nested objects
-            expand_object(value, context, safe)
+        Value::Object(map) => {
+            // Recursively expand nested objects. Value objects and bare node
+            // references keep the active context (JSON-LD 1.1 expansion,
+            // step 7).
+            let is_reference =
+                map.len() == 1 && (map.contains_key("@id") || map.contains_key("id"));
+            let object_context = if map.contains_key("@value") || is_reference {
+                context
+            } else {
+                node_context
+            };
+            let expanded = expand_object(value, object_context, safe)?;
+            if safe && expanded.is_null() {
+                return Err(RdfError::expansion(
+                    "safe mode: a nested object expands to nothing and would be dropped",
+                ));
+            }
+            Ok(expanded)
         }
         Value::String(s) => {
             // Apply type coercion
             match type_mapping {
+                Some(mapping @ ("@id" | "@vocab")) if safe => {
+                    Ok(json!({"@id": expand_id_value(s, mapping, context)?}))
+                }
                 Some("@id") | Some("@vocab") => {
                     let expanded = context.expand_iri(s).unwrap_or_else(|| s.clone());
                     Ok(json!({"@id": expanded}))
@@ -377,6 +607,11 @@ fn expand_property_value(
                     let resolved_type = context
                         .expand_iri(datatype)
                         .unwrap_or_else(|| datatype.to_string());
+                    if safe && (resolved_type.starts_with('@') || !has_iri_scheme(&resolved_type)) {
+                        return Err(RdfError::expansion(format!(
+                            "safe mode: datatype '{datatype}' does not expand to an absolute IRI"
+                        )));
+                    }
                     Ok(json!({"@value": s, "@type": resolved_type}))
                 }
                 _ => {
@@ -392,8 +627,38 @@ fn expand_property_value(
             }
             _ => Ok(json!({"@value": n})),
         },
-        Value::Bool(b) => Ok(json!({"@value": b})),
+        Value::Bool(b) => match type_mapping {
+            // JSON-LD applies a datatype coercion to booleans too.
+            Some(dt) if safe && dt != "@id" && dt != "@vocab" => {
+                let resolved_type = context.expand_iri(dt).unwrap_or_else(|| dt.to_string());
+                Ok(json!({"@value": b, "@type": resolved_type}))
+            }
+            _ => Ok(json!({"@value": b})),
+        },
         Value::Null => Ok(Value::Null),
+    }
+}
+
+/// Expand a string under `@type: @id` or `@type: @vocab` coercion in safe
+/// mode. Blank node identifiers are kept; anything else must expand to an
+/// absolute IRI. Under `@id` a value without a scheme is a relative IRI,
+/// which has no base to resolve against here, so it is refused rather than
+/// resolved as a term or against `@vocab`.
+fn expand_id_value(value: &str, mapping: &str, context: &Context) -> Result<String> {
+    if value.starts_with("_:") {
+        check_node_id(value, context)?;
+        return Ok(value.to_string());
+    }
+    if mapping == "@id" && !has_iri_scheme(value) {
+        return Err(RdfError::expansion(format!(
+            "safe mode: '{value}' is a relative IRI, which is not supported"
+        )));
+    }
+    match context.expand_iri(value) {
+        Some(iri) if !iri.starts_with('@') && has_iri_scheme(&iri) => Ok(iri),
+        _ => Err(RdfError::expansion(format!(
+            "safe mode: '{value}' does not expand to an absolute IRI"
+        ))),
     }
 }
 
@@ -562,6 +827,261 @@ mod tests {
             err.to_string().contains("scalar"),
             "error should flag the dropped scalar: {err}"
         );
+    }
+
+    fn safe_error(doc: &Value) -> String {
+        expand_document_safe(doc)
+            .expect_err("safe mode should refuse this document")
+            .to_string()
+    }
+
+    /// `@graph` holds named-graph content; lenient expansion skips it with
+    /// everything under it, safe mode refuses it.
+    #[test]
+    fn safe_mode_rejects_graph_keyword() {
+        let doc = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential"],
+            "@graph": [{ "id": "did:example:1", "name": "inside" }]
+        });
+        assert!(
+            !expand_document(&doc)
+                .unwrap()
+                .to_string()
+                .contains("inside")
+        );
+        assert!(safe_error(&doc).contains("@graph"));
+    }
+
+    #[test]
+    fn safe_mode_rejects_term_aliased_to_keyword() {
+        let doc = json!({
+            "@context": [
+                "https://www.w3.org/ns/credentials/v2",
+                { "extras": "@included" }
+            ],
+            "type": ["VerifiableCredential"],
+            "extras": [{ "id": "did:example:2" }]
+        });
+        assert!(safe_error(&doc).contains("extras"));
+    }
+
+    #[test]
+    fn safe_mode_rejects_non_string_id() {
+        let doc = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential"],
+            "credentialSubject": { "id": 42, "name": "x" }
+        });
+        assert!(safe_error(&doc).contains("not a string"));
+    }
+
+    #[test]
+    fn safe_mode_rejects_relative_id() {
+        let doc = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential"],
+            "credentialSubject": { "id": "subject-1", "name": "x" }
+        });
+        assert!(safe_error(&doc).contains("absolute IRI"));
+    }
+
+    #[test]
+    fn safe_mode_accepts_blank_node_id() {
+        let doc = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential"],
+            "credentialSubject": { "id": "_:subject", "name": "x" }
+        });
+        assert!(expand_document_safe(&doc).is_ok());
+    }
+
+    #[test]
+    fn safe_mode_rejects_relative_iri_under_id_coercion() {
+        let doc = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential"],
+            "issuer": "issuer-1"
+        });
+        assert!(safe_error(&doc).contains("relative IRI"));
+    }
+
+    /// A nested object that expands to nothing would drop the statement that
+    /// links it to its parent.
+    #[test]
+    fn safe_mode_rejects_empty_nested_object() {
+        let doc = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential"],
+            "credentialSubject": {}
+        });
+        assert!(expand_document(&doc).is_ok());
+        assert!(safe_error(&doc).contains("expands to nothing"));
+    }
+
+    #[test]
+    fn safe_mode_rejects_value_object_extra_member() {
+        let doc = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential"],
+            "name": { "@value": "x", "@direction": "rtl" }
+        });
+        assert!(safe_error(&doc).contains("@direction"));
+    }
+
+    #[test]
+    fn safe_mode_rejects_value_object_non_string_type() {
+        let doc = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential"],
+            "name": { "@value": "x", "@type": 7 }
+        });
+        assert!(safe_error(&doc).contains("@type"));
+    }
+
+    #[test]
+    fn safe_mode_rejects_value_object_with_object_value() {
+        let doc = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential"],
+            "name": { "@value": { "nested": true } }
+        });
+        assert!(safe_error(&doc).contains("@value"));
+    }
+
+    #[test]
+    fn safe_mode_accepts_language_value_object() {
+        let doc = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential"],
+            "name": { "@value": "x", "@language": "en" }
+        });
+        assert!(expand_document_safe(&doc).is_ok());
+    }
+
+    /// `verifiableCredential` is a `@graph` container in the VC v2 context.
+    /// Expansion here does not build named graphs, so safe mode refuses it.
+    #[test]
+    fn safe_mode_rejects_graph_container() {
+        let doc = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiablePresentation"],
+            "verifiableCredential": [{
+                "@context": ["https://www.w3.org/ns/credentials/v2"],
+                "type": ["VerifiableCredential"],
+                "credentialSubject": { "id": "did:example:1" }
+            }]
+        });
+        assert!(safe_error(&doc).contains("@graph"));
+    }
+
+    #[test]
+    fn safe_mode_rejects_list_container() {
+        let doc = json!({
+            "@context": [
+                "https://www.w3.org/ns/credentials/v2",
+                { "steps": { "@id": "https://example.com/steps", "@container": "@list" } }
+            ],
+            "type": ["VerifiableCredential"],
+            "steps": ["one", "two"]
+        });
+        assert!(safe_error(&doc).contains("@list"));
+    }
+
+    #[test]
+    fn safe_mode_rejects_unsupported_context_keyword() {
+        let doc = json!({
+            "@context": [
+                "https://www.w3.org/ns/credentials/v2",
+                { "@language": "en" }
+            ],
+            "type": ["VerifiableCredential"]
+        });
+        assert!(safe_error(&doc).contains("@language"));
+    }
+
+    #[test]
+    fn safe_mode_rejects_map_container() {
+        let doc = json!({
+            "@context": [
+                "https://www.w3.org/ns/credentials/v2",
+                { "label": { "@id": "https://example.com/label", "@container": "@language" } }
+            ],
+            "type": ["VerifiableCredential"]
+        });
+        assert!(safe_error(&doc).contains("@container"));
+    }
+
+    /// The VC v2 context protects `name`; JSON-LD 1.1 forbids a later context
+    /// from giving it another meaning.
+    #[test]
+    fn safe_mode_rejects_protected_term_redefinition() {
+        let doc = json!({
+            "@context": [
+                "https://www.w3.org/ns/credentials/v2",
+                { "name": "https://example.com/name" }
+            ],
+            "type": ["VerifiableCredential"],
+            "name": "x"
+        });
+        assert!(expand_document(&doc).is_ok());
+        assert!(safe_error(&doc).contains("protected term 'name'"));
+    }
+
+    #[test]
+    fn safe_mode_accepts_identical_protected_redefinition() {
+        let doc = json!({
+            "@context": [
+                "https://www.w3.org/ns/credentials/v2",
+                "https://www.w3.org/ns/credentials/v2"
+            ],
+            "type": ["VerifiableCredential"],
+            "name": "x"
+        });
+        assert!(expand_document_safe(&doc).is_ok());
+    }
+
+    #[test]
+    fn safe_mode_rejects_null_context_over_protected_terms() {
+        let doc = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential"],
+            "credentialSubject": {
+                "@context": null,
+                "@id": "did:example:1"
+            }
+        });
+        assert!(safe_error(&doc).contains("protected"));
+    }
+
+    /// Type-scoped contexts apply to the typed node only. A nested node sees
+    /// the context from before the type was applied, so `inner` falls back to
+    /// `@vocab` there.
+    #[test]
+    fn safe_mode_does_not_carry_type_scoped_context_into_nested_nodes() {
+        let doc = json!({
+            "@context": {
+                "@vocab": "https://example.com/vocab#",
+                "Parent": {
+                    "@id": "https://example.com/Parent",
+                    "@context": {
+                        "child": "https://example.com/scoped#child",
+                        "inner": "https://example.com/scoped#inner"
+                    }
+                }
+            },
+            "@id": "https://example.com/p",
+            "@type": "Parent",
+            "child": { "inner": "x" }
+        });
+
+        let safe = expand_document_safe(&doc).unwrap().to_string();
+        assert!(safe.contains("https://example.com/scoped#child"));
+        assert!(safe.contains("https://example.com/vocab#inner"));
+        assert!(!safe.contains("https://example.com/scoped#inner"));
+
+        let lenient = expand_document(&doc).unwrap().to_string();
+        assert!(lenient.contains("https://example.com/scoped#inner"));
     }
 
     #[test]

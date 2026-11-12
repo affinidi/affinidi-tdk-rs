@@ -38,6 +38,35 @@ let canonical_nquads = rdfc1::canonicalize(&dataset)?;
 let hash = affinidi_rdf_encoding::expand_canonicalize_and_hash(&document)?;
 ```
 
+## Safe mode and the supported JSON-LD subset
+
+`jsonld::expand_and_to_rdf_safe` is the expansion to use for anything that is
+signed or verified. It returns an error rather than dropping content or
+producing a dataset that differs from a conforming JSON-LD 1.1 processor. It
+supports the subset Verifiable Credentials use:
+
+- keys that are terms, compact IRIs or absolute IRIs, plus `@context`, `@id`,
+  `@type` and their `id` / `type` aliases;
+- `@id` values that are absolute IRIs or blank node identifiers;
+- value objects with `@value` and at most one of `@type` or `@language`;
+- term definitions with `@id`, `@type`, `@context`, `@protected` and an
+  `@container` of `@set`; contexts with `@vocab`, `@version` and `@protected`;
+- type-scoped contexts (not carried into nested nodes) and property-scoped
+  contexts; protected terms are enforced.
+
+Anything else, including `@graph`, `@list`, `@reverse`, `@included`, `@nest`,
+`@index`, `@graph` and `@list` containers, map containers, `@base` and a
+default `@language`, is refused. The lenient `expand_and_to_rdf` keeps its
+historical behaviour of ignoring what it does not support.
+
+## Canonicalization limits
+
+RDFC-1.0 needs factorial work on graphs with many blank nodes that cannot be
+told apart. Canonicalization fails once the Hash N-Degree Quads work for the
+whole dataset passes a limit (100,000 steps by default, far above what the
+W3C test suite needs). `rdfc1::canonicalize_with_options` takes a
+`CanonicalizeOptions` to change it.
+
 ## Bundled Contexts
 
 The following W3C JSON-LD contexts are embedded (no network requests needed):
@@ -45,6 +74,9 @@ The following W3C JSON-LD contexts are embedded (no network requests needed):
 - `https://www.w3.org/ns/credentials/v2`
 - `https://www.w3.org/ns/credentials/examples/v2`
 - `https://w3id.org/security/data-integrity/v2`
+- `https://www.w3.org/2018/credentials/v1`
+- `https://w3id.org/vdl/v1`
+- `https://w3id.org/vdl/aamva/v1`
 
 ## Related Crates
 
