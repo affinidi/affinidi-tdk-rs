@@ -323,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-web"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "affinidi-did-common",
  "affinidi-net-guard",

@@ -498,6 +498,7 @@ pub fn build_url(domain: &str, path_segments: &[String]) -> Result<String, DidWe
     if decoded_domain.is_empty() {
         return Err(DidWebError::InvalidDid("domain is empty".into()));
     }
+    validate_host(&decoded_domain)?;
 
     let mut url = format!("https://{decoded_domain}");
     if path_segments.is_empty() {
@@ -508,12 +509,15 @@ pub fn build_url(domain: &str, path_segments: &[String]) -> Result<String, DidWe
                 DidWebError::InvalidDid(format!("path segment {segment:?} is not valid UTF-8: {e}"))
             })?;
             // A decoded segment must stay a single path component. `%2E%2E`
-            // (`..`), `%2F` (`/`), `%5C` (`\`), etc. would otherwise let a
-            // crafted DID escape the expected `/{segments}/did.json` shape.
+            // (`..`), `%2F` (`/`), `%5C` (`\`), `%3F` (`?`), `%23` (`#`), etc.
+            // would otherwise move the URL out of the expected
+            // `/{segments}/did.json` shape.
             if decoded_segment.is_empty()
                 || decoded_segment == "."
                 || decoded_segment == ".."
-                || decoded_segment.contains(['/', '\\'])
+                || decoded_segment
+                    .chars()
+                    .any(|c| c.is_control() || matches!(c, '/' | '\\' | '?' | '#' | '@' | '%'))
             {
                 return Err(DidWebError::InvalidDid(format!(
                     "path segment {segment:?} is not a valid single path component"
@@ -526,6 +530,71 @@ pub fn build_url(domain: &str, path_segments: &[String]) -> Result<String, DidWe
     }
 
     Ok(url)
+}
+
+/// The decoded domain must be a host (a hostname, or an IP literal, which this
+/// resolver also accepts) and an optional numeric port, and nothing a URL
+/// would read as user information, a path, a query or a fragment.
+fn validate_host(authority: &str) -> Result<(), DidWebError> {
+    let invalid =
+        |why: &str| DidWebError::InvalidDid(format!("domain {authority:?} is not a host ({why})"));
+    let (host, port) = split_host_port(authority);
+    if host.is_empty() {
+        return Err(invalid("empty host"));
+    }
+    if let Some(port) = port
+        && (port.is_empty()
+            || !port.bytes().all(|b| b.is_ascii_digit())
+            || port.parse::<u16>().is_err())
+    {
+        return Err(invalid("the port is not a port number"));
+    }
+    if let Some(literal) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        if literal.parse::<std::net::Ipv6Addr>().is_err() {
+            return Err(invalid("not an IPv6 address"));
+        }
+    } else if host.chars().any(|c| {
+        c.is_control()
+            || c.is_whitespace()
+            || matches!(c, '/' | '\\' | '?' | '#' | '@' | '%' | ':' | '[' | ']')
+    }) {
+        return Err(invalid("a character a host cannot contain"));
+    }
+
+    let url = reqwest::Url::parse(&format!("https://{authority}/"))
+        .map_err(|e| invalid(&e.to_string()))?;
+    if url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(invalid("not a host and port"));
+    }
+    Ok(())
+}
+
+/// Split `host[:port]` (the host possibly a bracketed IPv6 literal) into the
+/// host and the port.
+fn split_host_port(authority: &str) -> (&str, Option<&str>) {
+    if authority.starts_with('[') {
+        return match authority.find(']') {
+            Some(end) => {
+                let (host, rest) = authority.split_at(end + 1);
+                match rest.strip_prefix(':') {
+                    Some(port) => (host, Some(port)),
+                    None if rest.is_empty() => (host, None),
+                    None => (authority, None),
+                }
+            }
+            None => (authority, None),
+        };
+    }
+    match authority.split_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (authority, None),
+    }
 }
 
 fn other_method_name(method: &DIDMethod) -> String {
@@ -565,6 +634,75 @@ mod tests {
                 "segment {seg:?} should be rejected, got {err:?}"
             );
         }
+    }
+
+    #[test]
+    fn url_rejects_a_domain_that_does_not_decode_to_a_host() {
+        for domain in [
+            "trusted.example%40other.example",
+            "other.example%2Fx.trusted.example",
+            "example.com%3Fq",
+            "example.com%23f",
+            "example.com%5Cx",
+            "example.com%25",
+            "example.com%3A",
+            "example.com%3Ahttp",
+            "example.com%3A99999",
+            "example.com%3A80%3A80",
+            "exa%20mple.com",
+            "exa%0Ample.com",
+            "%5B%3A%3A1",
+            "%5Bnot-ipv6%5D",
+            "%5B%3A%3A1%5Dx",
+            "%3A443",
+        ] {
+            let err = build_url(domain, &[]).unwrap_err();
+            assert!(
+                matches!(err, DidWebError::InvalidDid(_)),
+                "domain {domain:?} should be rejected, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn url_accepts_hosts_ports_and_ip_literals() {
+        for (domain, expected) in [
+            ("example.com", "https://example.com/.well-known/did.json"),
+            (
+                "192.0.2.1%3A8080",
+                "https://192.0.2.1:8080/.well-known/did.json",
+            ),
+            (
+                "%5B2001%3Adb8%3A%3A1%5D",
+                "https://[2001:db8::1]/.well-known/did.json",
+            ),
+            (
+                "%5B2001%3Adb8%3A%3A1%5D%3A8443",
+                "https://[2001:db8::1]:8443/.well-known/did.json",
+            ),
+        ] {
+            assert_eq!(build_url(domain, &[]).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn url_rejects_segments_that_would_leave_the_path() {
+        for seg in ["a%3Fb", "a%23", "a%40b", "a%25b", "a%00", "a%0A"] {
+            let err = build_url("example.com", &[seg.to_string()]).unwrap_err();
+            assert!(
+                matches!(err, DidWebError::InvalidDid(_)),
+                "segment {seg:?} should be rejected, got {err:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_refuses_a_did_whose_domain_decodes_to_userinfo() {
+        let err = DIDWeb::with_policy(HostPolicy::AllowPrivate)
+            .resolve("did:web:trusted.example%40127.0.0.1")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DidWebError::InvalidDid(_)), "got {err:?}");
     }
 
     #[test]
