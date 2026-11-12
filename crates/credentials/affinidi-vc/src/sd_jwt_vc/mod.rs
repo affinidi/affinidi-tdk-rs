@@ -62,7 +62,42 @@ impl std::fmt::Display for SdJwtVc {
     }
 }
 
-/// Issue an SD-JWT VC.
+/// The JWS `typ` [`issue`] writes (draft-ietf-oauth-sd-jwt-vc §3.2.1).
+pub const SD_JWT_VC_TYP: &str = "dc+sd-jwt";
+
+/// The JWS `typ` values [`verify`] accepts: [`SD_JWT_VC_TYP`], and
+/// `vc+sd-jwt` from earlier drafts of the specification.
+pub const ACCEPTED_TYPS: &[&str] = &[SD_JWT_VC_TYP, "vc+sd-jwt"];
+
+/// Delegates to the caller's signer, with the header `typ` set to
+/// [`SD_JWT_VC_TYP`].
+struct SdJwtVcSigner<'a> {
+    inner: &'a dyn JwtSigner,
+}
+
+impl JwtSigner for SdJwtVcSigner<'_> {
+    fn algorithm(&self) -> &str {
+        self.inner.algorithm()
+    }
+
+    fn key_id(&self) -> Option<&str> {
+        self.inner.key_id()
+    }
+
+    fn sign_jwt(
+        &self,
+        header: &Value,
+        payload: &Value,
+    ) -> Result<String, affinidi_sd_jwt::SdJwtError> {
+        let mut header = header.clone();
+        if let Some(object) = header.as_object_mut() {
+            object.insert("typ".into(), Value::String(SD_JWT_VC_TYP.into()));
+        }
+        self.inner.sign_jwt(&header, payload)
+    }
+}
+
+/// Issue an SD-JWT VC, with JWS header `typ` [`SD_JWT_VC_TYP`].
 ///
 /// # Arguments
 ///
@@ -140,7 +175,7 @@ pub fn issue(
     let sd_jwt = sd_jwt_issuer::issue(
         &full_claims_value,
         disclosure_frame,
-        signer,
+        &SdJwtVcSigner { inner: signer },
         hasher,
         holder_jwk,
     )?;
@@ -369,7 +404,8 @@ pub struct VerifiedSdJwtVc {
 /// Verify a serialized SD-JWT VC (or a presentation of one).
 ///
 /// In order:
-/// 1. parse it, read `iss` (a non-empty string, equal to
+/// 1. parse it, require the JWS header `typ` to be one of [`ACCEPTED_TYPS`],
+///    read `iss` (a non-empty string, equal to
 ///    `options.expected_issuer` when given) and ask `issuer_key` for the
 ///    verifier for that issuer;
 /// 2. verify it as an SD-JWT with that verifier and `hasher`, including the
@@ -395,6 +431,12 @@ pub fn verify(
     // issuer-signed payload.
     let payload = sd_jwt.payload()?;
     let header = sd_jwt.header()?;
+    let typ = header.get("typ").and_then(Value::as_str);
+    if !typ.is_some_and(|typ| ACCEPTED_TYPS.contains(&typ)) {
+        return Err(SdJwtVcError::Verification(format!(
+            "JWS typ must be one of {ACCEPTED_TYPS:?}, got {typ:?}"
+        )));
+    }
 
     let issuer = required_string(&payload, "iss").map_err(SdJwtVcError::InvalidIssuer)?;
     if let Some(expected) = options.expected_issuer
@@ -961,6 +1003,55 @@ mod verify_tests {
         assert!(err.to_string().contains("older than"), "{err}");
     }
 
+    /// A credential signed with header `typ` `typ`, otherwise valid.
+    fn issued_with_typ(typ: &str) -> String {
+        struct WithTyp<'a>(&'a str, HmacSha256Signer);
+        impl JwtSigner for WithTyp<'_> {
+            fn algorithm(&self) -> &str {
+                self.1.algorithm()
+            }
+            fn sign_jwt(
+                &self,
+                header: &Value,
+                payload: &Value,
+            ) -> Result<String, affinidi_sd_jwt::SdJwtError> {
+                let mut header = header.clone();
+                header["typ"] = self.0.into();
+                self.1.sign_jwt(&header, payload)
+            }
+        }
+        sd_jwt_issuer::issue(
+            &serde_json::json!({ "vct": VCT, "iss": ISS, "iat": IAT }),
+            &serde_json::json!({}),
+            &WithTyp(typ, HmacSha256Signer::new(ISSUER_KEY)),
+            &Sha256Hasher,
+            None,
+        )
+        .unwrap()
+        .serialize()
+    }
+
+    #[test]
+    fn issue_writes_the_sd_jwt_vc_typ() {
+        let vc = issued(identity(), None);
+        assert_eq!(vc.sd_jwt.header().unwrap()["typ"], SD_JWT_VC_TYP);
+    }
+
+    #[test]
+    fn only_sd_jwt_vc_typs_are_accepted() {
+        let options = VerifyOptions::new(IAT + 10);
+        for typ in ACCEPTED_TYPS {
+            check(&issued_with_typ(typ), &options).unwrap();
+        }
+        for typ in ["sd+jwt", "JWT", ""] {
+            let err = check(&issued_with_typ(typ), &options).unwrap_err();
+            assert!(
+                matches!(&err, SdJwtVcError::Verification(m) if m.contains("typ")),
+                "{typ}: {err}"
+            );
+        }
+    }
+
     #[test]
     fn a_bound_presentation_verifies() {
         let mut claims = identity();
@@ -1041,7 +1132,9 @@ mod verify_tests {
                     c
                 },
                 &serde_json::json!({}),
-                &HmacSha256Signer::new(ISSUER_KEY),
+                &SdJwtVcSigner {
+                    inner: &HmacSha256Signer::new(ISSUER_KEY),
+                },
                 &Sha256Hasher,
                 None,
             )
@@ -1063,7 +1156,9 @@ mod verify_tests {
         let sd_jwt = sd_jwt_issuer::issue(
             &claims,
             &serde_json::json!({ "_sd": ["exp"] }),
-            &HmacSha256Signer::new(ISSUER_KEY),
+            &SdJwtVcSigner {
+                inner: &HmacSha256Signer::new(ISSUER_KEY),
+            },
             &Sha256Hasher,
             None,
         )
@@ -1086,7 +1181,9 @@ mod verify_tests {
             let sd_jwt = sd_jwt_issuer::issue(
                 &claims,
                 &serde_json::json!({}),
-                &HmacSha256Signer::new(ISSUER_KEY),
+                &SdJwtVcSigner {
+                    inner: &HmacSha256Signer::new(ISSUER_KEY),
+                },
                 &Sha256Hasher,
                 None,
             )

@@ -1,5 +1,16 @@
 # Affinidi VC Changelog
 
+## Unreleased (0.3.2) — SD-JWT VC `typ`
+
+- **Changed:** `sd_jwt_vc::issue` signs with JWS header `typ` `dc+sd-jwt`
+  (draft-ietf-oauth-sd-jwt-vc §3.2.1, `SD_JWT_VC_TYP`) instead of `sd+jwt`.
+  The caller's signer is otherwise used as before.
+- **Behaviour (stricter, R3.6):** `sd_jwt_vc::verify` requires header `typ`
+  `dc+sd-jwt` or `vc+sd-jwt` (`ACCEPTED_TYPS`) and refuses anything else with
+  `Verification`. Credentials issued by this crate before 0.3.2 carry `sd+jwt`
+  and are refused by `verify`. `verify_temporal` and the rest of the module do
+  not look at `typ`.
+
 ## Unreleased (0.3.1) — SD-JWT VC verification; temporal claims checked strictly
 
 - **Added:** `sd_jwt_vc::verify(serialized, issuer_key, hasher, &VerifyOptions)`
