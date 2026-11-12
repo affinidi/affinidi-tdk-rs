@@ -505,7 +505,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm"
-version = "0.15.12"
+version = "0.15.13"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -524,6 +524,7 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

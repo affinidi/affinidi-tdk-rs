@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased (0.15.13) — key material is wiped after use
+
+- **Changed:** `PrivateIdentity` wipes `signing_private` when it is dropped.
+  It has a `Drop` impl and implements `ZeroizeOnDrop`, as
+  `key_agreement_private` already did. `verifying_key()` borrows the signing
+  key instead of copying it.
+- **Changed:** JWE encryption and `decrypt_bound` hold the CEK and every KEK
+  in `Zeroizing`, so they are wiped when the call returns. `sign_multi`
+  borrows each signer's private key instead of copying it into a closure.
+- `zeroize` 1 joins the dependencies. It was already in the workspace
+  lockfile through `affinidi-crypto`, so no new crate is pulled in.
+- **Compatibility (R3.6):** no signature change, and `PrivateIdentity` is
+  still built with a struct literal. The new `Drop` impl means a field can no
+  longer be moved out of a `PrivateIdentity` (`let did = identity.did;`,
+  `let PrivateIdentity { did, .. } = identity;`). Borrowing or cloning a field
+  still works. No such move exists in this workspace. The one downstream
+  construction found, `verifiable-trust-infrastructure`'s
+  `vta-mobile-core/src/didcomm.rs`, builds it with a struct literal and hands
+  it to `DIDCommAgent::add_identity`, which still compiles.
+
 ## Unreleased (0.15.12) — bounded JWS parsing
 
 - **Behaviour:** `jws::verify::parse_jws` refuses a JWS with more than

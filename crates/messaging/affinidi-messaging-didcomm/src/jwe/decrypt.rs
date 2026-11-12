@@ -5,6 +5,7 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use crate::error::DIDCommError;
 use crate::jwe::envelope::*;
 use affinidi_crypto::jose::{aes_kw, content_encryption, ecdh, key_agreement::*};
+use zeroize::Zeroizing;
 
 /// Result of decrypting a JWE.
 pub struct DecryptedJwe {
@@ -161,7 +162,7 @@ pub fn decrypt_bound(
             }
             let apu_raw = skid.as_bytes();
 
-            let kek: [u8; 32] = ecdh::derive_key_1pu_recipient(
+            let kek = kek_256(Zeroizing::new(ecdh::derive_key_1pu_recipient(
                 recipient_private,
                 sender.public(),
                 &epk,
@@ -170,11 +171,9 @@ pub fn decrypt_bound(
                 &apv_raw,
                 &tag,
                 256,
-            )?
-            .try_into()
-            .map_err(|_| DIDCommError::KeyAgreement("KEK wrong size".into()))?;
+            )?))?;
 
-            let cek = aes_kw::unwrap(&kek, &wrapped_key)?;
+            let cek = Zeroizing::new(aes_kw::unwrap(&kek, &wrapped_key)?);
             (cek, true, Some(skid.to_string()))
         }
         ALG_ANONCRYPT => {
@@ -185,17 +184,15 @@ pub fn decrypt_bound(
                 .transpose()
                 .map_err(|e| DIDCommError::InvalidMessage(format!("invalid apu: {e}")))?
                 .unwrap_or_default();
-            let kek: [u8; 32] = ecdh::derive_key_es_recipient(
+            let kek = kek_256(Zeroizing::new(ecdh::derive_key_es_recipient(
                 recipient_private,
                 &epk,
                 ALG_ANONCRYPT.as_bytes(),
                 &apu_raw,
                 &apv_raw,
                 256,
-            )?
-            .try_into()
-            .map_err(|_| DIDCommError::KeyAgreement("KEK wrong size".into()))?;
-            let cek = aes_kw::unwrap(&kek, &wrapped_key)?;
+            )?))?;
+            let cek = Zeroizing::new(aes_kw::unwrap(&kek, &wrapped_key)?);
             (cek, false, None)
         }
         alg => {
@@ -205,9 +202,12 @@ pub fn decrypt_bound(
         }
     };
 
-    let cek: [u8; 64] = cek_bytes
-        .try_into()
-        .map_err(|_| DIDCommError::KeyWrap("unwrapped CEK wrong size".into()))?;
+    let cek: Zeroizing<[u8; 64]> = Zeroizing::new(
+        cek_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| DIDCommError::KeyWrap("unwrapped CEK wrong size".into()))?,
+    );
 
     let plaintext =
         content_encryption::decrypt(&ciphertext, &cek, &iv, jwe.protected.as_bytes(), &tag)?;
@@ -221,6 +221,16 @@ pub fn decrypt_bound(
         recipient_kid: recipient_kid.to_string(),
         legacy_kek_used: false,
     })
+}
+
+/// Copies a 256-bit KEK out of the derived bytes; both copies are wiped on
+/// drop.
+fn kek_256(derived: Zeroizing<Vec<u8>>) -> Result<Zeroizing<[u8; 32]>, DIDCommError> {
+    let kek: [u8; 32] = derived
+        .as_slice()
+        .try_into()
+        .map_err(|_| DIDCommError::KeyAgreement("KEK wrong size".into()))?;
+    Ok(Zeroizing::new(kek))
 }
 
 #[cfg(test)]

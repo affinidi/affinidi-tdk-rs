@@ -4,7 +4,14 @@
 //! DIDComm's variable key types (key agreement + signing).
 
 use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
 /// A local identity with private keys for DIDComm operations.
+///
+/// Both private keys are wiped when the identity is dropped
+/// (`key_agreement_private` by its own `ZeroizeOnDrop`, `signing_private`
+/// by this type's `Drop`). Fields can be read and borrowed but not moved
+/// out.
 pub struct PrivateIdentity {
     /// The DID for this identity
     pub did: String,
@@ -32,6 +39,16 @@ impl std::fmt::Debug for PrivateIdentity {
             .finish()
     }
 }
+
+impl Drop for PrivateIdentity {
+    fn drop(&mut self) {
+        if let Some(signing_private) = self.signing_private.as_mut() {
+            signing_private.zeroize();
+        }
+    }
+}
+
+impl ZeroizeOnDrop for PrivateIdentity {}
 
 impl PrivateIdentity {
     /// Create a new identity with generated keys.
@@ -80,7 +97,8 @@ impl PrivateIdentity {
     /// Get the Ed25519 verifying key bytes (if available).
     pub fn verifying_key(&self) -> Option<[u8; 32]> {
         self.signing_private
-            .map(|sk| affinidi_crypto::jose::signing::public_key_from_private(&sk))
+            .as_ref()
+            .map(affinidi_crypto::jose::signing::public_key_from_private)
     }
 
     /// Create a resolved identity (public-only) from this private identity.
@@ -143,6 +161,29 @@ pub struct Mediator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identity_is_zeroize_on_drop() {
+        fn assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
+        assert_zeroize_on_drop::<PrivateIdentity>();
+    }
+
+    #[test]
+    fn verifying_key_matches_the_signing_key_and_debug_redacts_it() {
+        let id = PrivateIdentity::generate("did:example:alice");
+        let signing_private = id.signing_private.expect("generated with a signing key");
+        let expected = ed25519_dalek::SigningKey::from_bytes(&signing_private)
+            .verifying_key()
+            .to_bytes();
+        assert_eq!(id.verifying_key(), Some(expected));
+
+        let printed = format!("{id:?}");
+        assert!(printed.contains("[REDACTED]"), "{printed}");
+        assert!(
+            !printed.contains(&format!("{signing_private:?}")),
+            "{printed}"
+        );
+    }
 
     #[test]
     fn generate_identity() {
