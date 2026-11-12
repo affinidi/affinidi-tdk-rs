@@ -2,15 +2,26 @@
 
 ## Unreleased (0.3.1) — SD-JWT VC verification; temporal claims checked strictly
 
-- **Added:** `sd_jwt_vc::verify(serialized, issuer_verifier, hasher, &VerifyOptions)`
-  returning `VerifiedSdJwtVc { claims, vct, issuer, status, key_bound }`. It
-  parses and verifies the SD-JWT (key binding under `cnf.jwk` when
-  `VerifyOptions::key_binding` is set), refuses a KB-JWT no check was asked
-  for, refuses a protected claim that came from a disclosure instead of the
-  issuer-signed payload, requires a non-empty `vct` and `iss` (equal to the
-  expected ones when given), and checks `iat`/`exp`/`nbf` with
-  `VerifyOptions::leeway_secs`. The `status` claim is returned, not checked.
-  Before, the module had no verification beyond `verify_temporal`.
+- **Added:** `sd_jwt_vc::verify(serialized, issuer_key, hasher, &VerifyOptions)`
+  returning `VerifiedSdJwtVc { claims, vct, issuer, status, key_bound }`.
+  - The issuer verifier comes from the credential's own `iss` through the new
+    `IssuerKeyVerifier` trait (any `Fn(&str, &Value) -> Result<Box<dyn JwtVerifier>>`
+    closure, called with `iss` and the JWS header). A credential therefore
+    verifies only under its own issuer's key.
+  - It verifies the SD-JWT, with key binding under `cnf.jwk` when
+    `VerifyOptions::key_binding` is set. The KB-JWT's `aud` must be a single
+    string. `VerifyOptions::now` is also the key-binding window's `now`.
+  - It refuses a KB-JWT that no check was asked for, and a protected claim
+    that came from a disclosure instead of the issuer-signed payload.
+  - It requires a non-empty `vct` and `iss`, equal to the expected values when
+    those are given, and checks `iat`/`exp`/`nbf` with
+    `VerifyOptions::leeway_secs`.
+  - The `status` claim is returned, not checked. Before, the module had no
+    verification beyond `verify_temporal`.
+- **Added:** `VerifyOptions` is `#[non_exhaustive]`. Build it with
+  `VerifyOptions::new(now)`, `with_leeway_secs`, `expecting_vct`,
+  `expecting_issuer` and `with_key_binding`. A verifier of holder-bound
+  presentations must set `with_key_binding`.
 - **Added:** `verify_temporal_with_leeway(payload, now, leeway_secs)`, and the
   `PROTECTED_CLAIMS` and `IAT_LEEWAY_SECS` constants.
 - **Behaviour (stricter):** `verify_temporal` refuses an `iat`, `exp` or `nbf`
@@ -19,6 +30,8 @@
   treated as absent, so `"exp": "1700000000"` never expired. A credential is
   now expired from the instant `now == exp` (RFC 7519 §4.1.4). Bounds
   saturate rather than overflow.
+- `iat` kept in the payload, and `iss`/`iat` required, are this crate's
+  profile on top of draft-ietf-oauth-sd-jwt-vc (which leaves them optional).
 - **Behaviour (stricter):** `issue` refuses claims that are not a JSON object
   (`InvalidClaims`) instead of issuing without them. `status` and
   `vct#integrity` join the claims that cannot be selectively disclosed, and a
