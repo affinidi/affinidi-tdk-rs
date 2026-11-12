@@ -18,3 +18,16 @@
 # https://github.com/affinidi/affinidi-messaging-mediator, and `vta-sdk` left
 # this workspace's graph with them, so the cycle no longer exists here. The
 # history of each crossing is in this file's git log.
+
+# ---------------------------------------------------------------------------
+#
+# affinidi-crypto — added 2026-11-13, for one release.
+#
+# affinidi-crypto 0.3.0 (key pairs wipe themselves when dropped) is published
+# before the workspace crates that depend on it. Until they move, they require
+# "0.2" and resolve the published 0.2.12, while the workspace member is 0.3.0.
+# Nothing in the graph mixes the two: every dependent, and the registry
+# trust-tasks-proof that messaging-sdk pulls in, is on 0.2.12. Clear this entry,
+# and restore the affinidi-crypto line in the root [patch.crates-io], in the
+# change that moves the dependents to "0.3".
+affinidi-crypto

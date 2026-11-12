@@ -75,9 +75,9 @@ pub fn wrap(kek: &[u8; 32], plaintext_key: &[u8]) -> Result<Vec<u8>, CryptoError
 
 /// Unwrap a key using AES-256 Key Wrap (RFC 3394).
 ///
-/// Input must be `plaintext_len + 8` bytes. Returns the unwrapped key, or
-/// an error if the integrity check fails.
-pub fn unwrap(kek: &[u8; 32], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+/// Input must be `plaintext_len + 8` bytes. Returns the unwrapped key, wiped
+/// when it is dropped, or an error if the integrity check fails.
+pub fn unwrap(kek: &[u8; 32], ciphertext: &[u8]) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
     let total = ciphertext.len();
     if !total.is_multiple_of(8) || total < 24 {
         return Err(CryptoError::KeyWrap(
@@ -125,7 +125,7 @@ pub fn unwrap(kek: &[u8; 32], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError>
         ));
     }
 
-    let mut output = Vec::with_capacity(n_blocks * 8);
+    let mut output = Zeroizing::new(Vec::with_capacity(n_blocks * 8));
     for block in r.iter() {
         output.extend_from_slice(&block.to_be_bytes());
     }

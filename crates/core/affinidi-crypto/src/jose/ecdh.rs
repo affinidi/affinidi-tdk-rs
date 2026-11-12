@@ -20,12 +20,14 @@ fn joined_secret(ze: &[u8], zs: &[u8]) -> Zeroizing<Vec<u8>> {
     z
 }
 
-/// Copies a derived 256-bit KEK out of the KDF output, wiping the output.
-fn kek_256(kek: Vec<u8>) -> Result<[u8; 32], CryptoError> {
-    let kek = Zeroizing::new(kek);
-    kek.as_slice()
+/// Copies a derived 256-bit KEK out of the KDF output (which wipes itself)
+/// into a buffer that is wiped too.
+fn kek_256(kek: Zeroizing<Vec<u8>>) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+    let kek: [u8; 32] = kek
+        .as_slice()
         .try_into()
-        .map_err(|_| CryptoError::KeyAgreement("derived key wrong size".into()))
+        .map_err(|_| CryptoError::KeyAgreement("derived key wrong size".into()))?;
+    Ok(Zeroizing::new(kek))
 }
 
 // ─── ECDH-ES (anonymous encryption) ─────────────────────────────────────────
@@ -38,8 +40,8 @@ pub fn derive_key_es(
     apu: &[u8],
     apv: &[u8],
     key_len: u32,
-) -> Result<Vec<u8>, CryptoError> {
-    let z = Zeroizing::new(ephemeral.diffie_hellman(recipient_public)?);
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    let z = ephemeral.diffie_hellman(recipient_public)?;
     concat_kdf(&z, alg, apu, apv, key_len)
 }
 
@@ -51,8 +53,8 @@ pub fn derive_key_es_recipient(
     apu: &[u8],
     apv: &[u8],
     key_len: u32,
-) -> Result<Vec<u8>, CryptoError> {
-    let z = Zeroizing::new(recipient_private.diffie_hellman(ephemeral_public)?);
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    let z = recipient_private.diffie_hellman(ephemeral_public)?;
     concat_kdf(&z, alg, apu, apv, key_len)
 }
 
@@ -62,7 +64,7 @@ pub fn derive_sender_key(
     recipient_public: &PublicKeyAgreement,
     apu: &[u8],
     apv: &[u8],
-) -> Result<[u8; 32], CryptoError> {
+) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
     let kek = derive_key_es(
         &ephemeral.private,
         recipient_public,
@@ -91,9 +93,9 @@ pub fn derive_key_1pu(
     apv: &[u8],
     cc_tag: &[u8],
     key_len: u32,
-) -> Result<Vec<u8>, CryptoError> {
-    let ze = Zeroizing::new(ephemeral.diffie_hellman(recipient_public)?);
-    let zs = Zeroizing::new(sender_private.diffie_hellman(recipient_public)?);
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    let ze = ephemeral.diffie_hellman(recipient_public)?;
+    let zs = sender_private.diffie_hellman(recipient_public)?;
     let z = joined_secret(&ze, &zs);
     concat_kdf_1pu(&z, alg, apu, apv, key_len, cc_tag)
 }
@@ -109,9 +111,9 @@ pub fn derive_key_1pu_recipient(
     apv: &[u8],
     cc_tag: &[u8],
     key_len: u32,
-) -> Result<Vec<u8>, CryptoError> {
-    let ze = Zeroizing::new(recipient_private.diffie_hellman(ephemeral_public)?);
-    let zs = Zeroizing::new(recipient_private.diffie_hellman(sender_public)?);
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    let ze = recipient_private.diffie_hellman(ephemeral_public)?;
+    let zs = recipient_private.diffie_hellman(sender_public)?;
     let z = joined_secret(&ze, &zs);
     concat_kdf_1pu(&z, alg, apu, apv, key_len, cc_tag)
 }
@@ -130,9 +132,9 @@ pub fn derive_key_1pu_recipient_legacy(
     apv: &[u8],
     cc_tag: &[u8],
     key_len: u32,
-) -> Result<Vec<u8>, CryptoError> {
-    let ze = Zeroizing::new(recipient_private.diffie_hellman(ephemeral_public)?);
-    let zs = Zeroizing::new(recipient_private.diffie_hellman(sender_public)?);
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    let ze = recipient_private.diffie_hellman(ephemeral_public)?;
+    let zs = recipient_private.diffie_hellman(sender_public)?;
     let z = joined_secret(&ze, &zs);
     concat_kdf_1pu_legacy(&z, alg, apu, apv, key_len, cc_tag)
 }
@@ -145,7 +147,7 @@ pub fn derive_sender_key_1pu(
     apu: &[u8],
     apv: &[u8],
     cc_tag: &[u8],
-) -> Result<[u8; 32], CryptoError> {
+) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
     let kek = derive_key_1pu(
         &ephemeral.private,
         sender_private,
@@ -172,9 +174,9 @@ pub fn derive_sender_key_1pu_legacy(
     apu: &[u8],
     apv: &[u8],
     cc_tag: &[u8],
-) -> Result<[u8; 32], CryptoError> {
-    let ze = Zeroizing::new(ephemeral.private.diffie_hellman(recipient_public)?);
-    let zs = Zeroizing::new(sender_private.diffie_hellman(recipient_public)?);
+) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+    let ze = ephemeral.private.diffie_hellman(recipient_public)?;
+    let zs = sender_private.diffie_hellman(recipient_public)?;
     let z = joined_secret(&ze, &zs);
     let kek = concat_kdf_1pu_legacy(&z, b"ECDH-1PU+A256KW", apu, apv, 256, cc_tag)?;
     kek_256(kek)

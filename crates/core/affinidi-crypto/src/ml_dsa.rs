@@ -42,9 +42,9 @@ pub fn generate_ml_dsa_44(seed: Option<&[u8; 32]>) -> KeyPair {
     let xi = seed_from(seed);
     let sk = SigningKey::<MlDsa44>::from_seed(&xi);
     let vk_bytes: &[u8] = &sk.verifying_key().encode();
-    // The caller is expected to move the returned private_bytes into a
-    // ZeroizeOnDrop container (e.g. `Secret`) for proper cleanup. `xi`
-    // itself is zeroized on drop via the ml-dsa `zeroize` feature.
+    // The returned key pair wipes `private_bytes` on drop; `into_parts()`
+    // moves it out without a copy. `xi` itself is zeroized on drop via the
+    // ml-dsa `zeroize` feature.
     KeyPair {
         key_type: KeyType::MlDsa44,
         private_bytes: AsRef::<[u8]>::as_ref(&xi).to_vec(),
@@ -261,6 +261,26 @@ pub fn verify_ml_dsa_87(public_key: &[u8], data: &[u8], signature: &[u8]) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ml_dsa_44_key_pair_wipes_on_drop() {
+        crate::key_pair_test_support::assert_zeroize_on_drop::<KeyPair>();
+    }
+
+    #[test]
+    fn ml_dsa_44_into_parts_moves_the_key() {
+        let keypair = generate_ml_dsa_44(None);
+        let private = keypair.private_bytes.clone();
+        let public = keypair.public_bytes.clone();
+        let parts = keypair.into_parts();
+        assert_eq!(parts.key_type, KeyType::MlDsa44);
+        assert_eq!(parts.private_bytes.as_slice(), private.as_slice());
+        assert_eq!(parts.public_bytes, public);
+        crate::key_pair_test_support::assert_debug_hides_private(&format!("{parts:?}"), &private);
+        let again = generate_ml_dsa_44(None);
+        let private = again.private_bytes.clone();
+        assert_eq!(again.into_private_bytes().as_slice(), private.as_slice());
+    }
 
     #[test]
     fn ml_dsa_debug_hides_private_key() {

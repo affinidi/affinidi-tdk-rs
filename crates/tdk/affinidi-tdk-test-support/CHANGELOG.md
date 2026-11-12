@@ -1,5 +1,12 @@
 # Affinidi TDK Test Support
 
+## Unreleased (0.11.1) — affinidi-crypto from the registry
+
+- **Changed:** `affinidi-crypto` is a plain `"0.2"` requirement instead of a
+  path dependency, because the workspace copy is now 0.3. This crate builds
+  against the published 0.2.12 until the workspace moves to 0.3. No code or
+  behaviour change.
+
 ## Unreleased (0.11.0) — affinidi-sd-jwt 0.2
 
 - **Changed:** `CredentialScenario::verify_with` takes a

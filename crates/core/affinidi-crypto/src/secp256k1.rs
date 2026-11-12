@@ -101,6 +101,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn secp256k1_key_pair_wipes_on_drop() {
+        crate::key_pair_test_support::assert_zeroize_on_drop::<KeyPair>();
+    }
+
+    #[test]
+    fn secp256k1_into_parts_moves_the_key() {
+        let keypair = generate_random();
+        let private = keypair.private_bytes.clone();
+        let public = keypair.public_bytes.clone();
+        let parts = keypair.into_parts();
+        assert_eq!(parts.key_type, KeyType::Secp256k1);
+        assert_eq!(parts.private_bytes.as_slice(), private.as_slice());
+        assert_eq!(parts.public_bytes, public);
+        crate::key_pair_test_support::assert_jwk_private_is(&parts.jwk, &private);
+        crate::key_pair_test_support::assert_debug_hides_private(&format!("{parts:?}"), &private);
+    }
+
+    #[test]
+    fn secp256k1_into_private_bytes_and_into_jwk() {
+        let keypair = generate_random();
+        let private = keypair.private_bytes.clone();
+        assert_eq!(
+            keypair.clone().into_private_bytes().as_slice(),
+            private.as_slice()
+        );
+        crate::key_pair_test_support::assert_jwk_private_is(&keypair.into_jwk(), &private);
+    }
+
+    #[test]
     fn secp256k1_debug_hides_private_key() {
         let keypair = generate_random();
         crate::key_pair_test_support::assert_debug_hides_private(

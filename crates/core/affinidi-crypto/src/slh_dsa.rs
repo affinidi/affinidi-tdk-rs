@@ -56,6 +56,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn slh_dsa_key_pair_wipes_on_drop() {
+        crate::key_pair_test_support::assert_zeroize_on_drop::<KeyPair>();
+    }
+
+    #[test]
+    fn slh_dsa_into_parts_moves_the_key() {
+        let keypair = generate_slh_dsa_sha2_128s();
+        let private = keypair.private_bytes.clone();
+        let public = keypair.public_bytes.clone();
+        let parts = keypair.into_parts();
+        assert_eq!(parts.key_type, KeyType::SlhDsaSha2_128s);
+        assert_eq!(parts.private_bytes.as_slice(), private.as_slice());
+        assert_eq!(parts.public_bytes, public);
+        crate::key_pair_test_support::assert_debug_hides_private(&format!("{parts:?}"), &private);
+        let again = generate_slh_dsa_sha2_128s();
+        let private = again.private_bytes.clone();
+        assert_eq!(again.into_private_bytes().as_slice(), private.as_slice());
+    }
+
+    #[test]
     fn slh_dsa_debug_hides_private_key() {
         let keypair = generate_slh_dsa_sha2_128s();
         crate::key_pair_test_support::assert_debug_hides_private(
