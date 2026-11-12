@@ -40,12 +40,30 @@
 //! clone, so one task can send while another waits on
 //! [`recv`](TspMuxWebSocket::recv).
 //!
-//! Nothing reconnects here. A dropped socket ends [`TspMuxWebSocket::recv`]
-//! (with the mediator's close reason when it gave one), fails every request
-//! still waiting, and turns [`TspMuxWebSocket::state`] to
-//! [`TspMuxState::Closed`]; the caller decides what to do (R6.2). On a new
-//! connection the member set is rebuilt from that connection's `ready` and
-//! `attached` events; nothing carries over.
+//! **Reconnecting.** A socket from
+//! [`connect_websocket_mux`](super::tsp::TspOps::connect_websocket_mux) does
+//! not reconnect: a dropped socket ends [`TspMuxWebSocket::recv`] (with the
+//! mediator's close reason when it gave one), fails every request still
+//! waiting, and turns [`TspMuxWebSocket::state`] to [`TspMuxState::Closed`];
+//! the caller decides what to do (R6.2).
+//!
+//! One from
+//! [`connect_websocket_mux_managed`](super::tsp::TspOps::connect_websocket_mux_managed)
+//! reconnects by itself, with backoff ([`TspMuxReconnect`]). While it is down
+//! the state is [`TspMuxState::Reconnecting`], requests still waiting fail,
+//! and sends fail at once rather than queue. Once a new connection's `ready`
+//! arrives the state is `Open` again and [`TspMuxWebSocket::recv`] returns
+//! [`TspMuxFrame::Reconnected`]. It stops only when the client closes or
+//! drops it, when the mediator no longer accepts `tsp-mux`, or when a newer
+//! connection for the same DID replaced it (then `recv` fails and the state
+//! is `Closed`): taking the connection back would replace the newer one, and
+//! the two would fight.
+//!
+//! Each connection is new to the mediator, so nothing carries over: the
+//! member set is rebuilt from the new connection's `ready` and `attached`
+//! events (stored grants are admitted again; members attached with
+//! statements must be attached again, signed for the new `ready`), and frames
+//! not acknowledged before the drop are delivered again.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -137,6 +155,19 @@ pub enum TspMuxFrame {
         notice: Box<TrustTask<MuxNotice>>,
         /// The raw frame, for [`TspMuxWebSocket::ack`].
         frame: Vec<u8>,
+    },
+    /// A managed socket ([`TspOps::connect_websocket_mux_managed`]) is
+    /// connected again after a drop. This is a new connection: its `ready`
+    /// (a new session id and mux nonce, for attach statements) replaces the
+    /// old one, and the member set starts again from it. Stored grants come
+    /// back as an `attached` event; members attached with statements must be
+    /// attached again. Frames not acknowledged before the drop are delivered
+    /// again, so handle a repeat by its [`message_id`].
+    ///
+    /// [`TspOps::connect_websocket_mux_managed`]: super::tsp::TspOps::connect_websocket_mux_managed
+    Reconnected {
+        /// The new connection's `ready` event.
+        ready: Box<MuxReady>,
     },
     /// A binary frame that is not a parseable TSP envelope, so it names no
     /// receiver. Handed over rather than dropped; the mediator holds it until
@@ -394,17 +425,37 @@ fn answer_thread(doc: &Value) -> Option<String> {
 
 const NOTICE_TYPE: &str = "https://trusttasks.org/spec/messaging/mux/notice/0.1";
 
-/// The next frame off the socket that matters: a binary frame, or the end.
-/// `Ok(None)` when the stream ended without a close frame; `Err` on a close
-/// frame (with the mediator's reason) or a transport error.
-async fn next_binary(ws: &mut TspWsStream) -> Result<Option<Vec<u8>>, ATMError> {
+/// What came off the socket.
+enum Incoming {
+    /// A binary frame.
+    Frame(Vec<u8>),
+    /// The stream ended without a close frame.
+    Ended,
+    /// The mediator closed the socket, or the transport failed. `replaced`
+    /// is decided from the close frame itself (see [`is_replacement`]), never
+    /// from error text.
+    Closed { error: ATMError, replaced: bool },
+}
+
+/// Whether the mediator closed this socket because a newer connection for
+/// the same DID took its place: close code 1008 (policy) with exactly the
+/// mediator's reason. Text that only contains the words does not count.
+fn is_replacement(frame: &tokio_tungstenite::tungstenite::protocol::CloseFrame) -> bool {
+    use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+    frame.code == CloseCode::Policy && frame.reason.as_str() == REPLACED_REASON
+}
+
+/// The next frame off the socket that matters: a binary frame, the end, or a
+/// close (with the mediator's reason) or transport error.
+async fn next_incoming(ws: &mut TspWsStream) -> Incoming {
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::Message;
     loop {
         match ws.next().await {
-            Some(Ok(Message::Binary(bytes))) => return Ok(Some(bytes.to_vec())),
+            Some(Ok(Message::Binary(bytes))) => return Incoming::Frame(bytes.to_vec()),
             Some(Ok(Message::Close(frame))) => {
-                return Err(ATMError::TransportError(match frame {
+                let replaced = frame.as_ref().is_some_and(is_replacement);
+                let error = ATMError::TransportError(match frame {
                     Some(frame) if !frame.reason.is_empty() => format!(
                         "tsp-mux websocket closed by the mediator: {} ({})",
                         frame.reason, frame.code
@@ -416,16 +467,30 @@ async fn next_binary(ws: &mut TspWsStream) -> Result<Option<Vec<u8>>, ATMError> 
                         )
                     }
                     None => "tsp-mux websocket closed by the mediator (no reason given)".into(),
-                }));
+                });
+                return Incoming::Closed { error, replaced };
             }
-            None => return Ok(None),
+            None => return Incoming::Ended,
             Some(Ok(_)) => continue,
             Some(Err(e)) => {
-                return Err(ATMError::TransportError(format!(
-                    "tsp-mux websocket receive error: {e}"
-                )));
+                return Incoming::Closed {
+                    error: ATMError::TransportError(format!(
+                        "tsp-mux websocket receive error: {e}"
+                    )),
+                    replaced: false,
+                };
             }
         }
+    }
+}
+
+/// [`next_incoming`] for the handshake: `Ok(None)` when the stream ended
+/// without a close frame; `Err` on a close frame or a transport error.
+async fn next_binary(ws: &mut TspWsStream) -> Result<Option<Vec<u8>>, ATMError> {
+    match next_incoming(ws).await {
+        Incoming::Frame(bytes) => Ok(Some(bytes)),
+        Incoming::Ended => Ok(None),
+        Incoming::Closed { error, .. } => Err(error),
     }
 }
 
@@ -484,13 +549,149 @@ pub(crate) async fn await_ready(
 pub enum TspMuxState {
     /// The socket is open.
     Open,
-    /// The socket is gone, and why: the mediator's close reason, a transport
-    /// error, or the client closing it. Nothing reconnects.
+    /// A managed socket is down and connecting again: `attempt` counts the
+    /// tries since it dropped (1 for the first), `reason` says why it dropped
+    /// or why the last try failed. Requests and sends fail meanwhile.
+    Reconnecting {
+        /// Tries since the drop, starting at 1.
+        attempt: u32,
+        /// Why the socket dropped, or the last try failed.
+        reason: String,
+    },
+    /// The socket is gone for good, and why: the mediator's close reason, a
+    /// transport error, the client closing it, or (for a managed socket) the
+    /// mediator no longer accepting `tsp-mux`. Nothing reconnects from here.
     Closed {
         /// What ended it.
         reason: String,
     },
 }
+
+/// How a managed `tsp-mux` socket
+/// ([`TspOps::connect_websocket_mux_managed`](super::tsp::TspOps::connect_websocket_mux_managed))
+/// paces its reconnects. The defaults match the SDK's DIDComm WebSocket:
+/// 1 s doubling to 60 s, and a connection that stayed up 30 s counts as
+/// healthy, so the next drop reconnects at once. Each wait is jittered by
+/// ±15 %, so many clients dropped together do not return together, and is
+/// never shorter than a refusing server's `Retry-After` (within the cap).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TspMuxReconnect {
+    /// The wait after the first failed try.
+    pub initial_delay: Duration,
+    /// The longest wait between tries.
+    pub max_delay: Duration,
+    /// How long a connection must stay up for the next drop to reconnect at
+    /// once, instead of where the backoff left off.
+    pub stable_after: Duration,
+}
+
+impl Default for TspMuxReconnect {
+    fn default() -> Self {
+        Self {
+            initial_delay: Duration::from_secs(1),
+            max_delay: Duration::from_secs(60),
+            stable_after: Duration::from_secs(30),
+        }
+    }
+}
+
+impl TspMuxReconnect {
+    /// Backoff from `initial` doubling to `max` (at least `initial`).
+    pub fn with_delays(mut self, initial: Duration, max: Duration) -> Self {
+        self.initial_delay = initial;
+        self.max_delay = max.max(initial);
+        self
+    }
+
+    /// How long a connection must stay up to reset the backoff.
+    pub fn with_stable_after(mut self, stable_after: Duration) -> Self {
+        self.stable_after = stable_after;
+        self
+    }
+
+    /// The wait before the next try, after one that waited `current`.
+    fn escalate(&self, current: Duration) -> Duration {
+        if current.is_zero() {
+            self.initial_delay
+        } else {
+            (current * 2).min(self.max_delay)
+        }
+    }
+}
+
+/// `d` jittered by ±15 %; zero stays zero.
+fn jittered(d: Duration) -> Duration {
+    use rand::RngExt;
+    if d.is_zero() {
+        return d;
+    }
+    d.mul_f64(rand::rng().random_range(0.85..1.15))
+}
+
+/// Opens a raw-TSP socket offering `tsp-mux`: the mediator's selection and the
+/// stream. The SDK's dials through the profile's mediator; tests dial a local
+/// server.
+#[async_trait::async_trait]
+pub(crate) trait Dialer: Send + Sync {
+    async fn dial(&self) -> Result<(TspWsStream, Option<String>), ATMError>;
+}
+
+struct AtmDialer {
+    atm: ATM,
+    profile: Arc<ATMProfile>,
+}
+
+#[async_trait::async_trait]
+impl Dialer for AtmDialer {
+    async fn dial(&self) -> Result<(TspWsStream, Option<String>), ATMError> {
+        let raw = self
+            .atm
+            .tsp()
+            .open_raw_socket(&self.profile, &MUX_OFFER)
+            .await?;
+        Ok((raw.ws, raw.selected))
+    }
+}
+
+/// Dial, check the selection and wait for `ready`: a mux connection, or why
+/// not. The socket is closed on failure.
+async fn open_mux(
+    dialer: &dyn Dialer,
+    demux: &Demux,
+    wait: Duration,
+) -> Result<(TspWsStream, MuxReady), ATMError> {
+    let (mut ws, selected) = dialer.dial().await?;
+    if let Err(e) = check_selection(selected.as_deref()) {
+        let _ = ws.close(None).await;
+        return Err(e);
+    }
+    match await_ready(&mut ws, demux, wait).await {
+        Ok(ready) => Ok((ws, ready)),
+        Err(e) => {
+            let _ = ws.close(None).await;
+            Err(e)
+        }
+    }
+}
+
+/// The reason the mediator closes a socket with (code 1008) when a newer
+/// connection for the same DID took its place. A managed socket stops on it:
+/// connecting again would replace the newer connection in turn, and the two
+/// would take it from each other for ever. The mediator decides delivery
+/// anyway, so this gives a hostile one nothing it lacks; matching the code
+/// and the exact reason keeps any other close or error from stopping it.
+const REPLACED_REASON: &str = "replaced by a newer connection";
+
+/// Whether a failed reconnect is final: the mediator (or the profile) no
+/// longer offers a mux connection at all. Anything else is tried again.
+fn is_final(e: &ATMError) -> bool {
+    matches!(e, ATMError::ConfigError(_))
+}
+
+/// Answers to requests that failed with a dropped socket, by thread id: a
+/// stored one arrives on the next connection, and is acknowledged there.
+const ABANDONED_KEPT: usize = 64;
 
 /// What the socket task is asked to do.
 enum Outgoing {
@@ -519,6 +720,8 @@ struct Shared {
     out: mpsc::Sender<Outgoing>,
     /// By thread id.
     pending: std::sync::Mutex<HashMap<String, Pending>>,
+    /// Thread ids of requests failed by a drop (newest last, bounded).
+    abandoned: std::sync::Mutex<std::collections::VecDeque<String>>,
     state: watch::Sender<TspMuxState>,
 }
 
@@ -528,7 +731,35 @@ impl Shared {
             TspMuxState::Closed { reason } => {
                 ATMError::TransportError(format!("tsp-mux connection closed: {reason}"))
             }
+            TspMuxState::Reconnecting { reason, .. } => {
+                ATMError::Disconnected(format!("tsp-mux connection down, reconnecting: {reason}"))
+            }
             TspMuxState::Open => ATMError::TransportError("tsp-mux connection closed".into()),
+        }
+    }
+
+    /// The socket dropped and a new one is on its way: say so, and fail every
+    /// request still waiting. Its answer, if the mediator stores it, comes on
+    /// the next connection; it is remembered so that answer is acknowledged.
+    /// An ack's answer is never stored, so whether a failed ack went through
+    /// is not known: acking again is safe.
+    fn lose(&self, reason: &str) {
+        self.state.send_replace(TspMuxState::Reconnecting {
+            attempt: 1,
+            reason: reason.to_string(),
+        });
+        let waiting: Vec<(String, Pending)> =
+            self.pending.lock().expect("pending map").drain().collect();
+        let mut abandoned = self.abandoned.lock().expect("abandoned list");
+        for (thread, p) in waiting {
+            let _ = p.answer.send(Err(ATMError::Disconnected(format!(
+                "tsp-mux connection dropped before the answer came ({reason}); the request \
+                 may still have been acted on"
+            ))));
+            abandoned.push_back(thread);
+        }
+        while abandoned.len() > ABANDONED_KEPT {
+            abandoned.pop_front();
         }
     }
 
@@ -744,47 +975,64 @@ impl TspMuxSender {
     }
 }
 
-/// The task that owns one socket: it reads and sorts every frame, writes what
-/// the senders send, and routes Trust Task answers to their requests.
-async fn run(
-    mut ws: TspWsStream,
-    demux: Demux,
-    shared: Arc<Shared>,
-    mut out: mpsc::Receiver<Outgoing>,
-    frames: mpsc::Sender<Result<TspMuxFrame, ATMError>>,
-) {
+/// Why [`pump`] stopped.
+enum Ended {
+    /// The client closed or dropped the socket: stop for good.
+    Client(String),
+    /// The socket went away: the reason, the error to hand `recv` when
+    /// nothing reconnects, and whether the mediator said a newer connection
+    /// replaced it.
+    Lost {
+        reason: String,
+        error: Option<ATMError>,
+        replaced: bool,
+    },
+}
+
+/// Serve one socket until it ends: read and sort every frame, write what the
+/// senders send, and route Trust Task answers to their requests.
+async fn pump(
+    ws: &mut TspWsStream,
+    demux: &Demux,
+    shared: &Arc<Shared>,
+    out: &mut mpsc::Receiver<Outgoing>,
+    frames: &mpsc::Sender<Result<TspMuxFrame, ATMError>>,
+) -> Ended {
     use futures_util::SinkExt;
     use tokio_tungstenite::tungstenite::Message;
     loop {
         tokio::select! {
-            incoming = next_binary(&mut ws) => match incoming {
-                Ok(Some(frame)) => match demux.sort(frame).await {
+            incoming = next_incoming(ws) => match incoming {
+                Incoming::Frame(frame) => match demux.sort(frame).await {
                     Sorted::Frame(f) => {
                         if let TspMuxFrame::Event(e) = &f
                             && let Some(refused) = MuxRefused::from_event(e)
                         {
-                            refuse_pending(&shared, &refused);
+                            refuse_pending(shared, &refused);
                         }
                         if frames.send(Ok(f)).await.is_err() {
-                            // The application dropped the socket.
                             let _ = ws.close(None).await;
-                            shared.finish("dropped by the client".into());
-                            return;
+                            return Ended::Client("dropped by the client".into());
                         }
                     }
                     Sorted::Answer { thread_id, doc, frame } => {
-                        answer_pending(&shared, &thread_id, doc, frame);
+                        answer_pending(shared, &thread_id, doc, frame);
                     }
                     Sorted::Ignore => {}
                 },
-                Ok(None) => {
-                    shared.finish("the socket ended without a close frame".into());
-                    return;
+                Incoming::Ended => {
+                    return Ended::Lost {
+                        reason: "the socket ended without a close frame".into(),
+                        error: None,
+                        replaced: false,
+                    };
                 }
-                Err(e) => {
-                    shared.finish(e.to_string());
-                    let _ = frames.send(Err(e)).await;
-                    return;
+                Incoming::Closed { error, replaced } => {
+                    return Ended::Lost {
+                        reason: error.to_string(),
+                        error: Some(error),
+                        replaced,
+                    };
                 }
             },
             cmd = out.recv() => match cmd {
@@ -799,20 +1047,149 @@ async fn run(
                     let _ = ws.close(None).await;
                     shared.finish("closed by the client".into());
                     let _ = done.send(());
-                    return;
+                    return Ended::Client("closed by the client".into());
                 }
                 // `Shared` holds a sender for as long as this task runs, so
                 // this does not happen; stop cleanly if it does.
                 None => {
                     let _ = ws.close(None).await;
-                    shared.finish("closed by the client".into());
-                    return;
+                    return Ended::Client("closed by the client".into());
                 }
             },
             _ = frames.closed() => {
                 let _ = ws.close(None).await;
-                shared.finish("dropped by the client".into());
+                return Ended::Client("dropped by the client".into());
+            }
+        }
+    }
+}
+
+/// How a managed socket connects again.
+struct Redial {
+    dialer: Arc<dyn Dialer>,
+    policy: TspMuxReconnect,
+    ready_wait: Duration,
+}
+
+/// The task that owns the connection: [`pump`] on each socket, and, for a
+/// managed one, connecting again with backoff when a socket goes (R6.2: the
+/// state says which).
+async fn run(
+    mut ws: TspWsStream,
+    demux: Demux,
+    shared: Arc<Shared>,
+    mut out: mpsc::Receiver<Outgoing>,
+    frames: mpsc::Sender<Result<TspMuxFrame, ATMError>>,
+    redial: Option<Redial>,
+) {
+    let mut up_since = tokio::time::Instant::now();
+    let mut delay = Duration::ZERO;
+    loop {
+        let (mut reason, error, replaced) =
+            match pump(&mut ws, &demux, &shared, &mut out, &frames).await {
+                Ended::Client(reason) => {
+                    shared.finish(reason);
+                    return;
+                }
+                Ended::Lost {
+                    reason,
+                    error,
+                    replaced,
+                } => (reason, error, replaced),
+            };
+        let Some(redial) = redial.as_ref().filter(|_| !replaced) else {
+            if replaced && redial.is_some() {
+                warn!(principal = %shared.principal, "tsp-mux socket replaced by a newer connection; not reconnecting");
+            }
+            shared.finish(reason);
+            if let Some(e) = error {
+                let _ = frames.send(Err(e)).await;
+            }
+            return;
+        };
+        warn!(principal = %shared.principal, %reason, "tsp-mux socket dropped; reconnecting");
+        shared.lose(&reason);
+        // Let go of the dead socket now (answering a close the mediator sent),
+        // not when the next one is up.
+        let _ = tokio::time::timeout(Duration::from_secs(1), ws.close(None)).await;
+        drop(ws);
+        delay = if up_since.elapsed() >= redial.policy.stable_after {
+            Duration::ZERO
+        } else {
+            redial.policy.escalate(delay)
+        };
+        let mut attempt: u32 = 1;
+        loop {
+            shared.state.send_replace(TspMuxState::Reconnecting {
+                attempt,
+                reason: reason.clone(),
+            });
+            let wait = jittered(delay);
+            let tried = {
+                let dial = async {
+                    tokio::time::sleep(wait).await;
+                    open_mux(redial.dialer.as_ref(), &demux, redial.ready_wait).await
+                };
+                tokio::pin!(dial);
+                loop {
+                    tokio::select! {
+                        tried = &mut dial => break Some(tried),
+                        cmd = out.recv() => match cmd {
+                            // Not queued for later: a frame sent now would go
+                            // out on a connection the sender has not seen.
+                            Some(Outgoing::Frame { done, .. }) => {
+                                let _ = done.send(Err(shared.closed_error()));
+                            }
+                            Some(Outgoing::Close { done }) => {
+                                shared.finish("closed by the client".into());
+                                let _ = done.send(());
+                                break None;
+                            }
+                            None => break None,
+                        },
+                        _ = frames.closed() => break None,
+                    }
+                }
+            };
+            let Some(tried) = tried else {
+                // Closed or dropped by the client while down.
+                shared.finish("closed by the client".into());
                 return;
+            };
+            match tried {
+                Ok((new_ws, ready)) => {
+                    ws = new_ws;
+                    up_since = tokio::time::Instant::now();
+                    shared.state.send_replace(TspMuxState::Open);
+                    debug!(principal = %shared.principal, session = %ready.session_id, "tsp-mux reconnected");
+                    if frames
+                        .send(Ok(TspMuxFrame::Reconnected {
+                            ready: Box::new(ready),
+                        }))
+                        .await
+                        .is_err()
+                    {
+                        let _ = ws.close(None).await;
+                        shared.finish("dropped by the client".into());
+                        return;
+                    }
+                    break;
+                }
+                Err(e) if is_final(&e) => {
+                    warn!(principal = %shared.principal, "tsp-mux not reconnecting: {e}");
+                    shared.finish(e.to_string());
+                    let _ = frames.send(Err(e)).await;
+                    return;
+                }
+                Err(e) => {
+                    debug!(principal = %shared.principal, attempt, "tsp-mux reconnect failed: {e}");
+                    delay = redial.policy.escalate(delay);
+                    if let Some(after) = e.http_status().and_then(|s| s.retry_after_secs) {
+                        delay = delay.max(Duration::from_secs(after).min(redial.policy.max_delay));
+                    }
+                    reason = e.to_string();
+                    attempt = attempt.saturating_add(1);
+                }
             }
         }
     }
@@ -851,27 +1228,47 @@ fn answer_pending(shared: &Arc<Shared>, thread_id: &str, doc: Value, frame: Vec<
         .lock()
         .expect("pending map")
         .remove(thread_id);
+    let stored = doc.get("type").and_then(Value::as_str) != Some(ACK_RESPONSE_TYPE);
     let Some(p) = pending else {
-        debug!(
-            thread_id,
-            "a Trust Task answer for a request not made on this socket; left for its owner"
-        );
+        let mut abandoned = shared.abandoned.lock().expect("abandoned list");
+        if let Some(at) = abandoned.iter().position(|t| t == thread_id) {
+            // Asked on a socket that dropped before the answer came: this
+            // connection made the request, so it consumes the answer.
+            abandoned.remove(at);
+            drop(abandoned);
+            debug!(
+                thread_id,
+                "the answer to a request failed by a drop; acknowledged"
+            );
+            if stored {
+                ack_answer(shared, frame);
+            }
+        } else {
+            debug!(
+                thread_id,
+                "a Trust Task answer for a request not made on this socket; left for its owner"
+            );
+        }
         return;
     };
-    let stored = doc.get("type").and_then(Value::as_str) != Some(ACK_RESPONSE_TYPE);
     let _ = p.answer.send(Ok(doc));
     if stored {
-        let sender = TspMuxSender {
-            shared: Arc::clone(shared),
-        };
-        tokio::spawn(async move {
-            match sender.ack_ids(&[message_id(&frame)]).await {
-                Ok(a) if a.is_complete() => {}
-                Ok(a) => debug!(refused = ?a.refused, "a Trust Task answer was not acknowledged"),
-                Err(e) => debug!("a Trust Task answer was not acknowledged: {e}"),
-            }
-        });
+        ack_answer(shared, frame);
     }
+}
+
+/// Acknowledge a stored Trust Task answer this socket consumed.
+fn ack_answer(shared: &Arc<Shared>, frame: Vec<u8>) {
+    let sender = TspMuxSender {
+        shared: Arc::clone(shared),
+    };
+    tokio::spawn(async move {
+        match sender.ack_ids(&[message_id(&frame)]).await {
+            Ok(a) if a.is_complete() => {}
+            Ok(a) => debug!(refused = ?a.refused, "a Trust Task answer was not acknowledged"),
+            Err(e) => debug!("a Trust Task answer was not acknowledged: {e}"),
+        }
+    });
 }
 
 /// An open `tsp-mux` socket. See the [module docs](self).
@@ -896,7 +1293,8 @@ impl TspMuxWebSocket {
     /// This connection's `ready` event: its session id and mux nonce (for
     /// [`sign_attach`](super::mux::sign_attach)), its limits and how many
     /// durable notices wait in the principal's inbox. It belongs to this
-    /// connection alone.
+    /// connection alone; on a managed socket, [`recv`](Self::recv) replaces it
+    /// when it returns [`TspMuxFrame::Reconnected`].
     pub fn ready(&self) -> &MuxReady {
         &self.ready
     }
@@ -924,17 +1322,28 @@ impl TspMuxWebSocket {
     ///
     /// When the socket goes away it is finished, and the caller is told:
     /// `Err` with the mediator's close code and reason when it sent a close
-    /// frame, `Ok(None)` when the stream ended without one. Nothing
-    /// reconnects; the members are not reachable through this socket any
-    /// more, and frames not acknowledged are delivered again on the next
-    /// connection.
+    /// frame, `Ok(None)` when the stream ended without one. The members are
+    /// not reachable through this socket any more, and frames not
+    /// acknowledged are delivered again on the next connection.
+    ///
+    /// A managed socket instead waits through a drop and returns
+    /// [`TspMuxFrame::Reconnected`] once connected again, having taken its
+    /// `ready` and started the member set again from it. It ends only as
+    /// [`TspMuxState::Closed`] says.
     pub async fn recv(&mut self) -> Result<Option<TspMuxFrame>, ATMError> {
         match self.frames.recv().await {
             None => Ok(None),
             Some(Err(e)) => Err(e),
             Some(Ok(frame)) => {
-                if let TspMuxFrame::Event(event) = &frame {
-                    self.members.apply(event);
+                match &frame {
+                    TspMuxFrame::Event(event) => {
+                        self.members.apply(event);
+                    }
+                    TspMuxFrame::Reconnected { ready } => {
+                        self.ready = (**ready).clone();
+                        self.members = MuxMembers::connected();
+                    }
+                    _ => {}
                 }
                 Ok(Some(frame))
             }
@@ -1012,14 +1421,37 @@ impl TspOps<'_> {
         &self,
         profile: &Arc<ATMProfile>,
     ) -> Result<TspMuxWebSocket, ATMError> {
+        self.connect_mux(profile, None).await
+    }
+
+    /// [`connect_websocket_mux`](Self::connect_websocket_mux), kept connected:
+    /// when the socket drops, it connects again by itself, paced by
+    /// `reconnect`, until the client closes or drops it. The first connection
+    /// must succeed, as for `connect_websocket_mux`; this fails as that does.
+    ///
+    /// While it is down, [`TspMuxWebSocket::state`] is
+    /// [`TspMuxState::Reconnecting`], sends and requests fail at once
+    /// (`ATMError::Disconnected`), and requests that were waiting fail. Each
+    /// new connection is announced by [`TspMuxFrame::Reconnected`] from
+    /// [`TspMuxWebSocket::recv`]. It gives up (state `Closed`, `recv` fails)
+    /// only when the mediator no longer accepts `tsp-mux`, or when a newer
+    /// connection for the same DID replaced this one. See the
+    /// [module docs](super::tsp_mux) for what carries over (nothing).
+    pub async fn connect_websocket_mux_managed(
+        &self,
+        profile: &Arc<ATMProfile>,
+        reconnect: TspMuxReconnect,
+    ) -> Result<TspMuxWebSocket, ATMError> {
+        self.connect_mux(profile, Some(reconnect)).await
+    }
+
+    async fn connect_mux(
+        &self,
+        profile: &Arc<ATMProfile>,
+        reconnect: Option<TspMuxReconnect>,
+    ) -> Result<TspMuxWebSocket, ATMError> {
         let (principal, mediator) = profile.dids()?;
         let (principal, mediator) = (principal.to_string(), mediator.to_string());
-        let raw = self.open_raw_socket(profile, &MUX_OFFER).await?;
-        let mut ws = raw.ws;
-        if let Err(e) = check_selection(raw.selected.as_deref()) {
-            let _ = ws.close(None).await;
-            return Err(e);
-        }
         let demux = Demux {
             principal: principal.clone(),
             mediator: mediator.clone(),
@@ -1029,32 +1461,62 @@ impl TspOps<'_> {
             }),
             resolver: super::mux::proof_resolver(self.atm),
         };
-        let ready = match await_ready(&mut ws, &demux, MUX_READY_TIMEOUT).await {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = ws.close(None).await;
-                return Err(e);
-            }
-        };
-        let (out_tx, out_rx) = mpsc::channel(16);
-        let (frames_tx, frames_rx) = mpsc::channel(FRAME_BUFFER);
-        let (state, _) = watch::channel(TspMuxState::Open);
-        let shared = Arc::new(Shared {
+        let dialer: Arc<dyn Dialer> = Arc::new(AtmDialer {
             atm: self.atm.clone(),
             profile: Arc::clone(profile),
-            principal,
-            mediator,
-            out: out_tx,
-            pending: std::sync::Mutex::new(HashMap::new()),
-            state,
         });
-        tokio::spawn(run(ws, demux, Arc::clone(&shared), out_rx, frames_tx));
-        Ok(TspMuxWebSocket {
-            frames: frames_rx,
-            sender: TspMuxSender { shared },
+        let (ws, ready) = open_mux(dialer.as_ref(), &demux, MUX_READY_TIMEOUT).await?;
+        let redial = reconnect.map(|policy| Redial {
+            dialer,
+            policy,
+            ready_wait: MUX_READY_TIMEOUT,
+        });
+        Ok(start(
+            self.atm.clone(),
+            Arc::clone(profile),
+            ws,
+            demux,
             ready,
-            members: MuxMembers::connected(),
-        })
+            redial,
+        ))
+    }
+}
+
+/// Hand an open mux connection to its task.
+fn start(
+    atm: ATM,
+    profile: Arc<ATMProfile>,
+    ws: TspWsStream,
+    demux: Demux,
+    ready: MuxReady,
+    redial: Option<Redial>,
+) -> TspMuxWebSocket {
+    let (out_tx, out_rx) = mpsc::channel(16);
+    let (frames_tx, frames_rx) = mpsc::channel(FRAME_BUFFER);
+    let (state, _) = watch::channel(TspMuxState::Open);
+    let shared = Arc::new(Shared {
+        atm,
+        profile,
+        principal: demux.principal.clone(),
+        mediator: demux.mediator.clone(),
+        out: out_tx,
+        pending: std::sync::Mutex::new(HashMap::new()),
+        abandoned: std::sync::Mutex::new(std::collections::VecDeque::new()),
+        state,
+    });
+    tokio::spawn(run(
+        ws,
+        demux,
+        Arc::clone(&shared),
+        out_rx,
+        frames_tx,
+        redial,
+    ));
+    TspMuxWebSocket {
+        frames: frames_rx,
+        sender: TspMuxSender { shared },
+        ready,
+        members: MuxMembers::connected(),
     }
 }
 
@@ -1679,5 +2141,490 @@ mod tests {
             sha256::digest(BASE64_URL_SAFE_NO_PAD.encode(frame))
         );
         assert_ne!(message_id(frame), frame_id(frame));
+    }
+
+    // ─── managed reconnect ──────────────────────────────────────────────────
+
+    use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+
+    /// What a fake mediator does with one accepted connection.
+    struct Conn {
+        selected: &'static str,
+        frames: Vec<Message>,
+        /// Close with this code and reason after the frames; `None` holds it
+        /// open.
+        close: Option<(CloseCode, &'static str)>,
+    }
+
+    /// Dials the fake mediator, offering `tsp-mux`.
+    struct LocalDialer {
+        addr: std::net::SocketAddr,
+    }
+
+    #[async_trait::async_trait]
+    impl Dialer for LocalDialer {
+        async fn dial(&self) -> Result<(TspWsStream, Option<String>), ATMError> {
+            let mut req = tokio_tungstenite::tungstenite::ClientRequestBuilder::new(
+                format!("ws://{}/ws", self.addr).parse().unwrap(),
+            )
+            .with_sub_protocol("bearer.t");
+            for p in MUX_OFFER {
+                req = req.with_sub_protocol(p);
+            }
+            let (ws, resp) = tokio_tungstenite::connect_async(req)
+                .await
+                .map_err(|e| ATMError::TransportError(format!("dial: {e}")))?;
+            let selected = resp
+                .headers()
+                .get("sec-websocket-protocol")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            Ok((ws, selected))
+        }
+    }
+
+    /// A mediator that serves `conns` in turn, one per accepted connection,
+    /// and counts the connections it accepted.
+    async fn serve_each(
+        conns: Vec<Conn>,
+    ) -> (Arc<LocalDialer>, Arc<std::sync::atomic::AtomicUsize>) {
+        use futures_util::StreamExt;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&accepted);
+        tokio::spawn(async move {
+            for conn in conns {
+                let Ok((tcp, _)) = listener.accept().await else {
+                    return;
+                };
+                count.fetch_add(1, Ordering::SeqCst);
+                let selected = conn.selected;
+                #[allow(clippy::result_large_err)]
+                let callback = move |_: &Request, mut resp: Response| {
+                    resp.headers_mut()
+                        .insert("sec-websocket-protocol", HeaderValue::from_static(selected));
+                    Ok(resp)
+                };
+                let mut ws = tokio_tungstenite::accept_hdr_async(tcp, callback)
+                    .await
+                    .unwrap();
+                for f in conn.frames {
+                    let _ = ws.send(f).await;
+                }
+                if let Some((code, reason)) = conn.close {
+                    let _ = ws
+                        .close(Some(CloseFrame {
+                            code,
+                            reason: reason.into(),
+                        }))
+                        .await;
+                }
+                tokio::spawn(async move { while ws.next().await.is_some() {} });
+            }
+            // Refuse anything after the script: keep accepting and dropping.
+            while let Ok((tcp, _)) = listener.accept().await {
+                count.fetch_add(1, Ordering::SeqCst);
+                drop(tcp);
+            }
+        });
+        (Arc::new(LocalDialer { addr }), accepted)
+    }
+
+    async fn test_atm() -> ATM {
+        use affinidi_tdk_common::{TDKSharedState, config::TDKConfig};
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        ATM::new(crate::config::ATMConfig::builder().build().unwrap(), tdk)
+            .await
+            .unwrap()
+    }
+
+    fn test_profile() -> Arc<ATMProfile> {
+        Arc::new(ATMProfile {
+            inner: Arc::new(crate::profiles::ATMProfileInner {
+                did: PRINCIPAL.into(),
+                alias: "phone".into(),
+                mediator: Arc::new(None),
+            }),
+        })
+    }
+
+    /// Open a socket on the fake mediator as `connect_mux` does, managed when
+    /// `policy` is given.
+    async fn open_on(
+        dialer: Arc<LocalDialer>,
+        k: &Keys,
+        policy: Option<TspMuxReconnect>,
+    ) -> TspMuxWebSocket {
+        let demux = demux(k).await;
+        let (ws, ready) = open_mux(dialer.as_ref(), &demux, Duration::from_secs(2))
+            .await
+            .expect("first connection");
+        let redial = policy.map(|policy| Redial {
+            dialer: dialer as Arc<dyn Dialer>,
+            policy,
+            ready_wait: Duration::from_secs(2),
+        });
+        start(test_atm().await, test_profile(), ws, demux, ready, redial)
+    }
+
+    async fn state_becomes(
+        state: &mut watch::Receiver<TspMuxState>,
+        want: impl Fn(&TspMuxState) -> bool,
+    ) -> TspMuxState {
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if want(&state.borrow_and_update()) {
+                    return state.borrow().clone();
+                }
+                state.changed().await.expect("state sender alive");
+            }
+        })
+        .await
+        .expect("state reached in time")
+    }
+
+    use tokio::time::timeout;
+
+    /// A managed socket that the mediator closes says why it is down, refuses
+    /// sends while it is, reconnects after its backoff, and announces the new
+    /// connection with its `ready` (R6.2).
+    #[tokio::test]
+    async fn a_managed_socket_reconnects_and_says_so() {
+        let k = keys();
+        let (dialer, accepted) = serve_each(vec![
+            Conn {
+                selected: "tsp-mux",
+                frames: vec![Message::Binary(ready_frame(&k).into())],
+                close: Some((CloseCode::Away, "instance shutting down")),
+            },
+            Conn {
+                selected: "tsp-mux",
+                frames: vec![Message::Binary(ready_frame(&k).into())],
+                close: None,
+            },
+        ])
+        .await;
+        let policy = TspMuxReconnect::default()
+            .with_delays(Duration::from_millis(300), Duration::from_secs(1));
+        let mut sock = open_on(dialer, &k, Some(policy)).await;
+        let mut state = sock.state();
+        let down = state_becomes(&mut state, |s| {
+            matches!(s, TspMuxState::Reconnecting { .. })
+        })
+        .await;
+        assert!(
+            matches!(&down, TspMuxState::Reconnecting { attempt: 1, reason } if reason.contains("instance shutting down")),
+            "{down:?}"
+        );
+        let err = sock.send(b"while down").await.unwrap_err();
+        assert!(matches!(err, ATMError::Disconnected(_)), "{err}");
+
+        let frame = timeout(Duration::from_secs(5), sock.recv())
+            .await
+            .expect("reconnected in time")
+            .expect("no error")
+            .expect("a frame");
+        let TspMuxFrame::Reconnected { ready } = frame else {
+            panic!("expected Reconnected, got {frame:?}");
+        };
+        assert_eq!(ready.mux_nonce, NONCE);
+        assert_eq!(sock.ready(), &*ready);
+        assert_eq!(*sock.state().borrow(), TspMuxState::Open);
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2);
+        sock.close().await.unwrap();
+    }
+
+    /// A managed socket replaced by a newer connection for the same DID stops
+    /// rather than take the connection back.
+    #[tokio::test]
+    async fn a_replaced_managed_socket_does_not_reconnect() {
+        let k = keys();
+        let (dialer, accepted) = serve_each(vec![Conn {
+            selected: "tsp-mux",
+            frames: vec![Message::Binary(ready_frame(&k).into())],
+            close: Some((CloseCode::Policy, REPLACED_REASON)),
+        }])
+        .await;
+        let policy = TspMuxReconnect::default()
+            .with_delays(Duration::from_millis(20), Duration::from_millis(50));
+        let mut sock = open_on(dialer, &k, Some(policy)).await;
+        let err = timeout(Duration::from_secs(5), sock.recv())
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("replaced by a newer connection"),
+            "{err}"
+        );
+        assert!(matches!(*sock.state().borrow(), TspMuxState::Closed { .. }));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// Only the mediator's own replacement close stops a managed socket: code
+    /// 1008 with exactly its reason. Other codes, or text that merely holds
+    /// the words, do not.
+    #[test]
+    fn only_the_exact_replacement_close_counts() {
+        use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+        let close = |code, reason: &str| CloseFrame {
+            code,
+            reason: reason.to_string().into(),
+        };
+        assert!(is_replacement(&close(CloseCode::Policy, REPLACED_REASON)));
+        assert!(!is_replacement(&close(CloseCode::Away, REPLACED_REASON)));
+        assert!(!is_replacement(&close(CloseCode::Normal, REPLACED_REASON)));
+        assert!(!is_replacement(&close(
+            CloseCode::Policy,
+            "x: replaced by a newer connection (forwarded)"
+        )));
+        assert!(!is_replacement(&close(CloseCode::Policy, "")));
+    }
+
+    /// A close that only looks like a replacement (another code, or the words
+    /// inside other text) is an ordinary drop: the managed socket reconnects.
+    #[tokio::test]
+    async fn a_lookalike_replacement_close_still_reconnects() {
+        let k = keys();
+        let (dialer, accepted) = serve_each(vec![
+            Conn {
+                selected: "tsp-mux",
+                frames: vec![Message::Binary(ready_frame(&k).into())],
+                close: Some((CloseCode::Away, REPLACED_REASON)),
+            },
+            Conn {
+                selected: "tsp-mux",
+                frames: vec![Message::Binary(ready_frame(&k).into())],
+                close: Some((
+                    CloseCode::Policy,
+                    "upstream: replaced by a newer connection",
+                )),
+            },
+            Conn {
+                selected: "tsp-mux",
+                frames: vec![Message::Binary(ready_frame(&k).into())],
+                close: None,
+            },
+        ])
+        .await;
+        let policy = TspMuxReconnect::default()
+            .with_delays(Duration::from_millis(20), Duration::from_millis(50));
+        let mut sock = open_on(dialer, &k, Some(policy)).await;
+        for _ in 0..2 {
+            let frame = timeout(Duration::from_secs(5), sock.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                matches!(frame, Some(TspMuxFrame::Reconnected { .. })),
+                "{frame:?}"
+            );
+        }
+        assert_eq!(*sock.state().borrow(), TspMuxState::Open);
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 3);
+        sock.close().await.unwrap();
+    }
+
+    /// When the mediator stops selecting `tsp-mux`, a managed socket gives up:
+    /// `recv` says why and the state is `Closed`.
+    #[tokio::test]
+    async fn a_managed_socket_stops_when_mux_is_no_longer_offered() {
+        let k = keys();
+        let (dialer, _) = serve_each(vec![
+            Conn {
+                selected: "tsp-mux",
+                frames: vec![Message::Binary(ready_frame(&k).into())],
+                close: Some((CloseCode::Away, "bye")),
+            },
+            Conn {
+                selected: "tsp",
+                frames: vec![],
+                close: None,
+            },
+        ])
+        .await;
+        let policy = TspMuxReconnect::default()
+            .with_delays(Duration::from_millis(20), Duration::from_millis(50));
+        let mut sock = open_on(dialer, &k, Some(policy)).await;
+        let err = timeout(Duration::from_secs(5), sock.recv())
+            .await
+            .expect("in time")
+            .unwrap_err();
+        assert!(err.to_string().contains("mux unavailable"), "{err}");
+        assert!(matches!(*sock.state().borrow(), TspMuxState::Closed { .. }));
+    }
+
+    /// A failed try backs off and counts its attempts; a later one succeeds.
+    #[tokio::test]
+    async fn failed_tries_are_counted_until_one_connects() {
+        let k = keys();
+        let (dialer, accepted) = serve_each(vec![
+            Conn {
+                selected: "tsp-mux",
+                frames: vec![Message::Binary(ready_frame(&k).into())],
+                close: Some((CloseCode::Away, "bye")),
+            },
+            // Upgraded but never sends `ready`, then goes.
+            Conn {
+                selected: "tsp-mux",
+                frames: vec![],
+                close: Some((CloseCode::Away, "not ready")),
+            },
+            Conn {
+                selected: "tsp-mux",
+                frames: vec![Message::Binary(ready_frame(&k).into())],
+                close: None,
+            },
+        ])
+        .await;
+        let policy = TspMuxReconnect::default()
+            .with_delays(Duration::from_millis(20), Duration::from_millis(100));
+        let mut sock = open_on(dialer, &k, Some(policy)).await;
+        let mut state = sock.state();
+        let second = state_becomes(
+            &mut state,
+            |s| matches!(s, TspMuxState::Reconnecting { attempt, .. } if *attempt >= 2),
+        )
+        .await;
+        assert!(
+            matches!(second, TspMuxState::Reconnecting { attempt: 2, .. }),
+            "{second:?}"
+        );
+        let frame = timeout(Duration::from_secs(5), sock.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(frame, TspMuxFrame::Reconnected { .. }),
+            "{frame:?}"
+        );
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 3);
+        sock.close().await.unwrap();
+    }
+
+    /// A plain socket does not reconnect: the close ends `recv` with the
+    /// mediator's reason, and nothing dials again.
+    #[tokio::test]
+    async fn a_plain_socket_does_not_reconnect() {
+        let k = keys();
+        let (dialer, accepted) = serve_each(vec![Conn {
+            selected: "tsp-mux",
+            frames: vec![Message::Binary(ready_frame(&k).into())],
+            close: Some((CloseCode::Away, "instance shutting down")),
+        }])
+        .await;
+        let mut sock = open_on(dialer, &k, None).await;
+        let err = timeout(Duration::from_secs(5), sock.recv())
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(err.to_string().contains("instance shutting down"), "{err}");
+        assert!(matches!(*sock.state().borrow(), TspMuxState::Closed { .. }));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// Closing a managed socket while it is down stops it for good.
+    #[tokio::test]
+    async fn closing_while_down_stops_reconnecting() {
+        let k = keys();
+        let (dialer, accepted) = serve_each(vec![Conn {
+            selected: "tsp-mux",
+            frames: vec![Message::Binary(ready_frame(&k).into())],
+            close: Some((CloseCode::Away, "bye")),
+        }])
+        .await;
+        let policy =
+            TspMuxReconnect::default().with_delays(Duration::from_secs(2), Duration::from_secs(2));
+        let sock = open_on(dialer, &k, Some(policy)).await;
+        let mut state = sock.state();
+        state_becomes(&mut state, |s| {
+            matches!(s, TspMuxState::Reconnecting { .. })
+        })
+        .await;
+        sock.close().await.unwrap();
+        let closed = state_becomes(&mut state, |s| matches!(s, TspMuxState::Closed { .. })).await;
+        assert_eq!(
+            closed,
+            TspMuxState::Closed {
+                reason: "closed by the client".into()
+            }
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// A request failed by a drop is remembered, so its stored answer, when
+    /// it comes on the next connection, is this socket's to consume (R1.7),
+    /// not left for an owner that no longer waits.
+    #[tokio::test]
+    async fn an_answer_to_a_request_failed_by_a_drop_is_consumed() {
+        let k = keys();
+        let (dialer, _) = serve_each(vec![Conn {
+            selected: "tsp-mux",
+            frames: vec![Message::Binary(ready_frame(&k).into())],
+            close: None,
+        }])
+        .await;
+        let sock = open_on(dialer, &k, None).await;
+        let shared = Arc::clone(&sock.sender.shared);
+        let (answer, answered) = oneshot::channel();
+        shared.pending.lock().unwrap().insert(
+            "urn:uuid:t1".into(),
+            Pending {
+                frame_id: "f1".into(),
+                answer,
+            },
+        );
+        shared.lose("network gone");
+        let failed = answered.await.unwrap().unwrap_err();
+        assert!(matches!(failed, ATMError::Disconnected(_)), "{failed}");
+        assert!(matches!(
+            *shared.state.borrow(),
+            TspMuxState::Reconnecting { attempt: 1, .. }
+        ));
+        assert_eq!(
+            shared.abandoned.lock().unwrap().iter().collect::<Vec<_>>(),
+            ["urn:uuid:t1"]
+        );
+        answer_pending(
+            &shared,
+            "urn:uuid:t1",
+            json!({ "type": "https://trusttasks.org/spec/messaging/mux/attach/0.1#response" }),
+            b"frame".to_vec(),
+        );
+        assert!(shared.abandoned.lock().unwrap().is_empty(), "consumed");
+    }
+
+    #[test]
+    fn the_backoff_doubles_to_its_cap_and_jitter_stays_in_band() {
+        let p = TspMuxReconnect::default();
+        let mut d = Duration::ZERO;
+        let mut seen = Vec::new();
+        for _ in 0..9 {
+            d = p.escalate(d);
+            seen.push(d.as_secs());
+        }
+        assert_eq!(seen, [1, 2, 4, 8, 16, 32, 60, 60, 60]);
+        assert_eq!(jittered(Duration::ZERO), Duration::ZERO);
+        for _ in 0..1000 {
+            let j = jittered(Duration::from_secs(10)).as_secs_f64();
+            assert!((8.5..11.5).contains(&j), "{j}");
+        }
+        let p =
+            TspMuxReconnect::default().with_delays(Duration::from_secs(5), Duration::from_secs(1));
+        assert_eq!(
+            p.max_delay,
+            Duration::from_secs(5),
+            "max is at least initial"
+        );
     }
 }

@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.45.12 — tsp-mux: a socket that reconnects by itself
+
+- New `TspOps::connect_websocket_mux_managed(profile, TspMuxReconnect)`: a
+  `tsp-mux` socket that connects again by itself when it drops, with backoff
+  (by default 1 s doubling to 60 s, ±15 % jitter, never sooner than a
+  refusing server's `Retry-After`; a connection that stayed up 30 s
+  reconnects at once). `TspMuxReconnect::default().with_delays(..)` and
+  `.with_stable_after(..)` tune it. The first connection must succeed, as
+  for `connect_websocket_mux`.
+- While it is down, the state is the new `TspMuxState::Reconnecting
+  { attempt, reason }` (R6.2). Sends and requests fail at once with
+  `ATMError::Disconnected`, not queued; requests that were waiting fail too.
+  The stored answer to a failed request, arriving on the next connection,
+  is acknowledged by the socket rather than left in the inbox (R1.7).
+- Each new connection is announced by the new
+  `TspMuxFrame::Reconnected { ready }`. `recv` takes its `ready` (new
+  session id and mux nonce) and starts the member set again. Stored grants
+  come back as an `attached` event; members attached with statements must be
+  attached again, signed for the new `ready`. Frames not acknowledged before
+  the drop are delivered again: handle a repeat by its `message_id`.
+- It gives up (state `Closed`, `recv` fails) only when the mediator no longer
+  selects `tsp-mux`, when a newer connection for the same DID replaced it
+  (close code 1008 with exactly the reason "replaced by a newer connection":
+  reconnecting would replace the newer one, and the two would fight; any other
+  code, or text that only contains those words, is an ordinary drop), or when
+  the client closes or drops it.
+- `connect_websocket_mux` is unchanged: it still never reconnects.
+- `messaging/mux/ack` 0.1 re-pinned as amended by
+  trustoverip/dtgwg-trust-tasks-tf#1179 (wording: `notPermitted` only for a
+  member whose mail the connection reads).
+- Additive: `TspMuxState` and `TspMuxFrame` are `#[non_exhaustive]`.
+
 ## 0.45.11 — the WebSocket refresh deadline handles any token lifetime
 
 - The proactive token refresh computed `ttl * 4 / 5` in `u64` from the access
