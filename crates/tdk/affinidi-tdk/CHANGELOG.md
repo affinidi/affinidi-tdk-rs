@@ -1,5 +1,12 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.42.0) — affinidi-mdoc 0.6
+
+- **Changed:** the `mdoc` feature moves to `affinidi-mdoc` 0.6: proximity
+  session keys are derived as ISO/IEC 18013-5 specifies (different keys from
+  0.5), and `MdocBuilder::build` requires a device key and a validity window.
+  See that crate's CHANGELOG.
+
 ## Unreleased (0.41.0) — affinidi-sd-jwt 0.2, affinidi-vc 0.3
 
 - **Changed:** the `sd-jwt` feature moves to `affinidi-sd-jwt` 0.2: key binding

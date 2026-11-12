@@ -158,6 +158,36 @@ impl ValidityInfo {
         Ok(())
     }
 
+    /// Check that the window is well-formed, without reference to the clock:
+    /// all three dates parse as RFC 3339, `signed` is not later than
+    /// `validFrom`, and `validFrom` is earlier than `validUntil`.
+    ///
+    /// [`crate::MdocBuilder::build`] calls this before signing.
+    pub fn validate(&self) -> Result<()> {
+        use time::format_description::well_known::Rfc3339;
+
+        let signed = time::OffsetDateTime::parse(&self.signed, &Rfc3339)
+            .map_err(|e| MdocError::InvalidMso(format!("signed not RFC 3339: {e}")))?;
+        let valid_from = time::OffsetDateTime::parse(&self.valid_from, &Rfc3339)
+            .map_err(|e| MdocError::InvalidMso(format!("validFrom not RFC 3339: {e}")))?;
+        let valid_until = time::OffsetDateTime::parse(&self.valid_until, &Rfc3339)
+            .map_err(|e| MdocError::InvalidMso(format!("validUntil not RFC 3339: {e}")))?;
+
+        if valid_from < signed {
+            return Err(MdocError::InvalidMso(format!(
+                "validFrom {} is earlier than signed {}",
+                self.valid_from, self.signed
+            )));
+        }
+        if valid_until <= valid_from {
+            return Err(MdocError::InvalidMso(format!(
+                "validUntil {} is not later than validFrom {}",
+                self.valid_until, self.valid_from
+            )));
+        }
+        Ok(())
+    }
+
     /// Convenience wrapper for [`ValidityInfo::check`] using the current
     /// system time.
     pub fn check_now(&self) -> Result<()> {
@@ -191,7 +221,12 @@ impl MobileSecurityObject {
             // Add decoy digests
             let max_id = items.iter().map(|i| i.digest_id).max().unwrap_or(0);
             for i in 0..decoys_per_namespace {
-                let decoy_id = max_id + 1 + i as u32;
+                let decoy_id = u32::try_from(i)
+                    .ok()
+                    .and_then(|offset| max_id.checked_add(1)?.checked_add(offset))
+                    .ok_or_else(|| {
+                        MdocError::InvalidMso(format!("decoy digest ID overflows in `{ns}`"))
+                    })?;
                 let decoy = generate_decoy_digest(digest_algorithm)?;
                 ns_digests.insert(decoy_id, serde_bytes::ByteBuf::from(decoy));
             }
@@ -313,6 +348,48 @@ mod tests {
                     .unwrap()
             );
         }
+    }
+
+    #[test]
+    fn decoy_digest_ids_that_do_not_fit_in_u32_are_an_error() {
+        let item = IssuerSignedItem::new(u32::MAX, "name", ciborium::Value::Text("Alice".into()));
+        let mut namespaces = BTreeMap::new();
+        namespaces.insert("test".to_string(), vec![item]);
+
+        let result = MobileSecurityObject::create(
+            "test",
+            "SHA-256",
+            &namespaces,
+            test_device_key(),
+            test_validity(),
+            1,
+        );
+        assert!(matches!(result, Err(MdocError::InvalidMso(_))));
+    }
+
+    #[test]
+    fn validate_accepts_a_well_formed_window() {
+        let validity = ValidityInfo {
+            signed: "2026-01-01T00:00:00Z".into(),
+            valid_from: "2026-01-02T00:00:00Z".into(),
+            valid_until: "2027-01-01T00:00:00Z".into(),
+        };
+        assert!(validity.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_an_empty_or_inverted_window() {
+        let empty = ValidityInfo {
+            signed: "2026-01-01T00:00:00Z".into(),
+            valid_from: "2026-01-01T00:00:00Z".into(),
+            valid_until: "2026-01-01T00:00:00Z".into(),
+        };
+        let inverted = ValidityInfo {
+            valid_until: "2025-01-01T00:00:00Z".into(),
+            ..empty.clone()
+        };
+        assert!(matches!(empty.validate(), Err(MdocError::InvalidMso(_))));
+        assert!(matches!(inverted.validate(), Err(MdocError::InvalidMso(_))));
     }
 
     #[test]

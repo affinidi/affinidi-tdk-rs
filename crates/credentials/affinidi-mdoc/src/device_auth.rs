@@ -387,15 +387,7 @@ pub fn derive_emac_key(
     session_transcript: &SessionTranscript,
 ) -> Result<[u8; 32]> {
     let shared_secret = ecdh_shared_secret(device_key, reader_ephemeral_private_key)?;
-    let transcript_bytes = session_transcript.to_cbor_bytes()?;
-    let tagged = ciborium::Value::Tag(24, Box::new(ciborium::Value::Bytes(transcript_bytes)));
-    let mut session_transcript_bytes = Vec::new();
-    ciborium::into_writer(&tagged, &mut session_transcript_bytes)
-        .map_err(|e| MdocError::DeviceAuth(format!("SessionTranscriptBytes encoding: {e}")))?;
-    let salt = {
-        use sha2::Digest;
-        Sha256::digest(&session_transcript_bytes)
-    };
+    let salt = session_transcript.hkdf_salt()?;
     let mut key = [0u8; 32];
     hkdf::Hkdf::<Sha256>::new(Some(&salt), &shared_secret)
         .expand(b"EMacKey", &mut key)

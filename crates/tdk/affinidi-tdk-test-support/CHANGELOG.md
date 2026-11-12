@@ -1,5 +1,12 @@
 # Affinidi TDK Test Support
 
+## Unreleased (0.12.0) — mdoc 0.6
+
+`mdoc_scenario` takes and returns `affinidi-mdoc` types, and `affinidi-mdoc`
+moves to 0.6, so this crate moves a minor with it. No source change: the
+scenario already sets the device key and validity that `MdocBuilder` now
+requires.
+
 ## Unreleased (0.11.1) — affinidi-crypto from the registry
 
 - **Changed:** `affinidi-crypto` is a plain `"0.2"` requirement instead of a

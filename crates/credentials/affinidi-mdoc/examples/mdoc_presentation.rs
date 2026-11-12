@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use affinidi_mdoc::cose::test_utils::{TestSigner, TestVerifier};
 use affinidi_mdoc::issuer_signed_item::cbor_to_json;
-use affinidi_mdoc::{DeviceResponse, EIDAS_PID_NAMESPACE, MdocBuilder, ValidityInfo};
+use affinidi_mdoc::{CoseKey, DeviceResponse, EIDAS_PID_NAMESPACE, MdocBuilder, ValidityInfo};
 
 fn main() {
     println!("=== mdoc Selective Disclosure Presentation ===\n");
@@ -27,6 +27,8 @@ fn main() {
     let signer = TestSigner::new(issuer_key);
 
     let mdoc = MdocBuilder::new("eu.europa.ec.eudi.pid.1")
+        // The holder's device public key (a placeholder Ed25519 key here)
+        .device_key(CoseKey::new_ed25519(vec![7; 32]).unwrap().to_cbor_value())
         .validity(ValidityInfo {
             signed: "2024-06-15T12:00:00Z".to_string(),
             valid_from: "2024-06-15T12:00:00Z".to_string(),

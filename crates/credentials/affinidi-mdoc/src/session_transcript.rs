@@ -10,9 +10,11 @@
  * ```
  *
  * The session transcript binds together the device engagement, reader key,
- * and handover data. Its CBOR-encoded bytes serve as:
- * - The salt for HKDF session key derivation
- * - Part of the context for DeviceAuthentication and ReaderAuthentication
+ * and handover data. It is used:
+ * - hashed, as the HKDF salt for session and MAC key derivation:
+ *   `salt = SHA-256(SessionTranscriptBytes)`, where
+ *   `SessionTranscriptBytes = #6.24(bstr .cbor SessionTranscript)`
+ * - as part of the context for DeviceAuthentication and ReaderAuthentication
  *
  * # Handover Variants
  *
@@ -224,10 +226,10 @@ impl SessionTranscript {
         Ok(ciborium::Value::Array(vec![de_val, ek_val, handover_val]))
     }
 
-    /// Encode to CBOR bytes.
+    /// Encode the `SessionTranscript` array to CBOR bytes (untagged).
     ///
-    /// These bytes are used as the HKDF salt for session key derivation
-    /// and as context in DeviceAuthentication / ReaderAuthentication.
+    /// This is not the HKDF salt: key derivation hashes the tagged form,
+    /// see [`SessionTranscript::to_tagged_bytes`].
     pub fn to_cbor_bytes(&self) -> Result<Vec<u8>> {
         let value = self.to_cbor_value()?;
         let mut buf = Vec::new();
@@ -236,13 +238,30 @@ impl SessionTranscript {
         Ok(buf)
     }
 
-    /// Derive session keys from an ECDH shared secret and this transcript.
-    ///
-    /// Convenience method that computes transcript CBOR bytes and passes
-    /// them to `SessionKeys::derive()`.
+    /// `SessionTranscriptBytes = #6.24(bstr .cbor SessionTranscript)`
+    /// (ISO/IEC 18013-5 §9.1.5.1).
+    pub fn to_tagged_bytes(&self) -> Result<Vec<u8>> {
+        let tagged =
+            ciborium::Value::Tag(24, Box::new(ciborium::Value::Bytes(self.to_cbor_bytes()?)));
+        let mut buf = Vec::new();
+        ciborium::into_writer(&tagged, &mut buf).map_err(|e| {
+            MdocError::SessionTranscript(format!("SessionTranscriptBytes encoding: {e}"))
+        })?;
+        Ok(buf)
+    }
+
+    /// The HKDF salt for `SKDevice`, `SKReader` and `EMacKey`:
+    /// SHA-256(SessionTranscriptBytes).
+    pub fn hkdf_salt(&self) -> Result<[u8; 32]> {
+        let mut salt = [0u8; 32];
+        salt.copy_from_slice(&Sha256::digest(self.to_tagged_bytes()?));
+        Ok(salt)
+    }
+
+    /// Derive `SKDevice` and `SKReader` from an ECDH shared secret and this
+    /// transcript. Same as [`SessionKeys::derive`].
     pub fn derive_session_keys(&self, shared_secret: &[u8]) -> Result<SessionKeys> {
-        let transcript_bytes = self.to_cbor_bytes()?;
-        SessionKeys::derive(shared_secret, &transcript_bytes)
+        SessionKeys::derive(shared_secret, self)
     }
 }
 

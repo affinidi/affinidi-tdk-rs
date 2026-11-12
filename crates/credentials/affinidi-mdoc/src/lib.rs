@@ -125,7 +125,7 @@ pub use issuer_signed_item::{IssuerSignedItem, cbor_to_json, json_to_cbor};
 pub use mso::{DeviceKeyInfo, MobileSecurityObject, ValidityInfo};
 pub use namespace::{EIDAS_PID_NAMESPACE, MDL_NAMESPACE};
 pub use reader_auth::{ItemsRequest, ReaderAuthentication};
-pub use session::SessionKeys;
+pub use session::{SessionEncryption, SessionKeys, SessionRole};
 pub use session_transcript::{Handover, SessionTranscript};
 pub use tag24::Tag24;
 pub use verify::{DeviceBinding, IssuerAuthHeaders, IssuerKey, VerifiedMdoc, VerifyOptions};

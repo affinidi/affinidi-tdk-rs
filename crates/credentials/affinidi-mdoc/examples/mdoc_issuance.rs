@@ -12,7 +12,7 @@
 
 use affinidi_mdoc::cose::test_utils::{TestSigner, TestVerifier};
 use affinidi_mdoc::issuer_signed_item::cbor_to_json;
-use affinidi_mdoc::{EIDAS_PID_NAMESPACE, MdocBuilder, ValidityInfo};
+use affinidi_mdoc::{CoseKey, EIDAS_PID_NAMESPACE, MdocBuilder, ValidityInfo};
 
 fn main() {
     println!("=== mdoc Issuance Example ===\n");
@@ -24,6 +24,8 @@ fn main() {
 
     // 2. Build an eIDAS PID credential
     let mdoc = MdocBuilder::new("eu.europa.ec.eudi.pid.1")
+        // The holder's device public key (a placeholder Ed25519 key here)
+        .device_key(CoseKey::new_ed25519(vec![7; 32]).unwrap().to_cbor_value())
         .digest_algorithm("SHA-256")
         .validity(ValidityInfo {
             signed: "2024-06-15T12:00:00Z".to_string(),
