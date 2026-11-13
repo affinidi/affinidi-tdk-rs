@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.46.3 — a reply to a message sent over REST is fetched by the id the mediator stored it under
+
+- `send_message` with `wait_for_response` over REST (a profile without a
+  websocket) asked the mediator for a message whose id was the digest of the
+  *request*. The mediator stores its reply under the reply's own digest, and
+  names that id in the POST's answer (`Stored`), so the lookup matched
+  nothing. Every Trust Task answered this way failed with "No Message
+  retrieved from Mediator", and so did a `trust-task-error` refusal from a
+  mediator that sends documents.
+- The reply is now fetched by the id the answer names for this profile. The
+  request digest is used only when the answer names none, as before. A
+  problem report fetched this way is returned as `ATMError::ProblemReport`,
+  as the websocket path already did.
+
+Behaviour change (R3.6): Trust Tasks over REST now succeed where they always
+failed, and with `auto_delete` the reply is deleted once read. No API change.
+
 ## 0.46.2 — Trust Task refusals as `trust-task-error` documents (`ATMError::TrustTaskError`)
 
 - Every Trust Task the SDK sends to the mediator now carries the top-level
