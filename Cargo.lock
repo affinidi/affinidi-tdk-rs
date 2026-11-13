@@ -530,7 +530,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm-service"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-messaging-didcomm",
@@ -618,7 +618,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-sdk"
-version = "0.46.4"
+version = "0.47.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-authentication",

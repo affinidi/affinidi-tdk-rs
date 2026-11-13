@@ -21,7 +21,7 @@ path = "src/mediator_administration/main.rs"
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
 ## SDK for connecting to and communicating with a running mediator
-affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.46" }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.47" }
 ## Trust Tasks runtime (the `hijack_admin` example builds a `TrustTask`). The
 ## task types come from `affinidi_messaging_sdk::tasks`.
 trust-tasks-rs = { version = "0.39", default-features = false }

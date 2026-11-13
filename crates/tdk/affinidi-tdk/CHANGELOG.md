@@ -8,6 +8,8 @@
   secrets come back in `Zeroizing` buffers. See the `affinidi-crypto`
   CHANGELOG for the migration. `affinidi-messaging-helpers` and
   `affinidi-messaging-text-client` require this version.
+- **Changed (breaking):** requires `affinidi-messaging-sdk` 0.47
+  (`trust-tasks-rs` / `trust-tasks-proof` 0.39), whose types it re-exports.
 
 ## Unreleased (0.43.0) — affinidi-messaging-sdk 0.46
 
