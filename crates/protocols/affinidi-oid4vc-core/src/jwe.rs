@@ -145,10 +145,9 @@ impl std::fmt::Debug for EcdhEsDecryptionKey {
 impl EcdhEsDecryptionKey {
     /// A fresh random P-256 key, identified by `kid` in its JWK.
     pub fn generate(kid: impl Into<String>) -> Self {
-        let kp = affinidi_crypto::p256::generate_random();
         Self {
             kid: kid.into(),
-            scalar: Zeroizing::new(kp.private_bytes.clone()),
+            scalar: affinidi_crypto::p256::generate_random().into_private_bytes(),
         }
     }
 
@@ -280,17 +279,15 @@ pub fn decrypt_compact(
     let apu = optional_b64(&header, "apu")?;
     let apv = optional_b64(&header, "apv")?;
 
-    let cek = Zeroizing::new(
-        derive_key_es_recipient(
-            &key.private()?,
-            &epk,
-            enc.as_str().as_bytes(),
-            &apu,
-            &apv,
-            enc.key_bits(),
-        )
-        .map_err(|e| JweError::Crypto(e.to_string()))?,
-    );
+    let cek = derive_key_es_recipient(
+        &key.private()?,
+        &epk,
+        enc.as_str().as_bytes(),
+        &apu,
+        &apv,
+        enc.key_bits(),
+    )
+    .map_err(|e| JweError::Crypto(e.to_string()))?;
 
     let plaintext = enc.open(
         &b64(ct, "ciphertext")?,
@@ -338,17 +335,15 @@ pub fn encrypt_compact(
     let header_b64 = URL_SAFE_NO_PAD
         .encode(serde_json::to_vec(&header).map_err(|e| JweError::Malformed(e.to_string()))?);
 
-    let cek = Zeroizing::new(
-        derive_key_es(
-            &ephemeral.private,
-            &recipient,
-            enc.as_str().as_bytes(),
-            apu,
-            apv,
-            enc.key_bits(),
-        )
-        .map_err(|e| JweError::Crypto(e.to_string()))?,
-    );
+    let cek = derive_key_es(
+        &ephemeral.private,
+        &recipient,
+        enc.as_str().as_bytes(),
+        apu,
+        apv,
+        enc.key_bits(),
+    )
+    .map_err(|e| JweError::Crypto(e.to_string()))?;
     let iv = gcm::generate_iv();
     let (ct, tag) = enc.seal(plaintext, &cek, &iv, header_b64.as_bytes())?;
     Ok(format!(

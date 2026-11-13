@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk-test-support"
-version = "0.12.0"
+version = "0.12.1"
 description = "Shared in-process test fixtures and harnesses for the Affinidi TDK workspace"
 edition.workspace = true
 authors.workspace = true
@@ -19,7 +19,7 @@ publish = true
 # ── TI2: did:web/webvh mock server + StaticResolver ──────────────────────
 ## `DID`/`Document` types and the resolver traits the StaticResolver implements.
 ## Path + explicit version so the crate stays publishable once the API settles.
-affinidi-did-common = { version = "0.4", path = "../../identity/affinidi-did-common" }
+affinidi-did-common = { version = "0.4.7", path = "../../identity/affinidi-did-common" }
 affinidi-did-resolver-traits = { version = "0.1", path = "../../identity/affinidi-did-resolver-traits" }
 ## In-process HTTP server backing MockDidWebServer.
 axum = "0.8"
@@ -43,19 +43,17 @@ affinidi-sd-jwt = { version = "0.2", path = "../../credentials/affinidi-sd-jwt" 
 affinidi-status-list = { version = "0.1", path = "../../credentials/affinidi-status-list" }
 ## `ed25519_pub_to_did_key` for deterministic issuer/holder/verifier DIDs;
 ## `jose::key_agreement` backs the didcomm_fuzz deterministic keypairs.
-# Version only, no path: the workspace's affinidi-crypto is 0.3 while this
-# crate stays on the published 0.2 until the workspace moves to 0.3.
-affinidi-crypto = "0.2"
+affinidi-crypto = { version = "0.3", path = "../../core/affinidi-crypto" }
 
 # ── #477: deterministic DIDComm envelope fixtures for fuzzing ──────────────
 ## pack/unpack + Message types the didcomm_fuzz seed corpus packs against. A
 ## dev-only edge — didcomm does not depend on test-support, so this is acyclic.
-affinidi-messaging-didcomm = { version = "0.15.9", path = "../../messaging/affinidi-messaging-didcomm" }
+affinidi-messaging-didcomm = { version = "0.15.14", path = "../../messaging/affinidi-messaging-didcomm" }
 
 # ── TI4a: seeded did:peer generation (determinism module) ─────────────────
 ## Seeded `Secret` constructors (generate_ed25519(.., Some(seed)) etc.) +
 ## KeyType; did-common's generate_peer / PeerCreateKey assemble the did:peer.
-affinidi-secrets-resolver = { version = "0.5", path = "../../core/affinidi-secrets-resolver" }
+affinidi-secrets-resolver = { version = "0.5.18", path = "../../core/affinidi-secrets-resolver" }
 ## EdDSA signer/verifier backing the scenario's JWS signing (the workspace
 ## sd-jwt crate ships only an HMAC test signer).
 ed25519-dalek = { version = "3" }

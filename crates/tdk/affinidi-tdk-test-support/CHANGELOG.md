@@ -1,5 +1,10 @@
 # Affinidi TDK Test Support
 
+## Unreleased (0.12.1) — affinidi-crypto 0.3
+
+- **Changed:** requires `affinidi-crypto` 0.3, from the workspace path again.
+  No code change. The re-exported `Curve`, `PrivateKeyAgreement` and
+  `PublicKeyAgreement` now refer to `affinidi-crypto` 0.3.
 ## Unreleased (0.12.0) — mdoc 0.6
 
 `mdoc_scenario` takes and returns `affinidi-mdoc` types, and `affinidi-mdoc`

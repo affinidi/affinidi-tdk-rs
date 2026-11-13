@@ -1,5 +1,14 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.44.0) — affinidi-crypto 0.3
+
+- **Changed (breaking):** `affinidi_tdk::affinidi_crypto` re-exports
+  `affinidi-crypto` 0.3. Its key pairs wipe themselves when dropped, so their
+  fields can no longer be moved out (use `into_parts()`), and its derived
+  secrets come back in `Zeroizing` buffers. See the `affinidi-crypto`
+  CHANGELOG for the migration. `affinidi-messaging-helpers` and
+  `affinidi-messaging-text-client` require this version.
+
 ## Unreleased (0.43.0) — affinidi-messaging-sdk 0.46
 
 - **Changed (breaking):** the `messaging` feature re-exports

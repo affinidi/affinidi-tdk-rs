@@ -176,17 +176,22 @@ impl KeyMaterial {
     /// Generate a random Ed25519 signing key pair
     #[cfg(feature = "ed25519")]
     pub fn generate_ed25519(seed: Option<&[u8; 32]>) -> Self {
-        let kp = affinidi_crypto::ed25519::generate(seed);
-        Self::from_parts(kp.key_type, kp.private_bytes, kp.public_bytes, kp.jwk)
+        let mut kp = affinidi_crypto::ed25519::generate(seed).into_parts();
+        Self::from_parts(
+            kp.key_type,
+            std::mem::take(&mut *kp.private_bytes),
+            kp.public_bytes,
+            kp.jwk,
+        )
     }
 
     /// Generate a random X25519 key agreement key pair
     #[cfg(feature = "ed25519")]
     pub fn generate_x25519(seed: Option<&[u8; 32]>) -> Result<Self, KeyError> {
-        let kp = affinidi_crypto::ed25519::generate_x25519(seed);
+        let mut kp = affinidi_crypto::ed25519::generate_x25519(seed).into_parts();
         Ok(Self::from_parts(
             kp.key_type,
-            kp.private_bytes,
+            std::mem::take(&mut *kp.private_bytes),
             kp.public_bytes,
             kp.jwk,
         ))
@@ -195,10 +200,10 @@ impl KeyMaterial {
     /// Generate a random P-256 key pair
     #[cfg(feature = "p256")]
     pub fn generate_p256(seed: Option<&[u8]>) -> Result<Self, KeyError> {
-        let kp = affinidi_crypto::p256::generate(seed)?;
+        let mut kp = affinidi_crypto::p256::generate(seed)?.into_parts();
         Ok(Self::from_parts(
             kp.key_type,
-            kp.private_bytes,
+            std::mem::take(&mut *kp.private_bytes),
             kp.public_bytes,
             kp.jwk,
         ))
@@ -207,10 +212,10 @@ impl KeyMaterial {
     /// Generate a random P-384 key pair
     #[cfg(feature = "p384")]
     pub fn generate_p384(seed: Option<&[u8]>) -> Result<Self, KeyError> {
-        let kp = affinidi_crypto::p384::generate(seed)?;
+        let mut kp = affinidi_crypto::p384::generate(seed)?.into_parts();
         Ok(Self::from_parts(
             kp.key_type,
-            kp.private_bytes,
+            std::mem::take(&mut *kp.private_bytes),
             kp.public_bytes,
             kp.jwk,
         ))
@@ -219,10 +224,10 @@ impl KeyMaterial {
     /// Generate a random secp256k1 key pair
     #[cfg(feature = "k256")]
     pub fn generate_secp256k1(seed: Option<&[u8]>) -> Result<Self, KeyError> {
-        let kp = affinidi_crypto::secp256k1::generate(seed)?;
+        let mut kp = affinidi_crypto::secp256k1::generate(seed)?.into_parts();
         Ok(Self::from_parts(
             kp.key_type,
-            kp.private_bytes,
+            std::mem::take(&mut *kp.private_bytes),
             kp.public_bytes,
             kp.jwk,
         ))

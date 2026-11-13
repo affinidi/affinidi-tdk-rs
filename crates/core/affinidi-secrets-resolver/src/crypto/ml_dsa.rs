@@ -30,11 +30,12 @@ fn ml_dsa_secret(
     key_type: KeyType,
     kp: affinidi_crypto::ml_dsa::KeyPair,
 ) -> Secret {
+    let mut kp = kp.into_parts();
     let mut secret = Secret {
         id: kid.map(str::to_string).unwrap_or_else(random_kid),
         type_: SecretType::Multikey,
         secret_material: SecretMaterial::PrivateKeyMultibase(String::new()),
-        private_bytes: kp.private_bytes,
+        private_bytes: std::mem::take(&mut *kp.private_bytes),
         public_bytes: kp.public_bytes,
         key_type,
     };

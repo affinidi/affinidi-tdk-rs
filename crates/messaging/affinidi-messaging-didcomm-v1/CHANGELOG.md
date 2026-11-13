@@ -1,5 +1,10 @@
 # affinidi-messaging-didcomm-v1 changelog
 
+## Unreleased (0.2.4) — affinidi-crypto 0.3
+
+- **Changed:** requires `affinidi-crypto` 0.3. No code change. The
+  `CryptoError` conversion now refers to `affinidi-crypto` 0.3.
+
 ## Unreleased (0.2.3) — re-adding an identity replaces its verkey binding
 
 ### Changed (behaviour, R3.6)

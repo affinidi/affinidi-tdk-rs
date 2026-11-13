@@ -162,7 +162,7 @@ pub fn decrypt_bound(
             }
             let apu_raw = skid.as_bytes();
 
-            let kek = kek_256(Zeroizing::new(ecdh::derive_key_1pu_recipient(
+            let kek = kek_256(ecdh::derive_key_1pu_recipient(
                 recipient_private,
                 sender.public(),
                 &epk,
@@ -171,9 +171,9 @@ pub fn decrypt_bound(
                 &apv_raw,
                 &tag,
                 256,
-            )?))?;
+            )?)?;
 
-            let cek = Zeroizing::new(aes_kw::unwrap(&kek, &wrapped_key)?);
+            let cek = aes_kw::unwrap(&kek, &wrapped_key)?;
             (cek, true, Some(skid.to_string()))
         }
         ALG_ANONCRYPT => {
@@ -184,15 +184,15 @@ pub fn decrypt_bound(
                 .transpose()
                 .map_err(|e| DIDCommError::InvalidMessage(format!("invalid apu: {e}")))?
                 .unwrap_or_default();
-            let kek = kek_256(Zeroizing::new(ecdh::derive_key_es_recipient(
+            let kek = kek_256(ecdh::derive_key_es_recipient(
                 recipient_private,
                 &epk,
                 ALG_ANONCRYPT.as_bytes(),
                 &apu_raw,
                 &apv_raw,
                 256,
-            )?))?;
-            let cek = Zeroizing::new(aes_kw::unwrap(&kek, &wrapped_key)?);
+            )?)?;
+            let cek = aes_kw::unwrap(&kek, &wrapped_key)?;
             (cek, false, None)
         }
         alg => {

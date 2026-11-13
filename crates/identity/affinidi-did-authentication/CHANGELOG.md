@@ -1,5 +1,9 @@
 # Affinidi DID Authentication
 
+## Unreleased (0.3.16) — affinidi-crypto 0.3
+
+- **Changed:** requires `affinidi-crypto` 0.3. No code change and no
+  `affinidi-crypto` type in this crate's API.
 ## 0.3.15 — challenge request body built with `serde_json`
 
 The `/challenge` request body was assembled with `format!`, so the DID was not

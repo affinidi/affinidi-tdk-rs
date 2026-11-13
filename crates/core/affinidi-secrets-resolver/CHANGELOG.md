@@ -1,5 +1,19 @@
 # Affinidi Secrets Manager
 
+## Unreleased (0.5.18) — affinidi-crypto 0.3
+
+- **Changed:** requires `affinidi-crypto` 0.3. `Secret::generate_ed25519`,
+  `generate_x25519`, `generate_p256`, `generate_p384`, `generate_p521`,
+  `generate_secp256k1`, `generate_ml_dsa_*` and `generate_slh_dsa_sha2_128s`
+  take the key out of the generated key pair with `into_parts()`, so the
+  private key moves into the `Secret` without a copy and the rest of the key
+  pair is wiped.
+- **Compatibility (R3.6):** no signature change in this crate. The re-exported
+  `KeyType` and the `CryptoError` conversion now refer to `affinidi-crypto`
+  0.3; a caller that also uses `affinidi-crypto` directly needs 0.3 for the
+  types to match. Released as a patch, per ADR 0003, because `didwebvh-rs`
+  pins this crate at `0.5`.
+
 ## Unreleased (0.5.17) — fewer unwiped copies of private keys
 
 `Secret` is zeroize-on-drop, but some of the buffers it is built from were

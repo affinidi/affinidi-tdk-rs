@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (0.15.14) — affinidi-crypto 0.3
+
+- **Changed:** requires `affinidi-crypto` 0.3. The KEKs and CEKs it derives
+  and unwraps already come back in `Zeroizing` buffers, so the wrappers this
+  crate added around them are gone. No behaviour change.
+- **Compatibility (R3.6):** no signature change in this crate. The
+  `PrivateKeyAgreement`, `PublicKeyAgreement` and `Curve` in `identity` and
+  the `CryptoError` conversion now refer to `affinidi-crypto` 0.3; a caller
+  that builds them from its own `affinidi-crypto` needs 0.3.
+
 ## Unreleased (0.15.13) — key material is wiped after use
 
 - **Changed:** `PrivateIdentity` wipes `signing_private` when it is dropped.

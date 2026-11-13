@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-webs"
-version = "0.13.3"
+version = "0.13.4"
 description = "Implementation of the did:webs DID method: did:web discovery with KERI-verified key state"
 repository.workspace = true
 edition.workspace = true
@@ -29,10 +29,10 @@ affinidi-keri = { version = "0.8.1", optional = true, default-features = false }
 # Resolution parses the `dt` of KERI replies, which BADA orders by; creation
 # also stamps them, which needs the clock.
 chrono = { version = "0.4", default-features = false, features = ["std"] }
-affinidi-crypto = "0.2"
+affinidi-crypto = "0.3"
 affinidi-keri-core = "0.8"
 affinidi-keri-crypto = "0.8"
-affinidi-did-common = "0.4"
+affinidi-did-common = { version = "0.4.7", path = "../../affinidi-did-common" }
 # Converts a key-state Ed25519 key to its X25519 key (`key_agreement`).
 ed25519-dalek = "3"
 # A KERI 2.x registry's nonce and each update's blinding UUID (`create`).

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased (0.4.7) — affinidi-crypto 0.3
+
+- **Changed:** requires `affinidi-crypto` 0.3. `KeyMaterial::generate_ed25519`,
+  `generate_x25519`, `generate_p256`, `generate_p384` and
+  `generate_secp256k1` take the key out of the generated key pair with
+  `into_parts()`, so the private key moves into the `KeyMaterial` without a
+  copy.
+- **Compatibility (R3.6):** no signature change in this crate. `KeyType` and
+  the `KeyError::Crypto` source now refer to `affinidi-crypto` 0.3; a caller
+  that also uses `affinidi-crypto` directly needs 0.3 for the types to match.
+  Released as a patch, per ADR 0003, because `didwebvh-rs` and
+  `trust-tasks-proof` pin this crate at `0.4`.
+
 ## Unreleased (0.4.6) — `Debug` leaves private keys out; created did:peer keys zeroize
 
 - **Changed:** `Debug` for `KeyMaterial` printed `private_bytes` in full, and

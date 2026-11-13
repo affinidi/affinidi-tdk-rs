@@ -1,5 +1,12 @@
 # Affinidi Data Integrity Changelog
 
+## Unreleased (0.8.7) — affinidi-crypto 0.3
+
+- **Changed:** requires `affinidi-crypto` 0.3. No code change. `KeyType`
+  (in `ResolvedKey` and the errors) now refers to `affinidi-crypto` 0.3; a
+  caller that builds a `ResolvedKey` from its own `affinidi-crypto` needs 0.3.
+  Released as a patch, per ADR 0003, because `didwebvh-rs` and
+  `trust-tasks-proof` pin this crate at `0.8`.
 ## 0.8.6 — errors name the right suite and key; no document contents in debug logs
 
 **Behaviour change (R3.6)** in error values only; what signs and verifies is

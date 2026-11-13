@@ -1,5 +1,13 @@
 # Affinidi OID4VC Core Changelog
 
+## Unreleased (0.1.11) — affinidi-crypto 0.3
+
+- **Changed:** requires `affinidi-crypto` 0.3 (`jwe` feature).
+  `EcdhEsDecryptionKey::generate` moves the scalar out of the generated key
+  pair instead of cloning it, and the derived CEK comes back from
+  `affinidi-crypto` already in a `Zeroizing` buffer. No behaviour change and
+  no `affinidi-crypto` type in this crate's API.
+
 ## Unreleased (0.1.10) — compact JWE with `ECDH-ES` direct (`jwe` feature)
 
 New opt-in `jwe` feature and module: the OpenID4VP 1.0 encrypted authorization
