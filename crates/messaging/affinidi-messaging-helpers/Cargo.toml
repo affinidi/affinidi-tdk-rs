@@ -24,7 +24,7 @@ path = "src/mediator_administration/main.rs"
 affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.46" }
 ## Trust Tasks runtime (the `hijack_admin` example builds a `TrustTask`). The
 ## task types come from `affinidi_messaging_sdk::tasks`.
-trust-tasks-rs = { version = "0.38", default-features = false }
+trust-tasks-rs = { version = "0.39", default-features = false }
 ## TDK for DID resolution and crypto utilities
 affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.44" }
 ## DIDComm message types — used by example binaries
