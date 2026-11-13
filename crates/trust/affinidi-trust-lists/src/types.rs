@@ -147,6 +147,18 @@ pub enum ServiceDigitalIdentity {
 }
 
 impl ServiceDigitalIdentity {
+    /// Whether the identity carries no value (zero bytes or an empty
+    /// string). An empty identity identifies nothing: the registry does not
+    /// index it and a lookup with one finds nothing.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::X509Certificate(bytes) | Self::X509Ski(bytes) | Self::PublicKey(bytes) => {
+                bytes.is_empty()
+            }
+            Self::X509SubjectName(text) | Self::Did(text) => text.is_empty(),
+        }
+    }
+
     /// Compute the SHA-256 fingerprint of the identity for indexing.
     ///
     /// The identity kind is hashed ahead of its value, so equal bytes or

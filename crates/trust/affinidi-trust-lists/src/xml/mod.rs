@@ -241,19 +241,21 @@ pub fn parse_trust_list_xml(xml: &str) -> Result<UnverifiedTrustList> {
                         }
                         "ServiceStatus" => service.status = text,
                         "StatusStartingTime" => service.status_time = text,
-                        "X509Certificate" if in_identity => {
+                        // An identity element with no content identifies
+                        // nothing and is not kept.
+                        "X509Certificate" if in_identity && !text.is_empty() => {
                             service
                                 .identities
                                 .push(ServiceDigitalIdentity::X509Certificate(decode_certificate(
                                     &text,
                                 )?));
                         }
-                        "X509SKI" if in_identity => {
+                        "X509SKI" if in_identity && !text.is_empty() => {
                             service.identities.push(ServiceDigitalIdentity::X509Ski(
                                 decode_base64("X509SKI", &text)?,
                             ));
                         }
-                        "X509SubjectName" if in_identity => {
+                        "X509SubjectName" if in_identity && !text.is_empty() => {
                             service
                                 .identities
                                 .push(ServiceDigitalIdentity::X509SubjectName(text));
@@ -728,6 +730,64 @@ mod tests {
             services[1].digital_identities.is_empty(),
             "a service without identities takes none from history or the signature"
         );
+    }
+
+    #[test]
+    fn empty_identity_elements_are_not_kept_or_indexed() {
+        let xml = r#"<?xml version="1.0"?>
+<TrustServiceStatusList>
+  <SchemeInformation>
+    <SchemeOperatorName><Name>Authority</Name></SchemeOperatorName>
+    <SchemeTerritory>DE</SchemeTerritory>
+    <ListIssueDateTime>2026-01-01T00:00:00Z</ListIssueDateTime>
+    <NextUpdate><dateTime>2026-07-01T00:00:00Z</dateTime></NextUpdate>
+  </SchemeInformation>
+  <TrustServiceProviderList>
+    <TrustServiceProvider>
+      <TSPInformation><TSPName><Name>Provider</Name></TSPName></TSPInformation>
+      <TSPServices>
+        <TSPService>
+          <ServiceInformation>
+            <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+            <ServiceName><Name>Blank CA</Name></ServiceName>
+            <ServiceDigitalIdentity>
+              <DigitalId><X509Certificate></X509Certificate></DigitalId>
+              <DigitalId><X509SKI>  </X509SKI></DigitalId>
+              <DigitalId><X509SubjectName></X509SubjectName></DigitalId>
+            </ServiceDigitalIdentity>
+            <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+            <StatusStartingTime>2025-01-01T00:00:00Z</StatusStartingTime>
+          </ServiceInformation>
+        </TSPService>
+      </TSPServices>
+    </TrustServiceProvider>
+  </TrustServiceProviderList>
+</TrustServiceStatusList>"#;
+        let tl = parse_trust_list_xml(xml).unwrap().assume_authenticated();
+        assert!(
+            tl.trust_service_providers[0].services[0]
+                .digital_identities
+                .is_empty()
+        );
+
+        let mut registry = crate::TrustListRegistry::new();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-02-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        registry.load_trust_list(&tl, now).unwrap();
+        assert_eq!(registry.entry_count(), 0);
+        for identity in [
+            ServiceDigitalIdentity::X509Certificate(Vec::new()),
+            ServiceDigitalIdentity::X509Ski(Vec::new()),
+            ServiceDigitalIdentity::X509SubjectName(String::new()),
+            ServiceDigitalIdentity::PublicKey(Vec::new()),
+            ServiceDigitalIdentity::Did(String::new()),
+        ] {
+            assert!(
+                !registry.lookup_by_identity_at(&identity, now).is_trusted(),
+                "{identity:?} must not be trusted"
+            );
+        }
     }
 
     #[test]
