@@ -18,10 +18,12 @@ affinidi-messaging-didcomm = { path = "..", features = ["arbitrary"] }
 # This is a standalone workspace, so it does NOT inherit the parent's
 # [patch.crates-io]. didcomm pulls affinidi-crypto by version (=0.3); without
 # this redirect cargo would resolve a second copy from crates.io and the build
-# fails with duplicate-type errors. affinidi-crypto has no internal path deps,
-# so this single redirect is all that's needed.
+# fails with duplicate-type errors. affinidi-crypto in turn pulls
+# affinidi-encoding by version, so that is redirected too, keeping the fuzzer
+# on the in-tree code.
 [patch.crates-io]
 affinidi-crypto = { path = "../../../core/affinidi-crypto" }
+affinidi-encoding = { path = "../../../core/affinidi-encoding" }
 
 [[bin]]
 name = "unpack"

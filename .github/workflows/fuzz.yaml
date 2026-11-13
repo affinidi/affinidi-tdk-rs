@@ -7,7 +7,19 @@ on:
   pull_request:
     paths:
       - "crates/messaging/affinidi-messaging-didcomm/**"
+      - "crates/messaging/affinidi-messaging-didcomm-v1/**"
+      - "crates/messaging/affinidi-tsp/**"
       - "crates/credentials/affinidi-sd-jwt/**"
+      - "crates/credentials/affinidi-rdf-encoding/**"
+      - "crates/credentials/affinidi-status-list/**"
+      - "crates/credentials/affinidi-mdoc/**"
+      - "crates/trust/affinidi-trust-lists/**"
+      - "crates/core/affinidi-cesr/**"
+      # Not fuzzed directly, but in the fuzz crates' dependency graph by path:
+      # a registry dependency change here moves the committed fuzz locks.
+      - "crates/core/affinidi-crypto/**"
+      - "crates/core/affinidi-encoding/**"
+      - "scripts/check-fuzz-lock.sh"
       - ".github/workflows/fuzz.yaml"
   schedule:
     # 03:17 UTC daily — off the hour to avoid the scheduler rush.
@@ -36,6 +48,34 @@ jobs:
             target: parse
           - dir: crates/credentials/affinidi-sd-jwt/fuzz
             target: verify
+          - dir: crates/core/affinidi-cesr/fuzz
+            target: matter
+          - dir: crates/core/affinidi-cesr/fuzz
+            target: stream
+          - dir: crates/messaging/affinidi-tsp/fuzz
+            target: envelope
+          - dir: crates/messaging/affinidi-tsp/fuzz
+            target: unpack
+          - dir: crates/messaging/affinidi-messaging-didcomm-v1/fuzz
+            target: unpack
+          - dir: crates/credentials/affinidi-rdf-encoding/fuzz
+            target: nquads
+          - dir: crates/credentials/affinidi-rdf-encoding/fuzz
+            target: jsonld
+          - dir: crates/credentials/affinidi-status-list/fuzz
+            target: bitstring
+          - dir: crates/credentials/affinidi-status-list/fuzz
+            target: token
+          - dir: crates/credentials/affinidi-mdoc/fuzz
+            target: issuer_signed
+          - dir: crates/credentials/affinidi-mdoc/fuzz
+            target: device_response
+          - dir: crates/credentials/affinidi-mdoc/fuzz
+            target: engagement
+          - dir: crates/trust/affinidi-trust-lists/fuzz
+            target: xml
+          - dir: crates/trust/affinidi-trust-lists/fuzz
+            target: certificate
     env:
       # Override the repo's stable rust-toolchain.toml for this job.
       RUSTUP_TOOLCHAIN: nightly
@@ -115,6 +155,8 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: fuzz-artifacts-${{ matrix.target }}
+          # Target names repeat across fuzz crates (several `unpack`s), so the
+          # job index keeps artifact names unique within a run.
+          name: fuzz-artifacts-${{ strategy.job-index }}-${{ matrix.target }}
           path: ${{ matrix.dir }}/artifacts/
           if-no-files-found: ignore

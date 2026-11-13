@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<TrustServiceStatusList>
+  <SchemeInformation>
+    <SchemeOperatorName><Name>Authority</Name></SchemeOperatorName>
+    <SchemeTerritory>DE</SchemeTerritory>
+    <ListIssueDateTime>2026-01-01T00:00:00Z</ListIssueDateTime>
+    <NextUpdate><dateTime>2026-07-01T00:00:00Z</dateTime></NextUpdate>
+  </SchemeInformation>
+  <TrustServiceProviderList>
+    <TrustServiceProvider>
+      <TSPInformation><TSPName><Name>Provider</Name></TSPName></TSPInformation>
+      <TSPServices>
+        <TSPService>
+          <ServiceInformation>
+            <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+            <ServiceName><Name>Blank CA</Name></ServiceName>
+            <ServiceDigitalIdentity>
+              <DigitalId><X509Certificate></X509Certificate></DigitalId>
+              <DigitalId><X509SKI>  </X509SKI></DigitalId>
+              <DigitalId><X509SubjectName></X509SubjectName></DigitalId>
+            </ServiceDigitalIdentity>
+            <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+            <StatusStartingTime>2025-01-01T00:00:00Z</StatusStartingTime>
+          </ServiceInformation>
+        </TSPService>
+      </TSPServices>
+    </TrustServiceProvider>
+  </TrustServiceProviderList>
+</TrustServiceStatusList>

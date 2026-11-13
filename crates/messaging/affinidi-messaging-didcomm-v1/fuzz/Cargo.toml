@@ -1,0 +1,32 @@
+[package]
+name = "affinidi-messaging-didcomm-v1-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+affinidi-messaging-didcomm-v1 = { path = ".." }
+
+# This is a standalone workspace, so it does NOT inherit the parent's
+# [patch.crates-io]. didcomm-v1 pulls affinidi-crypto by version; redirect it
+# to the in-tree crate so the fuzzer builds the code on this branch, and
+# likewise affinidi-encoding, which affinidi-crypto pulls by version.
+[patch.crates-io]
+affinidi-crypto = { path = "../../../core/affinidi-crypto" }
+affinidi-encoding = { path = "../../../core/affinidi-encoding" }
+
+[[bin]]
+name = "unpack"
+path = "fuzz_targets/unpack.rs"
+test = false
+doc = false
+bench = false
+
+# Standalone workspace: cargo-fuzz needs nightly, the parent pins stable.
+# Keeping this detached means the parent's `cargo build --workspace`, lints and
+# publish checks never touch it.
+[workspace]

@@ -1,0 +1,31 @@
+[package]
+name = "affinidi-trust-lists-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+affinidi-trust-lists = { path = ".." }
+
+[[bin]]
+name = "xml"
+path = "fuzz_targets/xml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "certificate"
+path = "fuzz_targets/certificate.rs"
+test = false
+doc = false
+bench = false
+
+# Standalone workspace: cargo-fuzz needs nightly, the parent pins stable.
+# Keeping this detached means the parent's `cargo build --workspace`, lints and
+# publish checks never touch it.
+[workspace]
