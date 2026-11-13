@@ -30,14 +30,15 @@ The public-key form *derives* the address, and emits it EIP-55 checksummed.
 
 Named networks (`mainnet`, `morden`, `ropsten`, `rinkeby`, `goerli`, `kovan`)
 map to their chain ids; anything else must be an explicit `0x`-prefixed hex
-chain id.
+chain id in lower case without leading zeros (`0x2a`, not `0x2A` or `0x02a`).
 
 ## Stricter than the crate it replaced
 
 The upstream implementation switched on identifier *length* alone and copied
 the result into `blockchainAccountId` unchecked, so `did:ethr:0xZZ…` (42
 characters, not hex) resolved to a document naming an impossible account. This
-crate validates the hex and rejects it.
+crate validates the hex and rejects it. A mixed-case address must carry a
+correct EIP-55 checksum.
 
 ## Conformance
 
