@@ -2,7 +2,7 @@
 //!
 //! This crate provides:
 //! - JWK (JSON Web Key) types per RFC 7517
-//! - Key generation for various curves (Ed25519, X25519, P-256, P-384, secp256k1)
+//! - Key generation for various curves (Ed25519, X25519, P-256, P-384, P-521, secp256k1)
 //! - Key conversion utilities (e.g., Ed25519 → X25519)
 //! - `did:key` encode/decode helpers for raw-bytes APIs (HPKE, ECDH) —
 //!   see [`did_key`]

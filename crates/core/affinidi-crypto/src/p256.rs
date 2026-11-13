@@ -113,6 +113,10 @@ pub fn sign(private_key_bytes: &[u8], data: &[u8]) -> Result<Vec<u8>> {
 ///
 /// `public_key_bytes` should be the uncompressed or compressed SEC1 encoding.
 /// `signature_bytes` should be 64 bytes (r || s).
+///
+/// Returns `Ok(false)` when the signature does not verify,
+/// `CryptoError::KeyError` for an invalid public key and
+/// `CryptoError::Decoding` for a malformed signature.
 pub fn verify(public_key_bytes: &[u8], data: &[u8], signature_bytes: &[u8]) -> Result<bool> {
     use p256::ecdsa::{Signature, signature::Verifier};
 
@@ -120,7 +124,7 @@ pub fn verify(public_key_bytes: &[u8], data: &[u8], signature_bytes: &[u8]) -> R
         .map_err(|e| CryptoError::KeyError(format!("invalid P-256 public key: {e}")))?;
 
     let signature = Signature::from_slice(signature_bytes)
-        .map_err(|e| CryptoError::KeyError(format!("invalid signature: {e}")))?;
+        .map_err(|e| CryptoError::Decoding(format!("invalid P-256 signature: {e}")))?;
 
     match verifying_key.verify(data, &signature) {
         Ok(()) => Ok(true),
@@ -131,6 +135,13 @@ pub fn verify(public_key_bytes: &[u8], data: &[u8], signature_bytes: &[u8]) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_signature_is_a_decoding_error() {
+        let key_pair = generate(None).unwrap();
+        let err = verify(&key_pair.public_bytes, b"data", &[0u8; 10]).unwrap_err();
+        assert!(matches!(err, CryptoError::Decoding(_)), "got {err:?}");
+    }
 
     #[test]
     fn p256_key_pair_wipes_on_drop() {

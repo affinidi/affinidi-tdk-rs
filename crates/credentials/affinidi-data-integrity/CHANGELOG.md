@@ -1,5 +1,28 @@
 # Affinidi Data Integrity Changelog
 
+## 0.8.6 — errors name the right suite and key; no document contents in debug logs
+
+**Behaviour change (R3.6)** in error values only; what signs and verifies is
+unchanged:
+
+- `eddsa-rdfc-2022` verification errors (`InvalidSignature`) now carry
+  `suite: EddsaRdfc2022`. Both EdDSA suites reported `EddsaJcs2022`.
+- Signing with a `Secret` whose Ed25519 private key is not 32 bytes returns
+  `DataIntegrityError::Signing` (message: "Ed25519 private key must be
+  exactly 32 bytes, got N"). It returned `InvalidPublicKey`.
+- JCS signing logs the lengths of the canonical document and proof options
+  at `debug`, not their contents, so credential claims do not reach logs.
+
+Docs:
+
+- `DidKeyResolver` lists the multicodecs it accepts; X25519, listed before,
+  was always refused. `resolve_did_key` says that it reads the key from the
+  DID and does not compare the `#fragment` with it.
+- `DataIntegrityError::ProofExpired` names `expiry_clock_skew` (zero by
+  default) as its tolerance, not `clock_skew`.
+- The install snippet shows `0.8`, the crate docs no longer promise sibling
+  `-jose` / `-cose` crates, and `Canonicalization::Rdfc` is called RDFC-1.0.
+
 ## 0.8.5 — `bbs-2023` verifiers take options: presentation header and proof shape checked
 
 The `bbs-2023` derived-proof verifiers had no way to be told which

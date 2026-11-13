@@ -82,6 +82,13 @@ pub trait Signer: Send + Sync {
 /// Blanket implementation for `Secret`, providing local signing via
 /// `ed25519-dalek` / `ml-dsa` / `slh-dsa` depending on the key type.
 /// Existing callers can continue passing `&secret` directly.
+/// A local Ed25519 secret whose private key is not 32 bytes.
+#[derive(Debug, thiserror::Error)]
+#[error("Ed25519 private key must be exactly 32 bytes, got {len}")]
+struct PrivateKeyLength {
+    len: usize,
+}
+
 #[async_trait]
 impl Signer for Secret {
     fn key_type(&self) -> KeyType {
@@ -100,11 +107,9 @@ impl Signer for Secret {
                 // Secret's private_bytes is the only key material.
                 let private_bytes: Zeroizing<[u8; 32]> =
                     Zeroizing::new(self.get_private_bytes().try_into().map_err(|_| {
-                        DataIntegrityError::InvalidPublicKey {
-                            codec: None,
+                        DataIntegrityError::signing(PrivateKeyLength {
                             len: self.get_private_bytes().len(),
-                            reason: "Ed25519 private key must be exactly 32 bytes".to_string(),
-                        }
+                        })
                     })?);
                 let signing_key = SigningKey::from_bytes(&private_bytes);
                 Ok(signing_key.sign(data).to_bytes().to_vec())
@@ -135,5 +140,30 @@ impl Signer for Secret {
                 name: format!("(no signer compiled in for key type {other:?})"),
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_short_ed25519_private_key_is_a_signing_error() {
+        let jwk = serde_json::json!({
+            "crv": "Ed25519",
+            "kty": "OKP",
+            "d": "AAAA",
+            "x": "d17TbZmkoYHZUQpzJTcuOtq0tjWYm8CKvKGYHDW6ZaE"
+        });
+        let secret = Secret::from_jwk_value("did:example:123#key-1", &jwk).unwrap();
+        let err = Signer::sign(&secret, b"data").await.unwrap_err();
+        assert!(matches!(err, DataIntegrityError::Signing(_)), "got {err:?}");
+        assert!(
+            std::error::Error::source(&err)
+                .unwrap()
+                .to_string()
+                .contains("private key must be exactly 32 bytes, got 3"),
+            "got {err:?}"
+        );
     }
 }

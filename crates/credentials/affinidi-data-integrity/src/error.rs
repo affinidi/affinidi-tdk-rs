@@ -83,10 +83,10 @@ pub enum DataIntegrityError {
     #[error("spec conformance check failed: {0}")]
     Conformance(String),
 
-    /// The proof's `expires` time has passed. The verification time is
-    /// allowed the same clock-skew tolerance as `created`
-    /// ([`crate::VerifyOptions::clock_skew`]). A malformed `expires` is
-    /// reported as [`Self::MalformedProof`] instead.
+    /// The proof's `expires` time has passed. The tolerance is
+    /// [`crate::VerifyOptions::expiry_clock_skew`] (zero by default), not the
+    /// `clock_skew` applied to `created`. A malformed `expires` is reported
+    /// as [`Self::MalformedProof`] instead.
     #[error("proof expired at {expires}")]
     ProofExpired { expires: String },
 

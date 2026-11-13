@@ -1,5 +1,16 @@
 # Affinidi Crypto Changelog
 
+## Unreleased (0.3.1) — `p256::verify` reports a malformed signature as `Decoding`
+
+**Behaviour change (R3.6).** `p256::verify` returns `CryptoError::Decoding`
+for a signature that is not a valid 64-byte `r || s` encoding. It returned
+`CryptoError::KeyError`, the variant for an invalid public key, so callers
+could not tell the two apart. A bad public key is still `KeyError`, and a
+well-formed signature that does not verify is still `Ok(false)`.
+
+- Docs: the crate docs list P-521 among the generated key types, and the
+  `jose` feature comment no longer says key agreement is still to come.
+
 ## Unreleased (0.3.0) — key pairs wipe themselves when dropped
 
 ### Breaking

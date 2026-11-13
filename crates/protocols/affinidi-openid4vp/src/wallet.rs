@@ -1,18 +1,16 @@
 /*!
- * Wallet-side OpenID4VP operations.
- *
- * Handles credential presentation from the wallet's perspective:
- * - Parse and validate authorization requests
- * - Match credentials against input descriptors
- * - Build VP token and presentation submission
- * - Send authorization response
+ * Wallet-side builders for the pre-1.0 request and Presentation Exchange
+ * types: parse an authorization request, and build a presentation submission
+ * and an authorization response from what the caller supplies. Nothing here
+ * matches credentials against input descriptors, verifies a request, or
+ * sends anything.
  */
 
 use crate::error::{Oid4vpError, Result};
 use crate::types::*;
 use serde_json::Value;
 
-/// Parse an authorization request from a URI query string or JSON.
+/// Parse an authorization request from JSON. No checks beyond parsing.
 pub fn parse_authorization_request(json: &str) -> Result<AuthorizationRequest> {
     serde_json::from_str(json).map_err(|e| Oid4vpError::InvalidRequest(format!("parse error: {e}")))
 }

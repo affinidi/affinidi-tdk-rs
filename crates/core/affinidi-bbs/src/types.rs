@@ -18,21 +18,9 @@ pub struct SecretKey(pub(crate) Scalar);
 
 impl Drop for SecretKey {
     fn drop(&mut self) {
-        // `bls12_381_plus::Scalar` does not implement `Zeroize` and exposes no
-        // mutable byte view, so we zeroize its backing storage directly. This is
-        // sound because `Scalar` is a plain inline `[u64; 4]` (Montgomery form,
-        // no heap indirection): an all-zero byte pattern is a valid `Scalar`, and
-        // the value is never read after this. Delegating to `zeroize` replaces the
-        // previous hand-rolled volatile loop with the crate's audited primitive
-        // (volatile writes + `atomic::compiler_fence(SeqCst)`); `SecretKey: Clone`
-        // means each clone runs this `Drop`.
-        let bytes = unsafe {
-            std::slice::from_raw_parts_mut(
-                std::ptr::from_mut(&mut self.0).cast::<u8>(),
-                std::mem::size_of::<Scalar>(),
-            )
-        };
-        bytes.zeroize();
+        // `Scalar` implements `Zeroize` (via `DefaultIsZeroes`).
+        // `SecretKey: Clone` means each clone runs this `Drop`.
+        self.0.zeroize();
     }
 }
 
@@ -132,11 +120,12 @@ pub struct Signature {
 }
 
 impl Signature {
-    /// Deserialize a signature from bytes (SHA-256 ciphersuite: 80 bytes).
+    /// Deserialize a signature from exactly 80 bytes (SHA-256 ciphersuite), so
+    /// a signature has one byte encoding.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() < 80 {
+        if bytes.len() != 80 {
             return Err(BbsError::InvalidSignature(format!(
-                "expected at least 80 bytes, got {}",
+                "expected 80 bytes, got {}",
                 bytes.len()
             )));
         }
@@ -307,6 +296,25 @@ mod tests {
     #[test]
     fn signature_from_bytes_truncated_fails() {
         let bytes = [0u8; 40]; // Too short
+        assert!(Signature::from_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn signature_from_bytes_refuses_trailing_bytes() {
+        let sk_scalar = Scalar::from(12345u64);
+        let sk = SecretKey(sk_scalar);
+        let pk = PublicKey(G2Projective::generator() * sk_scalar);
+        let messages: Vec<&[u8]> = vec![b"test"];
+        let sig = crate::signature::core_sign(
+            &sk,
+            &pk,
+            b"",
+            &messages,
+            crate::Ciphersuite::Bls12381Sha256,
+        )
+        .unwrap();
+        let mut bytes = sig.to_bytes().to_vec();
+        bytes.push(0);
         assert!(Signature::from_bytes(&bytes).is_err());
     }
 

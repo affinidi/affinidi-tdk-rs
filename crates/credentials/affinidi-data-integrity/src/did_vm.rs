@@ -64,9 +64,9 @@ pub trait VerificationMethodResolver: Send + Sync {
 
 /// Resolves `did:key:zXXX#zXXX` verification methods with no I/O.
 ///
-/// Supports every public-key multicodec registered with this build:
-/// Ed25519, X25519, P-256, P-384, P-521, secp256k1, and (with features
-/// enabled) ML-DSA-{44,65,87} and SLH-DSA-SHA2-128s.
+/// Supports the signing-key multicodecs: Ed25519, P-256, P-384, P-521,
+/// secp256k1, and (with features enabled) ML-DSA-{44,65,87} and
+/// SLH-DSA-SHA2-128s. Any other multicodec, X25519 included, is refused.
 pub struct DidKeyResolver;
 
 #[async_trait]
@@ -80,9 +80,11 @@ impl VerificationMethodResolver for DidKeyResolver {
 ///
 /// `did:key:` is parseable locally, so callers with a key already in hand
 /// can skip the async machinery.
+///
+/// The key comes from the DID. A `#fragment` is ignored and not compared
+/// with the DID's key.
 pub fn resolve_did_key(vm: &str) -> Result<ResolvedKey, DataIntegrityError> {
-    // Strip the fragment to get the DID; fragment is expected to repeat
-    // the multibase key identifier, but we only need the DID body.
+    // The key is read from the DID; the fragment is dropped unchecked.
     let did = vm.split('#').next().unwrap_or(vm);
     let id = did.strip_prefix("did:key:").ok_or_else(|| {
         DataIntegrityError::Resolver(format!(

@@ -20,18 +20,16 @@
  * - [`DcqlQuery::evaluate_presentation`] — whether the verified presentations
  *   satisfy the query.
  *
+ * Nothing here verifies a presentation: check each one with its credential
+ * format's crate (issuer signature, key-binding proof over the request's
+ * `nonce` and the verifier's `client_id`) before
+ * [`DcqlQuery::evaluate_presentation`]. Nothing here verifies a signed
+ * request object as a wallet would either.
+ *
  * The types below for Presentation Exchange and the pre-1.0 request and
- * response predate these and are kept for existing callers.
- *
- * # Flow
- *
- * 1. Verifier creates an authorization request with a presentation definition
- * 2. Wallet receives the request (via redirect, QR code, or deep link)
- * 3. Wallet matches available credentials against input descriptors
- * 4. User selects which credentials/claims to disclose
- * 5. Wallet creates a VP token with presentation submission
- * 6. Wallet sends authorization response to verifier
- * 7. Verifier validates the VP token, credentials, and submission
+ * response predate these and are kept for existing callers. They are types
+ * and builders only: no code matches a submission against input
+ * descriptors (see [`verifier::validate_authorization_response`]).
  *
  * # Supported Credential Formats
  *

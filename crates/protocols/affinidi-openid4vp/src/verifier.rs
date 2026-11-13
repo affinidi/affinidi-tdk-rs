@@ -1,10 +1,8 @@
 /*!
- * Verifier-side OpenID4VP operations.
- *
- * Handles credential presentation from the verifier (Relying Party) perspective:
- * - Authorization request creation with presentation definitions
- * - Response validation
- * - Credential matching verification
+ * Verifier-side helpers for the pre-1.0 request and Presentation Exchange
+ * types: building an authorization request with a presentation definition,
+ * and a structural check of the response. Nothing here verifies the VP token
+ * or matches the submission against the input descriptors.
  */
 
 use crate::error::{Oid4vpError, Result};
@@ -34,12 +32,15 @@ pub fn create_authorization_request(
     }
 }
 
-/// Validate an authorization response from a wallet.
+/// Structural checks on an authorization response from a wallet.
 ///
-/// Checks:
-/// - VP token is present
-/// - Presentation submission references the correct definition
-/// - State matches (if present in request)
+/// Checks only that:
+/// - the state matches (when `expected_state` is given)
+/// - the presentation submission names the expected definition
+/// - the submission's `descriptor_map` is not empty
+///
+/// It does not look at the VP token, verify any presentation, or match the
+/// descriptor map against the definition's input descriptors.
 pub fn validate_authorization_response(
     response: &AuthorizationResponse,
     expected_definition_id: &str,

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-crypto"
-version = "0.3.0"
+version = "0.3.1"
 description = "Cryptographic primitives and JWK types for Affinidi TDK"
 edition.workspace = true
 authors.workspace = true
@@ -26,8 +26,8 @@ post-quantum = ["ml-dsa", "slh-dsa"]
 ml-dsa = ["dep:ml-dsa"]
 slh-dsa = ["dep:slh-dsa"]
 # JOSE primitives (#327): ECDH-ES / ECDH-1PU Concat KDF, A256KW key wrap,
-# A256CBC-HS512 content encryption, EdDSA signing. Pulls in EdDSA via the
-# `ed25519` feature. Key agreement (curves) lands separately in a later PR.
+# A256CBC-HS512 content encryption, EdDSA signing, and ECDH key agreement
+# (`jose::key_agreement`). Pulls in EdDSA via the `ed25519` feature.
 jose = ["dep:aes", "dep:aes-gcm", "dep:cbc", "dep:hmac", "dep:subtle", "ed25519", "p256", "k256", "p384", "p521"]
 
 [dependencies]

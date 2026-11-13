@@ -121,9 +121,11 @@ impl RequestObject {
         }
     }
 
-    /// Check what a wallet will check before signing: a valid DCQL query, a
+    /// Check the request object before signing: a valid DCQL query, a
     /// prefixed `client_id`, a nonce, an `https` `response_uri`, and — for
-    /// `direct_post.jwt` — at least one encryption key and `enc` value.
+    /// `direct_post.jwt` — at least one encryption key and `enc` value. This
+    /// is the verifier's own check; this crate has no wallet-side
+    /// verification of a received request object.
     pub fn validate(&self) -> Result<(), Oid4vpError> {
         ClientId::parse(&self.client_id)?;
         self.dcql_query.validate()?;

@@ -29,7 +29,7 @@ ML-DSA-44 or SLH-DSA-SHA2-128s:
 
 ```ignore
 [dependencies]
-affinidi-data-integrity = { version = "0.5", features = ["post-quantum"] }
+affinidi-data-integrity = { version = "0.8", features = ["post-quantum"] }
 ```
 
 Then generate a PQC key — the library selects `mldsa44-jcs-2024` or
@@ -52,10 +52,9 @@ minor releases without breaking callers that include a `_ =>` arm.
 
 # Out of scope
 
-This crate implements W3C Data Integrity only. JOSE / JWS / COSE
-post-quantum profiles are being standardised separately by IETF and
-will live in sibling crates (`affinidi-data-integrity-jose`,
-`-cose`) when those drafts stabilise.
+This crate implements W3C Data Integrity only. It has no JOSE / JWS /
+COSE post-quantum profiles; those are being standardised separately by
+the IETF.
 
 [Data Integrity Proofs]: https://www.w3.org/TR/vc-data-integrity/
 [`compatible_key_types`]: crate::crypto_suites::CryptoSuite::compatible_key_types
@@ -472,11 +471,11 @@ where
 {
     let jcs = to_string(data_doc)
         .map_err(|e| DataIntegrityError::Canonicalization(format!("document: {e}")))?;
-    debug!("Document (JCS): {}", jcs);
+    debug!(len = jcs.len(), "document canonicalized (JCS)");
 
     let proof_jcs = to_string(&proof_options)
         .map_err(|e| DataIntegrityError::Canonicalization(format!("proof config: {e}")))?;
-    debug!("Proof options (JCS): {}", proof_jcs);
+    debug!(len = proof_jcs.len(), "proof options canonicalized (JCS)");
 
     let hash_data = hashing_jcs(&jcs, &proof_jcs);
     let signed = signer.sign(&hash_data).await?;
@@ -949,9 +948,8 @@ mod tests {
             .expect("verify via resolver");
     }
 
-    /// A proof must not survive its document changing — ECDSA is randomised, so
-    /// a round-trip test alone would still pass against a verify that ignored
-    /// the payload.
+    /// A proof must not survive its document changing: a round-trip test alone
+    /// would still pass against a verify that ignored the payload.
     #[tokio::test]
     async fn a_p256_proof_does_not_verify_against_a_tampered_document() {
         use crate::{DidKeyResolver, VerifyOptions};
