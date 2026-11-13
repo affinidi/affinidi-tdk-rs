@@ -42,7 +42,7 @@ The eIDAS PID namespace `eu.europa.ec.eudi.pid.1` defines standard attributes:
 
 ## Related Crates
 
-- [`affinidi-sd-jwt-vc`](../affinidi-sd-jwt-vc/) — SD-JWT VC format (the other eIDAS mandatory format)
+- [`affinidi-vc`](../affinidi-vc/) — SD-JWT VC (`affinidi_vc::sd_jwt_vc`, the other eIDAS mandatory format)
 - [`affinidi-vc`](../affinidi-vc/) — W3C VC Data Model types
 - [`affinidi-status-list`](../affinidi-status-list/) — Credential status/revocation
 

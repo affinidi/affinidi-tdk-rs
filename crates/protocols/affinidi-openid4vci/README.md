@@ -12,7 +12,7 @@ OpenID for Verifiable Credential Issuance (OpenID4VCI) implementation per
 
 ```toml
 [dependencies]
-affinidi-openid4vci = "0.1"
+affinidi-openid4vci = "0.2"
 ```
 
 ## Features
