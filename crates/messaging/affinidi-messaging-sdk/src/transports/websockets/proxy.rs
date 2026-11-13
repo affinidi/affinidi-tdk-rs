@@ -83,32 +83,108 @@ fn is_no_proxy(target_host: &str) -> bool {
     false
 }
 
+/// The proxy URL with any `user:password@` replaced by `***@`, for error
+/// messages and logs.
+fn redact_proxy_url(proxy_url: &str) -> String {
+    let (prefix, rest) = match proxy_url.find("://") {
+        Some(pos) => proxy_url.split_at(pos + 3),
+        None => ("", proxy_url),
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, path) = rest.split_at(authority_end);
+    match authority.rfind('@') {
+        Some(at_pos) => format!("{prefix}***@{}{path}", &authority[at_pos + 1..]),
+        None => proxy_url.to_string(),
+    }
+}
+
+/// Decodes `%XX` escapes in URL userinfo. A `%` not followed by two hex
+/// digits is kept as written.
+fn percent_decode(input: &str) -> Vec<u8> {
+    let bytes = input.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) = (
+                (bytes[index + 1] as char).to_digit(16),
+                (bytes[index + 2] as char).to_digit(16),
+            )
+        {
+            decoded.push((high * 16 + low) as u8);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    decoded
+}
+
+/// The `Proxy-Authorization` value for the userinfo of a proxy URL, if it has
+/// one. Userinfo is percent-decoded first, so a password written as `p%40ss`
+/// is sent as `p@ss`.
+fn proxy_authorization(proxy_uri: &Uri) -> Option<String> {
+    let authority = proxy_uri.authority()?.as_str();
+    let at_pos = authority.rfind('@')?;
+    let userinfo = percent_decode(&authority[..at_pos]);
+    Some(format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode(userinfo)
+    ))
+}
+
+/// Parses a proxy URL into its host and port.
+///
+/// Only plain-HTTP proxies are supported: the tunnel request is written on an
+/// unencrypted TCP connection, so an `https://` proxy (TLS to the proxy) or a
+/// SOCKS proxy is refused instead of being sent a request it cannot read.
+/// Errors never include the URL's userinfo.
+fn parse_proxy_url(proxy_url: &str) -> Result<(Uri, String, u16), ATMError> {
+    let redacted = || redact_proxy_url(proxy_url);
+    let proxy_uri: Uri = proxy_url.parse().map_err(|e| {
+        ATMError::TransportError(format!("Invalid proxy URL '{}': {e}", redacted()))
+    })?;
+
+    match proxy_uri.scheme_str() {
+        None | Some("http") => {}
+        Some("https") => {
+            return Err(ATMError::TransportError(format!(
+                "Proxy URL '{}' uses https://, which is not supported; use an http:// proxy URL",
+                redacted()
+            )));
+        }
+        Some(scheme) => {
+            return Err(ATMError::TransportError(format!(
+                "Proxy URL '{}' uses unsupported scheme '{scheme}'; only http:// proxies are supported",
+                redacted()
+            )));
+        }
+    }
+
+    let proxy_host = proxy_uri
+        .host()
+        .ok_or_else(|| ATMError::TransportError(format!("Proxy URL '{}' has no host", redacted())))?
+        .to_string();
+    let proxy_port = proxy_uri.port_u16().unwrap_or(8080);
+    Ok((proxy_uri, proxy_host, proxy_port))
+}
+
 /// Establishes a TCP connection through an HTTP CONNECT proxy tunnel.
 async fn connect_via_proxy(
     proxy_url: &str,
     target_host: &str,
     target_port: u16,
 ) -> Result<TcpStream, ATMError> {
-    let proxy_uri: Uri = proxy_url
-        .parse()
-        .map_err(|e| ATMError::TransportError(format!("Invalid proxy URL '{proxy_url}': {e}")))?;
-
-    let proxy_host = proxy_uri
-        .host()
-        .ok_or_else(|| ATMError::TransportError(format!("Proxy URL '{proxy_url}' has no host")))?;
-    let proxy_port = proxy_uri
-        .port_u16()
-        .unwrap_or(match proxy_uri.scheme_str() {
-            Some("https") => 443,
-            _ => 8080,
-        });
+    let (proxy_uri, proxy_host, proxy_port) = parse_proxy_url(proxy_url)?;
 
     debug!(
         "Connecting to proxy {}:{} for tunnel to {}:{}",
         proxy_host, proxy_port, target_host, target_port
     );
 
-    let mut stream = TcpStream::connect((proxy_host, proxy_port))
+    let mut stream = TcpStream::connect((proxy_host.as_str(), proxy_port))
         .await
         .map_err(|e| {
             ATMError::TransportError(format!(
@@ -120,14 +196,8 @@ async fn connect_via_proxy(
     let target = format!("{target_host}:{target_port}");
     let mut connect_req = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n");
 
-    // Add proxy authentication if credentials are in the URL
-    if let Some(authority) = proxy_uri.authority() {
-        let authority_str = authority.as_str();
-        if let Some(at_pos) = authority_str.rfind('@') {
-            let userinfo = &authority_str[..at_pos];
-            let encoded = base64::engine::general_purpose::STANDARD.encode(userinfo);
-            connect_req.push_str(&format!("Proxy-Authorization: Basic {encoded}\r\n"));
-        }
+    if let Some(authorization) = proxy_authorization(&proxy_uri) {
+        connect_req.push_str(&format!("Proxy-Authorization: {authorization}\r\n"));
     }
 
     connect_req.push_str("\r\n");
@@ -503,5 +573,84 @@ mod tests {
             find_header_end(b"HTTP/1.1 200 OK\r\nProxy-Agent: test\r\n\r\n"),
             Some(38)
         );
+    }
+
+    fn transport_error(result: Result<(Uri, String, u16), ATMError>) -> String {
+        match result {
+            Err(ATMError::TransportError(msg)) => msg,
+            Err(e) => panic!("expected a transport error, got {e:?}"),
+            Ok(_) => panic!("expected the proxy URL to be refused"),
+        }
+    }
+
+    #[test]
+    fn redacted_proxy_url_drops_userinfo() {
+        assert_eq!(
+            redact_proxy_url("http://alice:s3cret@proxy:8080/path"),
+            "http://***@proxy:8080/path"
+        );
+        assert_eq!(
+            redact_proxy_url("alice:s3cret@proxy:8080"),
+            "***@proxy:8080"
+        );
+        assert_eq!(
+            redact_proxy_url("http://a:b@c@proxy:3128"),
+            "http://***@proxy:3128"
+        );
+        assert_eq!(redact_proxy_url("http://proxy:8080"), "http://proxy:8080");
+        assert_eq!(
+            redact_proxy_url("http://proxy:8080/a@b"),
+            "http://proxy:8080/a@b"
+        );
+    }
+
+    #[test]
+    fn proxy_url_errors_leave_out_credentials() {
+        let msg = transport_error(parse_proxy_url("http://alice:s3cret@proxy host:8080"));
+        assert!(!msg.contains("s3cret"), "credentials in error: {msg}");
+        assert!(!msg.contains("alice"), "credentials in error: {msg}");
+
+        let msg = transport_error(parse_proxy_url("https://alice:s3cret@proxy:443"));
+        assert!(!msg.contains("s3cret"), "credentials in error: {msg}");
+        assert!(msg.contains("***@proxy:443"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn https_and_socks_proxies_are_refused() {
+        let msg = transport_error(parse_proxy_url("https://proxy:443"));
+        assert!(msg.contains("https://"), "unexpected error: {msg}");
+        let msg = transport_error(parse_proxy_url("socks5://proxy:1080"));
+        assert!(msg.contains("socks5"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn http_proxy_url_parses_with_default_port() {
+        let (_, host, port) = parse_proxy_url("http://proxy.internal").unwrap();
+        assert_eq!(host, "proxy.internal");
+        assert_eq!(port, 8080);
+        let (_, host, port) = parse_proxy_url("http://user:pw@proxy.internal:3128").unwrap();
+        assert_eq!(host, "proxy.internal");
+        assert_eq!(port, 3128);
+    }
+
+    #[test]
+    fn proxy_authorization_percent_decodes_userinfo() {
+        let uri: Uri = "http://alice:p%40ss%3Aword@proxy:3128".parse().unwrap();
+        let expected = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode("alice:p@ss:word")
+        );
+        assert_eq!(proxy_authorization(&uri), Some(expected));
+
+        let uri: Uri = "http://proxy:3128".parse().unwrap();
+        assert_eq!(proxy_authorization(&uri), None);
+    }
+
+    #[test]
+    fn percent_decode_keeps_incomplete_escapes() {
+        assert_eq!(percent_decode("a%2"), b"a%2".to_vec());
+        assert_eq!(percent_decode("a%zz"), b"a%zz".to_vec());
+        assert_eq!(percent_decode("%41%42"), b"AB".to_vec());
+        assert_eq!(percent_decode("100%"), b"100%".to_vec());
     }
 }

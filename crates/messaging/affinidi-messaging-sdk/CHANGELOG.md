@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.46.1 — websocket proxy URLs: credentials stay out of errors; http:// proxies only
+
+- Errors about a malformed `HTTPS_PROXY` / `ALL_PROXY` URL no longer
+  include the URL's `user:password@`; it is shown as `***@`.
+- A proxy URL with `https://` (TLS to the proxy) or another non-HTTP scheme
+  such as `socks5://` is now refused with a clear error before connecting.
+  The tunnel was always opened over plain TCP, so these proxies could not
+  have worked: an `https://` proxy received a plaintext `CONNECT` and its
+  `Proxy-Authorization` header, and failed the handshake.
+- Userinfo in the proxy URL is percent-decoded before it is sent as
+  `Proxy-Authorization: Basic`, so a password written as `p%40ss` is sent as
+  `p@ss`. A `%` that is not followed by two hex digits is kept as written.
+- Without a port, a proxy URL now always defaults to 8080.
+
+Behaviour change (R3.6): `https://` and non-HTTP proxy URLs, which failed at
+the handshake before, now fail at connect with an explanatory error; and a
+proxy password containing percent-escapes is sent decoded. `http://` and
+scheme-less proxy URLs without escapes behave as before. No API change; no
+new dependencies.
+
 ## Unreleased (0.46.0) — trust-tasks-rs 0.38
 
 - **Changed (breaking):** `trust-tasks-rs` and `trust-tasks-proof` 0.37 → 0.38.
