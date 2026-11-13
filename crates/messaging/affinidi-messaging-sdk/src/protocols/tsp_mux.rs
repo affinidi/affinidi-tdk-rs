@@ -439,7 +439,8 @@ pub(crate) enum Sorted {
 fn answer_thread(doc: &Value) -> Option<String> {
     let thread = doc.get("threadId").and_then(Value::as_str)?;
     let ty = doc.get("type").and_then(Value::as_str)?;
-    (ty.contains("#response") || ty.contains("/trust-task-error/")).then(|| thread.to_string())
+    (ty.contains("#response") || crate::errors::is_trust_task_error(doc))
+        .then(|| thread.to_string())
 }
 
 const NOTICE_TYPE: &str = "https://trusttasks.org/spec/messaging/mux/notice/0.1";
@@ -885,6 +886,7 @@ impl TspMuxSender {
             .trust_tasks()
             .sign(&self.shared.principal, body)
             .await?;
+        let request = super::trust_tasks::RequestIds::of(&body);
         let bytes = serde_json::to_vec(&body)
             .map_err(|e| ATMError::MsgSendError(format!("couldn't serialise Trust Task: {e}")))?;
         let frame = self
@@ -914,7 +916,7 @@ impl TspMuxSender {
         }
         let timeout = super::trust_tasks::TSP_REPLY_TIMEOUT;
         match tokio::time::timeout(timeout, answered).await {
-            Ok(Ok(Ok(doc))) => super::trust_tasks::decode_body(&doc),
+            Ok(Ok(Ok(doc))) => super::trust_tasks::decode_reply(&doc, &request),
             Ok(Ok(Err(e))) => Err(e),
             Ok(Err(_)) => Err(self.shared.closed_error()),
             Err(_) => {
@@ -2231,6 +2233,25 @@ mod tests {
         assert!(
             matches!(d.sort(error).await, Sorted::Answer { thread_id, .. } if thread_id == "urn:uuid:2")
         );
+        // A `type` that only contains the error path is not a Trust Task
+        // error: data, not an answer.
+        for ty in [
+            "https://example.org/trust-task-error/0.6",
+            "https://trusttasks.org/spec/trust-task-error/0.6/x",
+        ] {
+            let lookalike = doc(json!({
+                "type": ty,
+                "threadId": "urn:uuid:2",
+                "payload": {"code": "unavailable", "retryable": true},
+            }));
+            assert!(
+                matches!(
+                    d.sort(lookalike).await,
+                    Sorted::Frame(TspMuxFrame::Data { .. })
+                ),
+                "{ty}"
+            );
+        }
         // No thread: not an answer.
         let unthreaded = doc(json!({
             "type": "https://trusttasks.org/spec/messaging/ping/0.2#response",
@@ -2808,6 +2829,69 @@ mod tests {
             b"frame".to_vec(),
         );
         assert!(shared.abandoned.lock().unwrap().is_empty(), "consumed");
+    }
+
+    /// A refusal reaches only the request whose thread it names: one for
+    /// another thread leaves a waiting request waiting, and the request's own
+    /// is read as its refusal.
+    #[tokio::test]
+    async fn a_refusal_is_routed_to_its_own_request_only() {
+        let k = keys();
+        let (dialer, _) = serve_each(vec![Conn {
+            selected: "tsp-mux",
+            frames: vec![Message::Binary(ready_frame(&k).into())],
+            close: None,
+        }])
+        .await;
+        let sock = open_on(dialer, &k, None).await;
+        let shared = Arc::clone(&sock.sender.shared);
+        let (answer, mut answered) = oneshot::channel();
+        shared.pending.lock().unwrap().insert(
+            "urn:uuid:mine".into(),
+            Pending {
+                frame_id: "f1".into(),
+                answer,
+            },
+        );
+        let refusal = |thread: &str| {
+            json!({
+                "id": "urn:uuid:e1",
+                "type": "https://trusttasks.org/spec/trust-task-error/0.6",
+                "threadId": thread,
+                "payload": {
+                    "code": "permissionDenied",
+                    "retryable": false,
+                    "inResponseTo": {
+                        "typeUri": "https://trusttasks.org/spec/messaging/mux/list/0.1",
+                        "id": thread,
+                    },
+                },
+            })
+        };
+        answer_pending(
+            &shared,
+            "urn:uuid:other",
+            refusal("urn:uuid:other"),
+            b"frame".to_vec(),
+        );
+        assert!(
+            matches!(
+                answered.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ),
+            "a refusal of another request is not this one's answer"
+        );
+        answer_pending(
+            &shared,
+            "urn:uuid:mine",
+            refusal("urn:uuid:mine"),
+            b"frame".to_vec(),
+        );
+        let doc = answered.await.unwrap().unwrap();
+        let request =
+            crate::protocols::trust_tasks::RequestIds::of(&json!({ "id": "urn:uuid:mine" }));
+        let err = crate::protocols::trust_tasks::decode_reply::<Value>(&doc, &request).unwrap_err();
+        assert_eq!(err.refusal_code(), Some("permissionDenied"));
     }
 
     #[test]

@@ -84,6 +84,17 @@ pub enum ATMError {
 /// refusal carries in a problem report.
 pub const MEDIATOR_CODE_DETAIL: &str = "mediatorCode";
 
+/// The longest `code` kept from a `trust-task-error`, in bytes. A longer one
+/// is cut at a character boundary.
+pub const MAX_REFUSAL_CODE_LEN: usize = 256;
+
+/// The longest `message` kept from a `trust-task-error`, in bytes. A longer
+/// one is cut at a character boundary.
+pub const MAX_REFUSAL_MESSAGE_LEN: usize = 2048;
+
+/// The `type` of a `trust-task-error` document, before its `MAJOR.MINOR`.
+const TRUST_TASK_ERROR_TYPE_PREFIX: &str = "https://trusttasks.org/spec/trust-task-error/";
+
 /// A `trust-task-error` document's payload (Trust Tasks SPEC §8.2), with the
 /// identifiers of the error document itself.
 ///
@@ -126,6 +137,9 @@ impl TrustTaskRefusal {
     /// Read a `trust-task-error` document. `None` when `doc` is not one (its
     /// `type` is not a `trust-task-error` Type URI), and when it is one
     /// without the `code` and `retryable` the specification requires.
+    ///
+    /// `code` and `message` are kept to [`MAX_REFUSAL_CODE_LEN`] and
+    /// [`MAX_REFUSAL_MESSAGE_LEN`] bytes.
     pub fn from_document(doc: &serde_json::Value) -> Option<Self> {
         if !is_trust_task_error(doc) {
             return None;
@@ -134,9 +148,9 @@ impl TrustTaskRefusal {
         let text =
             |v: &serde_json::Value, k: &str| v.get(k).and_then(|s| s.as_str()).map(str::to_string);
         Some(Self {
-            code: text(payload, "code")?,
+            code: truncated(text(payload, "code")?, MAX_REFUSAL_CODE_LEN),
             retryable: payload.get("retryable")?.as_bool()?,
-            message: text(payload, "message"),
+            message: text(payload, "message").map(|m| truncated(m, MAX_REFUSAL_MESSAGE_LEN)),
             retry_after: text(payload, "retryAfter"),
             in_response_to: payload.get("inResponseTo").and_then(|r| {
                 Some(RefusedDocument {
@@ -148,6 +162,21 @@ impl TrustTaskRefusal {
             id: text(doc, "id").unwrap_or_default(),
             thread_id: text(doc, "threadId"),
         })
+    }
+
+    /// Whether this refusal answers the request whose `id` is `request_id`
+    /// (and whose own `threadId`, if it set one, is `request_thread`): the
+    /// error's `threadId` is the request's thread, or its `inResponseTo.id`
+    /// is the request's `id`. A refusal of any other request is not an
+    /// answer to this one.
+    pub fn answers(&self, request_id: &str, request_thread: Option<&str>) -> bool {
+        if request_id.is_empty() {
+            return false;
+        }
+        let thread = self.thread_id.as_deref();
+        thread == Some(request_id)
+            || (request_thread.is_some() && thread == request_thread)
+            || self.in_response_to.as_ref().and_then(|r| r.id.as_deref()) == Some(request_id)
     }
 
     /// The code the mediator gives the same refusal in a problem report,
@@ -171,21 +200,70 @@ impl TrustTaskRefusal {
     }
 }
 
+/// `code` and `message` come from the peer, so control characters (and the
+/// Unicode line separators and direction marks) in them are shown escaped:
+/// a refusal always prints as one line of text.
 impl std::fmt::Display for TrustTaskRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "code: ({})", self.code)?;
+        write!(f, "code: ({})", Escaped(&self.code))?;
         if let Some(m) = &self.message {
-            write!(f, ", message: ({m})")?;
+            write!(f, ", message: ({})", Escaped(m))?;
         }
         write!(f, ", retryable: {}", self.retryable)
     }
 }
 
-/// Whether `doc` is a `trust-task-error` document, by its `type`.
+/// Peer-supplied text for display, with control characters, line and
+/// paragraph separators and bidirectional formatting marks escaped. Other
+/// text, non-ASCII included, is shown as is.
+struct Escaped<'a>(&'a str);
+
+impl std::fmt::Display for Escaped<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use std::fmt::Write;
+        for c in self.0.chars() {
+            if c.is_control() {
+                write!(f, "{}", c.escape_debug())?;
+            } else if matches!(
+                c,
+                '\u{2028}' | '\u{2029}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}'
+                    | '\u{2066}'..='\u{2069}'
+            ) {
+                write!(f, "{}", c.escape_unicode())?;
+            } else {
+                f.write_char(c)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `s` cut to at most `max` bytes, at a character boundary.
+fn truncated(mut s: String, max: usize) -> String {
+    if s.len() > max {
+        let mut end = max;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
+    }
+    s
+}
+
+/// Whether `doc` is a `trust-task-error` document, by its `type`: exactly
+/// `https://trusttasks.org/spec/trust-task-error/<MAJOR.MINOR>` (Trust Tasks
+/// SPEC §8.1), with no fragment and nothing after the version.
 pub(crate) fn is_trust_task_error(doc: &serde_json::Value) -> bool {
     doc.get("type")
         .and_then(|t| t.as_str())
-        .is_some_and(|t| t.starts_with("https://trusttasks.org/spec/trust-task-error/"))
+        .and_then(|t| t.strip_prefix(TRUST_TASK_ERROR_TYPE_PREFIX))
+        .and_then(|v| v.split_once('.'))
+        .is_some_and(|(major, minor)| is_version_number(major) && is_version_number(minor))
+}
+
+/// A `MAJOR` or `MINOR` component: ASCII digits, nothing else.
+fn is_version_number(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// A problem report's code without its sorter and scope (`e.p.`), which is
@@ -555,6 +633,124 @@ mod tests {
             None
         );
         assert_eq!(refusal(code, None).current_epoch(), None);
+    }
+
+    fn error_document(code: &str, message: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": "e1",
+            "type": "https://trusttasks.org/spec/trust-task-error/0.6",
+            "threadId": "req-1",
+            "payload": {
+                "code": code,
+                "message": message,
+                "retryable": false,
+                "inResponseTo": { "typeUri": "https://trusttasks.org/spec/acl/get/0.1", "id": "req-1" }
+            },
+        })
+    }
+
+    #[test]
+    fn control_characters_in_a_refusal_are_shown_escaped() {
+        let r = TrustTaskRefusal::from_document(&error_document(
+            "permission\nDenied",
+            "line one\r\nINFO second line\u{1b}[31m\u{202e}txt\u{2028}end; café",
+        ))
+        .unwrap();
+        let shown = r.to_string();
+        assert!(!shown.chars().any(char::is_control), "{shown}");
+        assert!(!shown.contains('\u{202e}') && !shown.contains('\u{2028}'));
+        assert_eq!(
+            shown,
+            "code: (permission\\nDenied), message: (line one\\r\\nINFO second line\\u{1b}[31m\\u{202e}txt\\u{2028}end; café), retryable: false"
+        );
+        // The stored values are the peer's, unchanged.
+        assert_eq!(r.code, "permission\nDenied");
+        // And through ATMError's own Display.
+        let err = ATMError::TrustTaskError(Box::new(r));
+        assert!(!err.to_string().contains('\n'));
+    }
+
+    #[test]
+    fn a_long_code_and_message_are_cut_at_a_character_boundary() {
+        let code = "c".repeat(MAX_REFUSAL_CODE_LEN + 10);
+        // A two-byte character straddling the bound.
+        let message = format!(
+            "{}é{}",
+            "m".repeat(MAX_REFUSAL_MESSAGE_LEN - 1),
+            "x".repeat(50)
+        );
+        let r = TrustTaskRefusal::from_document(&error_document(&code, &message)).unwrap();
+        assert_eq!(r.code.len(), MAX_REFUSAL_CODE_LEN);
+        let m = r.message.unwrap();
+        assert_eq!(m.len(), MAX_REFUSAL_MESSAGE_LEN - 1);
+        assert!(m.chars().all(|c| c == 'm'));
+        // Short values are kept whole.
+        let r = TrustTaskRefusal::from_document(&error_document("expired", "é")).unwrap();
+        assert_eq!(
+            (r.code.as_str(), r.message.as_deref()),
+            ("expired", Some("é"))
+        );
+    }
+
+    #[test]
+    fn only_a_trust_task_error_type_uri_is_one() {
+        let with_type = |t: &str| serde_json::json!({ "type": t });
+        for t in [
+            "https://trusttasks.org/spec/trust-task-error/0.1",
+            "https://trusttasks.org/spec/trust-task-error/0.6",
+            "https://trusttasks.org/spec/trust-task-error/1.12",
+        ] {
+            assert!(is_trust_task_error(&with_type(t)), "{t}");
+        }
+        for t in [
+            "https://trusttasks.org/spec/trust-task-error/",
+            "https://trusttasks.org/spec/trust-task-error/0.6#response",
+            "https://trusttasks.org/spec/trust-task-error/0.6/extra",
+            "https://trusttasks.org/spec/trust-task-error/0.6.1",
+            "https://trusttasks.org/spec/trust-task-error/latest",
+            "https://trusttasks.org/spec/trust-task-error/0.",
+            "https://trusttasks.org/spec/trust-task-error-x/0.6",
+            "https://trusttasks.org/spec/acl/get/0.1#response",
+        ] {
+            assert!(!is_trust_task_error(&with_type(t)), "{t}");
+        }
+        assert!(!is_trust_task_error(&serde_json::json!({ "type": 1 })));
+    }
+
+    #[test]
+    fn a_refusal_answers_only_its_own_request() {
+        let r = TrustTaskRefusal::from_document(&error_document("expired", "")).unwrap();
+        assert!(r.answers("req-1", None));
+        assert!(!r.answers("req-2", None));
+
+        // By threadId alone (inResponseTo omitted).
+        let mut doc = error_document("expired", "");
+        doc["payload"]
+            .as_object_mut()
+            .unwrap()
+            .remove("inResponseTo");
+        let r = TrustTaskRefusal::from_document(&doc).unwrap();
+        assert!(r.answers("req-1", None));
+        assert!(!r.answers("req-2", None));
+
+        // By inResponseTo.id alone (threadId names the request's own thread).
+        let mut doc = error_document("expired", "");
+        doc["threadId"] = "thread-9".into();
+        let r = TrustTaskRefusal::from_document(&doc).unwrap();
+        assert!(r.answers("req-1", None));
+        assert!(r.answers("req-2", Some("thread-9")));
+        assert!(!r.answers("req-2", Some("thread-8")));
+
+        // Neither correlator: answers nothing.
+        let mut doc = error_document("expired", "");
+        doc.as_object_mut().unwrap().remove("threadId");
+        doc["payload"]
+            .as_object_mut()
+            .unwrap()
+            .remove("inResponseTo");
+        let r = TrustTaskRefusal::from_document(&doc).unwrap();
+        assert!(!r.answers("req-1", None));
+        assert!(!r.answers("", None));
     }
 
     #[test]

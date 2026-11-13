@@ -31,6 +31,23 @@
   "task not served" check. On the tsp-mux socket, a refusal of
   `messaging/mux/ack` is pushed rather than stored, like the ack's answer,
   so it is not acknowledged.
+- A `trust-task-error` is accepted as the refusal of a request only when it
+  names that request: its `threadId` is the request's thread, or its
+  `inResponseTo.id` is the request's `id` (`TrustTaskRefusal::answers`).
+  Over DIDComm (HTTP and websocket), where the reply is matched to the
+  envelope by its DIDComm thread, a refusal naming another request fails the
+  call with `ATMError::MsgReceiveError`, as any other unexpected reply does.
+  The TSP inbox and the tsp-mux socket already route every answer by
+  `threadId`, so a refusal of another request is left for its owner there.
+- A document is read as a `trust-task-error` only when its `type` is exactly
+  `https://trusttasks.org/spec/trust-task-error/<MAJOR.MINOR>` (SPEC §8.1),
+  not any `type` that starts with or contains that path.
+- `code` and `message` are kept to 256 and 2048 bytes
+  (`MAX_REFUSAL_CODE_LEN`, `MAX_REFUSAL_MESSAGE_LEN`), cut at a character
+  boundary, and `Display` for `TrustTaskRefusal` (and so for
+  `ATMError::TrustTaskError`) shows control characters, Unicode line
+  separators and direction marks in them escaped, so a refusal always prints
+  as one line.
 
 Behaviour change (R3.6): against a mediator that emits `trust-task-error`
 documents, a refused Trust Task is `ATMError::TrustTaskError` where it was
