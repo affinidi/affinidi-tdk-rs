@@ -1,0 +1,12 @@
+/target
+/artifacts
+/coverage
+
+# Live libFuzzer corpus: grown locally, never committed. Read-only seeds live
+# in `seeds/`.
+/corpus
+
+# The Cargo.lock IS committed: it pins this fuzz crate's crates.io graph, and
+# scripts/check-fuzz-lock.sh (run by fuzz.yaml) fails if re-resolving changes
+# it. The repo-root .gitignore ignores every Cargo.lock, so re-include it.
+!Cargo.lock

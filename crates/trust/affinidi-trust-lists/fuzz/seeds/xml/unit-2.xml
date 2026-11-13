@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#">
+  <SchemeInformation>
+    <SchemeOperatorName>
+      <Name xml:lang="en">European Commission</Name>
+    </SchemeOperatorName>
+    <SchemeTerritory>EU</SchemeTerritory>
+    <ListIssueDateTime>2026-01-01T00:00:00Z</ListIssueDateTime>
+  </SchemeInformation>
+</TrustServiceStatusList>

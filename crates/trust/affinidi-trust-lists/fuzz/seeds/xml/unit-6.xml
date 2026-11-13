@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<TrustServiceStatusList>
+  <SchemeInformation>
+    <SchemeOperatorName><Name>Authority</Name></SchemeOperatorName>
+    <SchemeTerritory>DE</SchemeTerritory>
+    <ListIssueDateTime>2026-01-01T00:00:00Z</ListIssueDateTime>
+    <NextUpdate><dateTime>2026-07-01T00:00:00Z</dateTime></NextUpdate>
+  </SchemeInformation>
+  <TrustServiceProviderList>
+    <TrustServiceProvider>
+      <TSPInformation><TSPName><Name>Provider</Name></TSPName></TSPInformation>
+      <TSPServices>
+        <TSPService>
+          <ServiceInformation>
+            <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+            <ServiceName><Name>Current CA</Name></ServiceName>
+            <ServiceDigitalIdentity>
+              <DigitalId><X509Certificate>AQID</X509Certificate></DigitalId>
+              <DigitalId><X509Certificate>BAUG</X509Certificate></DigitalId>
+              <DigitalId><X509SKI>BwgJ</X509SKI></DigitalId>
+            </ServiceDigitalIdentity>
+            <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+            <StatusStartingTime>2025-01-01T00:00:00Z</StatusStartingTime>
+          </ServiceInformation>
+          <ServiceHistory>
+            <ServiceHistoryInstance>
+              <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+              <ServiceName><Name>Former CA name</Name></ServiceName>
+              <ServiceDigitalIdentity>
+                <DigitalId><X509Certificate>CgsM</X509Certificate></DigitalId>
+              </ServiceDigitalIdentity>
+              <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/withdrawn</ServiceStatus>
+              <StatusStartingTime>2020-01-01T00:00:00Z</StatusStartingTime>
+            </ServiceHistoryInstance>
+          </ServiceHistory>
+        </TSPService>
+        <TSPService>
+          <ServiceInformation>
+            <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/IdV/nothQC</ServiceTypeIdentifier>
+            <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+            <StatusStartingTime>2025-02-01T00:00:00Z</StatusStartingTime>
+          </ServiceInformation>
+        </TSPService>
+      </TSPServices>
+    </TrustServiceProvider>
+  </TrustServiceProviderList>
+  <ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+    <ds:KeyInfo><ds:X509Data><ds:X509Certificate>DQ4P</ds:X509Certificate></ds:X509Data></ds:KeyInfo>
+  </ds:Signature>
+</TrustServiceStatusList>

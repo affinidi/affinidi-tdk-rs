@@ -1,0 +1,1 @@
+{"@type": "https://didcomm.org/basicmessage/1.0/message", "@id": "6a3c4b2e-1d1f-4b1e-9b1e-0b6f0f6f0f6f", "content": "hello", "sent_time": "2026-01-01T00:00:00Z", "~thread": {"thid": "t1"}}

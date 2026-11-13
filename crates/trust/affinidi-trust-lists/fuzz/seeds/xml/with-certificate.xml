@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tsl:TrustServiceStatusList xmlns:tsl="http://uri.etsi.org/02231/v2#" xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+  <tsl:SchemeInformation>
+    <tsl:TSLVersionIdentifier>6</tsl:TSLVersionIdentifier>
+    <tsl:TSLSequenceNumber>7</tsl:TSLSequenceNumber>
+    <tsl:TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</tsl:TSLType>
+    <tsl:SchemeOperatorName><tsl:Name xml:lang="en">Example Operator</tsl:Name></tsl:SchemeOperatorName>
+    <tsl:SchemeTerritory>DE</tsl:SchemeTerritory>
+    <tsl:ListIssueDateTime>2026-01-01T00:00:00Z</tsl:ListIssueDateTime>
+    <tsl:NextUpdate><tsl:dateTime>2026-07-01T00:00:00Z</tsl:dateTime></tsl:NextUpdate>
+  </tsl:SchemeInformation>
+  <tsl:TrustServiceProviderList>
+    <tsl:TrustServiceProvider>
+      <tsl:TSPInformation><tsl:TSPName><tsl:Name xml:lang="en">Example Provider</tsl:Name></tsl:TSPName></tsl:TSPInformation>
+      <tsl:TSPServices>
+        <tsl:TSPService>
+          <tsl:ServiceInformation>
+            <tsl:ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/IdV/nothQC</tsl:ServiceTypeIdentifier>
+            <tsl:ServiceName><tsl:Name xml:lang="en">PID Issuance</tsl:Name></tsl:ServiceName>
+            <tsl:ServiceDigitalIdentity>
+              <tsl:DigitalId><tsl:X509Certificate>MIIBujCCAV+gAwIBAgIUceu6ULjoE1ULCec6gx9iyxPJEV8wCgYIKoZIzj0EAwIwMjEQMA4GA1UEAwwHVGVzdCBDQTERMA8GA1UECgwIVGVzdCBPcmcxCzAJBgNVBAYTAkRFMB4XDTI2MDMyMzE0MzYzOVoXDTM2MDMyMDE0MzYzOVowMjEQMA4GA1UEAwwHVGVzdCBDQTERMA8GA1UECgwIVGVzdCBPcmcxCzAJBgNVBAYTAkRFMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEzc/Ece6GGonw14eNVaCvz3OLH37ujoQrRNHFU9nMEoL6JLCRt37p3uJAQm8yAWK+O3c5X0r9XansGftGhuEupKNTMFEwHQYDVR0OBBYEFEalFjC7gwk9qfN4LEhIRRwc2stkMB8GA1UdIwQYMBaAFEalFjC7gwk9qfN4LEhIRRwc2stkMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIhAJUnVYelxx0EUskVrUJvx0/FmOB8743oTam6GJp5G4X5AiEA16rirUgfX468E+4P3xrIa9u48bUm3iDFd7YPLuIypNg=</tsl:X509Certificate></tsl:DigitalId>
+              <tsl:DigitalId><tsl:X509SubjectName>CN=Example</tsl:X509SubjectName></tsl:DigitalId>
+              <tsl:DigitalId><tsl:X509SKI>AQIDBA==</tsl:X509SKI></tsl:DigitalId>
+            </tsl:ServiceDigitalIdentity>
+            <tsl:ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</tsl:ServiceStatus>
+            <tsl:StatusStartingTime>2024-01-15T00:00:00Z</tsl:StatusStartingTime>
+          </tsl:ServiceInformation>
+        </tsl:TSPService>
+      </tsl:TSPServices>
+    </tsl:TrustServiceProvider>
+  </tsl:TrustServiceProviderList>
+  <ds:Signature Id="sig"><ds:SignedInfo/></ds:Signature>
+</tsl:TrustServiceStatusList>

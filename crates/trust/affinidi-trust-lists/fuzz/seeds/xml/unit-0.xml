@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TrustServiceStatusList>
+  <SchemeInformation>
+    <TSLVersionIdentifier>5</TSLVersionIdentifier>
+    <SchemeOperatorName>
+      <Name>Test Authority</Name>
+    </SchemeOperatorName>
+    <SchemeTerritory>DE</SchemeTerritory>
+    <ListIssueDateTime>2026-01-01T00:00:00Z</ListIssueDateTime>
+  </SchemeInformation>
+</TrustServiceStatusList>

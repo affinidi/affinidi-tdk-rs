@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<TrustServiceStatusList>
+  <SchemeInformation>
+    <SchemeOperatorName><Name>Test</Name></SchemeOperatorName>
+    <SchemeTerritory>FR</SchemeTerritory>
+    <ListIssueDateTime>2026-01-01T00:00:00Z</ListIssueDateTime>
+    <NextUpdate><dateTime>2026-07-01T00:00:00Z</dateTime></NextUpdate>
+  </SchemeInformation>
+  <TrustServiceProviderList>
+    <TrustServiceProvider>
+      <TSPInformation>
+        <TSPName><Name>French PID Provider</Name></TSPName>
+      </TSPInformation>
+      <TSPServices>
+        <TSPService>
+          <ServiceInformation>
+            <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/IdV/nothQC</ServiceTypeIdentifier>
+            <ServiceName><Name>PID Service</Name></ServiceName>
+            <ServiceDigitalIdentity>
+              <DigitalId><X509Certificate>dGVzdC1jZXJ0</X509Certificate></DigitalId>
+            </ServiceDigitalIdentity>
+            <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+            <StatusStartingTime>2024-01-01T00:00:00Z</StatusStartingTime>
+          </ServiceInformation>
+        </TSPService>
+      </TSPServices>
+    </TrustServiceProvider>
+  </TrustServiceProviderList>
+</TrustServiceStatusList>
