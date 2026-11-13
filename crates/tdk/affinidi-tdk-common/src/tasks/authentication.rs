@@ -575,11 +575,7 @@ impl AuthenticationCacheInner {
         let allow_insecure_http = self.allow_insecure_http_endpoints;
 
         let handle = tokio::spawn(async move {
-            if let Err(e) =
-                check_auth_endpoint(&service_copy, &did_resolver, allow_insecure_http).await
-            {
-                return Err(e);
-            }
+            check_auth_endpoint(&service_copy, &did_resolver, allow_insecure_http).await?;
 
             // A forced refresh has to say so. `authenticate` re-derives the
             // decision from the token's expiry and refreshes only inside the
