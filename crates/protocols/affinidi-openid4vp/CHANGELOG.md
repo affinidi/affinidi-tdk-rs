@@ -1,6 +1,22 @@
 # Affinidi OpenID4VP Changelog
 
-## Unreleased (0.1.4) — OpenID4VP 1.0 verifier pieces
+## Unreleased (0.1.5) — docs say what is verified and what is not
+
+Documentation only; no code change.
+
+- `verifier::validate_authorization_response` lists what it checks (`state`,
+  the submission's `definition_id`, a non-empty `descriptor_map`); it never
+  checked that a VP token is present or matched the submission against the
+  input descriptors, and its docs no longer say so.
+- The `verifier` and `wallet` module docs describe the pre-1.0 helpers as the
+  builders they are, and the crate docs drop the seven-step flow (credential
+  matching, VP token verification) that no code performs. They say instead
+  that presentations must be verified by their format's crate before
+  `DcqlQuery::evaluate_presentation`.
+- `RequestObject::validate` is described as the verifier's check before
+  signing; there is no wallet-side verification of a request object.
+
+## 11th October 2026 (0.1.4) — OpenID4VP 1.0 verifier pieces
 
 Additive: the verifier side of OpenID4VP 1.0, beside the existing pre-1.0 and
 Presentation Exchange types, which are unchanged.

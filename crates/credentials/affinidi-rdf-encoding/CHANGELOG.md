@@ -1,5 +1,11 @@
 # Affinidi RDF Encoding Changelog
 
+## 0.1.9 — no expanded documents in debug logs
+
+`expand_and_to_rdf` and `expand_and_to_rdf_safe` no longer log the full
+expanded JSON-LD document at `debug`, so credential claims do not reach logs
+when debug logging is on. No other change.
+
 ## 0.1.8 — safe mode refuses what it cannot convert; RDFC-1.0 work limit per canonicalization; fresh blank node labels
 
 **Safe-mode expansion** (`expand_document_safe`, `expand_and_to_rdf_safe`)

@@ -1,5 +1,23 @@
 # Affinidi BBS
 
+## 0.4.2 — signatures parse from exactly 80 bytes; secret intermediates wiped
+
+**Behaviour change (R3.6).** `Signature::from_bytes` now requires exactly 80
+bytes and returns `BbsError::InvalidSignature` otherwise. It used to read the
+first 80 bytes and ignore the rest, so one signature had many byte encodings,
+unlike proofs, which already refuse trailing bytes. `Signature::to_bytes`
+output and all IETF fixtures are 80 bytes, so they parse as before.
+
+- `SecretKey`'s `Drop` wipes the scalar with `Scalar::zeroize()` instead of
+  an `unsafe` byte view; the comment that said `Scalar` has no `Zeroize`
+  was wrong.
+- Signing wipes `1 / (SK + e)` after use, and `keygen` wipes its copy of the
+  key material.
+- Docs: `Ciphersuite::Bls12381Shake256` is described as identifiers only
+  (every operation already returns `BbsError::Unsupported`), and the crate
+  docs no longer list holder binding via the presentation header; a
+  presentation header binds a proof to a verifier's context, not to a holder.
+
 ## 0.4.1 — proof verification rejects identity points and zero scalars
 
 Proof verification now rejects a proof whose `Abar`, `Bbar` or `D` is the G1

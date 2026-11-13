@@ -19,7 +19,6 @@ use crate::model::Dataset;
 /// and `data-integrity/v2`.
 pub fn expand_and_to_rdf(document: &Value) -> Result<Dataset> {
     let expanded = expand::expand_document(document)?;
-    tracing::debug!(expanded = %expanded, "JSON-LD expanded form");
     to_rdf::to_rdf(&expanded)
 }
 
@@ -33,6 +32,5 @@ pub fn expand_and_to_rdf(document: &Value) -> Result<Dataset> {
 /// signed RDF dataset (issue #381).
 pub fn expand_and_to_rdf_safe(document: &Value) -> Result<Dataset> {
     let expanded = expand::expand_document_safe(document)?;
-    tracing::debug!(expanded = %expanded, "JSON-LD expanded form (safe mode)");
     to_rdf::to_rdf(&expanded)
 }

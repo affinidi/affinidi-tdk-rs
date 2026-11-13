@@ -1,9 +1,10 @@
 /*!
  * BBS ciphersuite definitions per IETF draft §4.
  *
- * Two ciphersuites are defined:
+ * Two ciphersuites are defined, one is implemented:
  * - **BLS12-381-SHA-256**: Uses SHA-256 (XMD) for expand_message
- * - **BLS12-381-SHAKE-256**: Uses SHAKE-256 (XOF) for expand_message
+ * - **BLS12-381-SHAKE-256**: identifiers only; every operation returns
+ *   `BbsError::Unsupported` (see [`Ciphersuite::ensure_supported`])
  *
  * The ciphersuite determines the hash function, scalar length, and
  * ciphersuite-specific identifiers used throughout the BBS protocol.
@@ -15,7 +16,8 @@ pub enum Ciphersuite {
     /// BLS12-381 with SHA-256 (XMD).
     #[default]
     Bls12381Sha256,
-    /// BLS12-381 with SHAKE-256 (XOF).
+    /// BLS12-381 with SHAKE-256 (XOF). Not implemented: every operation
+    /// returns `BbsError::Unsupported`.
     Bls12381Shake256,
 }
 

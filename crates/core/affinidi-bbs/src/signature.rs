@@ -98,12 +98,13 @@ pub fn core_sign(
 
     // 6. A = B * (1 / (SK + e))
     let mut sk_plus_e = sk.0 + e;
-    let inv = sk_plus_e.invert();
+    let inv = Option::<Scalar>::from(sk_plus_e.invert());
     sk_plus_e.zeroize(); // Zeroize intermediate secret
-    if inv.is_none().into() {
+    let Some(mut inv) = inv else {
         return Err(BbsError::Crypto("SK + e has no inverse".into()));
-    }
-    let a = b * inv.unwrap();
+    };
+    let a = b * inv;
+    inv.zeroize(); // with the public `e`, `inv` would give back the key
 
     Ok(Signature { a, e })
 }

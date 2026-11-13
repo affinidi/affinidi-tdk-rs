@@ -17,7 +17,11 @@
  * - **ZKP_01**: Unlinkable selective disclosure of attributes
  * - **ZKP_02**: Verifier cannot determine undisclosed attributes
  * - **ZKP_03**: Cross-presentation unlinkability
- * - **ZKP_06**: Holder binding via presentation header
+ *
+ * A proof is bound to the `presentation_header` it was generated with (for
+ * example a verifier nonce); the verifier must check that the header is the
+ * one it expects. The presentation header alone does not bind a proof to a
+ * holder.
  *
  * # Quick Start
  *

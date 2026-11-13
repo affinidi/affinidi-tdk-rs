@@ -35,7 +35,7 @@ use crate::crypto_suites::CryptoSuite;
 pub enum Canonicalization {
     /// RFC 8785 JSON Canonicalization Scheme.
     Jcs,
-    /// W3C RDF Dataset Canonicalization 1.0 (URDNA2015).
+    /// W3C RDF Dataset Canonicalization (RDFC-1.0).
     Rdfc,
     /// Cryptosuite-specific canonicalization handled out-of-band
     /// (e.g. BBS-2023's selective-disclosure pipeline).
@@ -73,7 +73,12 @@ pub struct EddsaJcs2022;
 /// `eddsa-rdfc-2022` — EdDSA signatures over RDFC-canonicalized documents.
 pub struct EddsaRdfc2022;
 
-fn eddsa_verify(key: &[u8], data: &[u8], sig: &[u8]) -> Result<(), DataIntegrityError> {
+fn eddsa_verify(
+    suite: CryptoSuite,
+    key: &[u8],
+    data: &[u8],
+    sig: &[u8],
+) -> Result<(), DataIntegrityError> {
     use crate::SignatureFailure;
     use ed25519_dalek::{Signature, VerifyingKey};
 
@@ -85,12 +90,12 @@ fn eddsa_verify(key: &[u8], data: &[u8], sig: &[u8]) -> Result<(), DataIntegrity
         })?;
     let signature =
         Signature::from_slice(sig).map_err(|_| DataIntegrityError::InvalidSignature {
-            suite: CryptoSuite::EddsaJcs2022,
+            suite,
             reason: SignatureFailure::Malformed,
         })?;
     verifying_key.verify_strict(data, &signature).map_err(|_| {
         DataIntegrityError::InvalidSignature {
-            suite: CryptoSuite::EddsaJcs2022,
+            suite,
             reason: SignatureFailure::Invalid,
         }
     })
@@ -107,7 +112,7 @@ impl CryptoSuiteOps for EddsaJcs2022 {
         &[KeyType::Ed25519]
     }
     fn verify(&self, key: &[u8], data: &[u8], sig: &[u8]) -> Result<(), DataIntegrityError> {
-        eddsa_verify(key, data, sig)
+        eddsa_verify(CryptoSuite::EddsaJcs2022, key, data, sig)
     }
 }
 
@@ -122,7 +127,7 @@ impl CryptoSuiteOps for EddsaRdfc2022 {
         &[KeyType::Ed25519]
     }
     fn verify(&self, key: &[u8], data: &[u8], sig: &[u8]) -> Result<(), DataIntegrityError> {
-        eddsa_verify(key, data, sig)
+        eddsa_verify(CryptoSuite::EddsaRdfc2022, key, data, sig)
     }
 }
 
@@ -310,5 +315,46 @@ impl CryptoSuiteOps for SlhDsa128Rdfc2024 {
     }
     fn verify(&self, key: &[u8], data: &[u8], sig: &[u8]) -> Result<(), DataIntegrityError> {
         slh_dsa_verify(CryptoSuite::SlhDsa128Rdfc2024, key, data, sig)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SignatureFailure;
+    use ed25519_dalek::{Signer as _, SigningKey};
+
+    fn ed25519_key_and_signature() -> (Vec<u8>, Vec<u8>) {
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let signature = signing_key.sign(b"data").to_bytes().to_vec();
+        (signing_key.verifying_key().to_bytes().to_vec(), signature)
+    }
+
+    #[test]
+    fn eddsa_errors_name_the_suite_that_verified() {
+        let (key, signature) = ed25519_key_and_signature();
+        for (ops, suite) in [
+            (
+                &EddsaJcs2022 as &dyn CryptoSuiteOps,
+                CryptoSuite::EddsaJcs2022,
+            ),
+            (&EddsaRdfc2022, CryptoSuite::EddsaRdfc2022),
+        ] {
+            ops.verify(&key, b"data", &signature).unwrap();
+            match ops.verify(&key, b"other", &signature) {
+                Err(DataIntegrityError::InvalidSignature {
+                    suite: reported,
+                    reason: SignatureFailure::Invalid,
+                }) => assert_eq!(reported, suite),
+                other => panic!("expected an invalid signature, got {other:?}"),
+            }
+            match ops.verify(&key, b"data", &signature[..10]) {
+                Err(DataIntegrityError::InvalidSignature {
+                    suite: reported,
+                    reason: SignatureFailure::Malformed,
+                }) => assert_eq!(reported, suite),
+                other => panic!("expected a malformed signature, got {other:?}"),
+            }
+        }
     }
 }

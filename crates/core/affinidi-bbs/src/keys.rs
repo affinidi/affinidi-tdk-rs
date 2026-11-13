@@ -7,6 +7,7 @@
 
 use bls12_381_plus::G2Projective;
 use bls12_381_plus::ff::Field;
+use zeroize::Zeroize;
 
 use crate::ciphersuite::Ciphersuite;
 use crate::error::{BbsError, Result};
@@ -40,7 +41,9 @@ pub fn keygen(key_material: &[u8], key_info: &[u8], cs: Ciphersuite) -> Result<S
     derive_input.extend_from_slice(&(key_info.len() as u16).to_be_bytes());
     derive_input.extend_from_slice(key_info);
 
-    let sk = hash_to_scalar(&derive_input, &key_dst, cs)?;
+    let sk = hash_to_scalar(&derive_input, &key_dst, cs);
+    derive_input.zeroize();
+    let sk = sk?;
 
     if bool::from(sk.is_zero()) {
         return Err(BbsError::InvalidKey("derived key is zero".into()));
