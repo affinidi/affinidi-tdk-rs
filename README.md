@@ -141,8 +141,8 @@ W3C Verifiable Credentials and selective-disclosure formats.
 | Crate | Description |
 |---|---|
 | [`affinidi-vc`](./crates/credentials/affinidi-vc/) | W3C Verifiable Credentials Data Model 1.1 and 2.0 |
-| [`affinidi-sd-jwt`](./crates/credentials/affinidi-sd-jwt/) | SD-JWT (Selective Disclosure JWT) per IETF spec |
-| [`affinidi-sd-jwt-vc`](./crates/credentials/affinidi-sd-jwt-vc/) | SD-JWT-based Verifiable Credentials (SD-JWT VC) |
+| [`affinidi-sd-jwt`](./crates/credentials/affinidi-sd-jwt/) | SD-JWT (Selective Disclosure JWT) per RFC 9901 |
+| [`affinidi-sd-jwt-vc`](./crates/credentials/affinidi-sd-jwt-vc/) | Deprecated: re-exports `affinidi_vc::sd_jwt_vc` (SD-JWT VC) |
 | [`affinidi-data-integrity`](./crates/credentials/affinidi-data-integrity/) | W3C Data Integrity proofs (eddsa-jcs-2022, eddsa-rdfc-2022) |
 | [`affinidi-rdf-encoding`](./crates/credentials/affinidi-rdf-encoding/) | RDFC-1.0 canonicalization and JSON-LD expansion |
 | [`affinidi-status-list`](./crates/credentials/affinidi-status-list/) | Credential status and revocation lists (Bitstring Status List, eIDAS ASL/ARL) |

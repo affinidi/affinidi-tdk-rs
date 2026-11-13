@@ -1,6 +1,6 @@
 # Affinidi mdoc Changelog
 
-## Unreleased (0.6.0) — ISO session keys; `MdocBuilder` needs a device key and validity
+## 12th November 2026 (0.6.0) — ISO session keys; `MdocBuilder` needs a device key and validity
 
 **Behaviour change (R3.6).** Proximity session keys derived by 0.6 differ
 from those derived by 0.5 and earlier, and `MdocBuilder::build` refuses input
@@ -42,7 +42,7 @@ that 0.5 signed.
 - **Fixed — `MobileSecurityObject::create`** returns an error instead of
   overflowing when a decoy digest ID would not fit in a `u32`.
 
-## Unreleased (0.5.0) — digests over received bytes; `DeviceResponse::verify`
+## 12th November 2026 (0.5.0) — digests over received bytes; `DeviceResponse::verify`
 
 **Behaviour change (R3.6).** Reader-side checks are stricter, and some
 responses that 0.4 accepted are now rejected.
@@ -95,7 +95,7 @@ responses that 0.4 accepted are now rejected.
 The piecemeal methods remain. `verify_digests` still trusts the `mso` field;
 prefer `DeviceResponse::verify` on the reader side.
 
-## Unreleased (0.4.0) — OpenID4VP 1.0 Final handovers
+## 21st October 2026 (0.4.0) — OpenID4VP 1.0 Final handovers
 
 Fixes [#960](https://github.com/affinidi/affinidi-tdk-rs/issues/960); the fix is
 by [@razvp](https://github.com/razvp) ([#961](https://github.com/affinidi/affinidi-tdk-rs/pull/961)).
@@ -120,7 +120,7 @@ transcript could not interoperate. It now follows Appendix B.2.6.
   differ from 0.3.x. Both handovers are pinned by known-answer tests against the
   spec's example `SessionTranscript` bytes.
 
-## Unreleased (0.3.3) — `ValidityInfo` dates are CBOR Tag 0
+## 14th October 2026 (0.3.3) — `ValidityInfo` dates are CBOR Tag 0
 
 Fixes [#950](https://github.com/affinidi/affinidi-tdk-rs/issues/950); the fix is
 by [@razvp](https://github.com/razvp) ([#951](https://github.com/affinidi/affinidi-tdk-rs/pull/951)).
@@ -136,14 +136,14 @@ strict verifier could reject MSOs issued by this crate. They now carry Tag 0.
 - **Decoding is unchanged:** tagged and untagged dates both parse.
 - `ValidityInfo` now derives `PartialEq`.
 
-## Unreleased (0.3.2) — `rand` 0.10
+## 1st October 2026 (0.3.2) — `rand` 0.10
 
 No behaviour change and no public API change. `EdDsaCoseKey::generate` now
 calls `SigningKey::generate` directly: ed25519-dalek 3 and `rand` 0.10 share
 `rand_core` 0.10, so the detour through an intermediate byte array (which left
 an unzeroized copy of the key on the stack) is gone.
 
-## Unreleased (0.3.1) — `sha2` 0.11, `hmac` 0.13, `hkdf` 0.13, `aes-gcm` 0.11
+## 7th September 2026 (0.3.1) — `sha2` 0.11, `hmac` 0.13, `hkdf` 0.13, `aes-gcm` 0.11
 
 No behaviour change and no public API change: these are private dependencies
 here, which is what lets each crate move on its own schedule. Verified by

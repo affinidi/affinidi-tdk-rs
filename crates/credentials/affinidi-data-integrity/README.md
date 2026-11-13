@@ -48,10 +48,10 @@ post-quantum (ML-DSA, SLH-DSA) algorithms.
 
 ```toml
 [dependencies]
-affinidi-data-integrity = "0.5"
+affinidi-data-integrity = "0.8"
 
 # With post-quantum cryptosuites:
-# affinidi-data-integrity = { version = "0.5", features = ["post-quantum"] }
+# affinidi-data-integrity = { version = "0.8", features = ["post-quantum"] }
 ```
 
 ## Quickstart
@@ -212,14 +212,14 @@ See [CHANGELOG.md](CHANGELOG.md) for the full breaking-change list.
 ## Security considerations
 
 - **Post-quantum suites are experimental.** W3C `di-quantum-safe` is v0.3 and explicitly "do not use in production"; NIST FIPS 204 / 205 are final, but the Data Integrity profile on top is still moving. Classical Ed25519 is the only option currently recommended for production-grade VCs.
-- **Deterministic signing.** All supported suites (Ed25519, ML-DSA, SLH-DSA) sign deterministically in this crate — the same input produces the same signature. This is required for W3C interop and for reproducible test vectors. If you need randomised signatures for side-channel reasons, drop to the underlying primitive crates directly.
+- **Deterministic signing.** All supported suites (Ed25519, P-256, ML-DSA, SLH-DSA) sign deterministically in this crate — the same input produces the same signature. This is required for W3C interop and for reproducible test vectors. If you need randomised signatures for side-channel reasons, drop to the underlying primitive crates directly.
 - **Zeroize coverage.** Private key bytes held by `Secret` are zeroized on drop via its `ZeroizeOnDrop` derive. The ML-DSA crate zeroizes its expanded matrix (we enable its `zeroize` feature). Intermediate stack copies inside this crate are wrapped in `Zeroizing`. Your own `Signer` implementations should match this.
 - **Timing channels.** Ed25519 and ML-DSA signing are constant-time in the underlying RustCrypto crates. SLH-DSA has branching tied to public material only. BBS-2023 has selective-disclosure-specific side-channel considerations — see its spec.
 - See [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
 ## Out of scope
 
-- **JOSE / JWS / JWT post-quantum.** Waiting for IETF draft stability. When those standards land they will live in sibling crates (`affinidi-data-integrity-jose`, etc.), not this crate.
+- **JOSE / JWS / JWT post-quantum.** Waiting for IETF draft stability; not part of this crate.
 - **COSE / mdoc post-quantum.** Same — waiting on IETF.
 - **FALCON, SQIsign, HAWK, Kyber/ML-KEM.** Either not NIST-finalised or not in the current `di-quantum-safe` cryptosuite set.
 

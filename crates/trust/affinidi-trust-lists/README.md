@@ -88,7 +88,7 @@ if result.valid {
 
 ## Related Crates
 
-- [`affinidi-sd-jwt-vc`](../../credentials/affinidi-sd-jwt-vc/) — SD-JWT VC format (issuer trust validation)
+- [`affinidi-vc`](../../credentials/affinidi-vc/) — SD-JWT VC format (`affinidi_vc::sd_jwt_vc`)
 - [`affinidi-mdoc`](../../credentials/affinidi-mdoc/) — mdoc format (IACA cert trust validation)
 - [`affinidi-tdk`](../../tdk/affinidi-tdk/) — Unified TDK entry point
 
