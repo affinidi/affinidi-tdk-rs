@@ -1,5 +1,42 @@
 # Affinidi Data Integrity Changelog
 
+## 0.8.5 — `bbs-2023` verifiers take options: presentation header and proof shape checked
+
+The `bbs-2023` derived-proof verifiers had no way to be told which
+presentation header the verifier expects, and it could not be read back
+from outside the crate either. A derived proof made for one verifier's
+header therefore verified for any other. They also did not check the proof's
+`type`, `cryptosuite`, `verificationMethod` or `proofPurpose`, and they took
+no `VerifyOptions`.
+
+- New `bbs_2023_transform::verify_derived_proof_with(reveal, pk, &options)`
+  and `verify_pseudonym_derived_proof_with(reveal, pk, verifier_id, &options)`
+  take a new `#[non_exhaustive]` `DerivedProofVerifyOptions`:
+  - `expected_presentation_header`
+    (`with_expected_presentation_header`): when set, the header in the
+    derived proof must equal it, or the proof is refused with
+    `Conformance` before any BBS work. The comparison time depends only on
+    the lengths.
+  - `verify: VerifyOptions` (`with_verify_options`): verification time and
+    skews for `created` / `expires`, `expected_domain`,
+    `expected_challenge`, `allowed_suites`, and `expected_context`, which is
+    compared with the reveal document's `@context`. Same errors as
+    `DataIntegrityProof::verify`.
+- **Proof shape (both new and old entry points).** `type` must be
+  `DataIntegrityProof` and `cryptosuite` `bbs-2023` (`Conformance`).
+  `verificationMethod` and `proofPurpose` must be non-empty strings
+  (`MalformedProof`).
+- `verify_derived_proof` and `verify_pseudonym_derived_proof` are
+  deprecated. They now call the `_with` forms with default options, so they
+  still accept any presentation header.
+
+**Behaviour change (R3.6).** Patch bump: the new items are additive and the
+deprecated functions keep their signatures. A derived proof with a missing or
+wrong `type` / `cryptosuite`, or with no `verificationMethod` or
+`proofPurpose`, used to verify and is now refused. Proofs made by this crate
+and the W3C vc-di-bbs vectors carry all four members and are not affected.
+No in-workspace crate calls these verifiers.
+
 ## 0.8.3 — `expires`, `domain`, `challenge`, `id` and `previousProof` proof members
 
 **Behaviour change (R3.6).** `DataIntegrityProof` had no field for the

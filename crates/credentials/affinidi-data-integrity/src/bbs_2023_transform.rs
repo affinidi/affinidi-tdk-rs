@@ -17,7 +17,7 @@
  * - [`create_derived_proof`] (holder) — selective disclosure: combined
  *   grouping, BBS `proof_gen`, the reveal label map, and the CBOR derived
  *   `proofValue` (`0xd95d03`).
- * - [`verify_derived_proof`] (verifier) — relabel + recompute hashes + BBS
+ * - [`verify_derived_proof_with`] (verifier) — relabel + recompute hashes + BBS
  *   `proof_verify`; accepts the reference derived proof byte-for-byte.
  *
  * Grouping uses the vc-di-ecdsa `selectJsonLd` / `parsePointer` / skolemize
@@ -333,21 +333,86 @@ fn cbor_index_array(v: &ciborium::Value) -> Option<Vec<usize>> {
     v.as_array()?.iter().map(cbor_int).collect()
 }
 
+/// Options for [`verify_derived_proof_with`] and
+/// [`verify_pseudonym_derived_proof_with`].
+///
+/// `verify` carries the checks shared with
+/// [`DataIntegrityProof::verify`](crate::DataIntegrityProof): verification
+/// time and clock skews for `created` / `expires`, `expected_domain`,
+/// `expected_challenge`, `allowed_suites`, and `expected_context` (compared
+/// with the reveal document's `@context`, which is the context the derived
+/// proof configuration is hashed under).
+///
+/// `expected_presentation_header` is the value the verifier gave the holder
+/// (typically a nonce). When set, the presentation header inside the derived
+/// proof must equal it; a proof derived for another header is refused before
+/// any BBS work. When `None`, any header is accepted, as before, and it is
+/// still bound into the BBS proof.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct DerivedProofVerifyOptions {
+    /// Shared proof checks.
+    pub verify: crate::VerifyOptions,
+    /// The presentation header the derived proof must carry, if any.
+    pub expected_presentation_header: Option<Vec<u8>>,
+}
+
+impl DerivedProofVerifyOptions {
+    /// Default options: current time, default skews, no expected values.
+    #[must_use = "constructed options must be passed to verify to take effect"]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the shared proof checks.
+    #[must_use = "chained builder call returns self; assign or chain further"]
+    pub fn with_verify_options(mut self, verify: crate::VerifyOptions) -> Self {
+        self.verify = verify;
+        self
+    }
+
+    /// Requires the derived proof's presentation header to equal `header`.
+    #[must_use = "chained builder call returns self; assign or chain further"]
+    pub fn with_expected_presentation_header(mut self, header: impl Into<Vec<u8>>) -> Self {
+        self.expected_presentation_header = Some(header.into());
+        self
+    }
+}
+
+/// Verify a `bbs-2023` **derived proof** (verifier side), per W3C vc-di-bbs,
+/// with default [`DerivedProofVerifyOptions`].
+///
+/// Accepts whatever presentation header the holder used. A verifier that
+/// gave the holder a nonce should call [`verify_derived_proof_with`] and set
+/// [`DerivedProofVerifyOptions::with_expected_presentation_header`].
+#[deprecated(
+    since = "0.8.5",
+    note = "cannot check the presentation header; use verify_derived_proof_with"
+)]
+pub fn verify_derived_proof(
+    reveal_document: &Value,
+    pk: &bbs::PublicKey,
+) -> Result<bool, DataIntegrityError> {
+    verify_derived_proof_with(reveal_document, pk, &DerivedProofVerifyOptions::default())
+}
+
 /// Verify a `bbs-2023` **derived proof** (verifier side), per W3C vc-di-bbs.
 ///
 /// Reconstructs the verify data from the disclosed `reveal_document` and its
 /// derived `proofValue`, then BBS-`proof_verify`s. `pk` is the issuer's BBS
 /// public key (resolved from the proof's verification method by the caller).
 ///
-/// Before any BBS work the proof's `created`, `expires`, `id` and
-/// `previousProof` are checked as `DataIntegrityProof::verify` checks them,
-/// but against the current time with the default skews: this function takes
-/// no `VerifyOptions`, so it cannot be given a verification time, and it
-/// does not check `domain` or `challenge` — callers that need them compare
-/// the proof's members themselves.
-pub fn verify_derived_proof(
+/// Before any BBS work the proof configuration is checked: `type` must be
+/// `DataIntegrityProof` and `cryptosuite` `bbs-2023`; `verificationMethod`
+/// and `proofPurpose` must be strings; `created`, `expires`, `id`,
+/// `previousProof`, `domain` and `challenge` are checked as
+/// `DataIntegrityProof::verify` checks them under `options.verify`; and the
+/// presentation header must equal `options.expected_presentation_header`
+/// when that is set.
+pub fn verify_derived_proof_with(
     reveal_document: &Value,
     pk: &bbs::PublicKey,
+    options: &DerivedProofVerifyOptions,
 ) -> Result<bool, DataIntegrityError> {
     let malformed = |m: &str| DataIntegrityError::MalformedProof(m.to_string());
     let proof = reveal_document
@@ -366,7 +431,12 @@ pub fn verify_derived_proof(
         .as_object_mut()
         .ok_or_else(|| malformed("proof must be an object"))?;
     cfg.remove("proofValue");
-    check_proof_options(cfg)?;
+    check_derived_proof_config(
+        cfg,
+        reveal_document.get("@context"),
+        &parsed.presentation_header,
+        options,
+    )?;
     if let Some(ctx) = reveal_document.get("@context") {
         cfg.insert("@context".to_string(), ctx.clone());
     }
@@ -1091,20 +1161,40 @@ fn parse_pseudonym_derived_proof_value(
     })
 }
 
-/// Verify a `bbs-2023` **pseudonym derived proof**: checks the selective
-/// disclosure and the per-verifier pseudonym binding. `verifier_id` must match
-/// the one used at derivation (the pseudonym context).
+/// Verify a `bbs-2023` **pseudonym derived proof** with default
+/// [`DerivedProofVerifyOptions`]. `verifier_id` must match the one used at
+/// derivation (the pseudonym context).
 ///
-/// Before any BBS work the proof's `created`, `expires`, `id` and
-/// `previousProof` are checked as `DataIntegrityProof::verify` checks them,
-/// but against the current time with the default skews: this function takes
-/// no `VerifyOptions`, so it cannot be given a verification time, and it
-/// does not check `domain` or `challenge` — callers that need them compare
-/// the proof's members themselves.
+/// Accepts whatever presentation header the holder used; see
+/// [`verify_pseudonym_derived_proof_with`].
+#[deprecated(
+    since = "0.8.5",
+    note = "cannot check the presentation header; use verify_pseudonym_derived_proof_with"
+)]
 pub fn verify_pseudonym_derived_proof(
     reveal_document: &Value,
     pk: &bbs::PublicKey,
     verifier_id: &str,
+) -> Result<bool, DataIntegrityError> {
+    verify_pseudonym_derived_proof_with(
+        reveal_document,
+        pk,
+        verifier_id,
+        &DerivedProofVerifyOptions::default(),
+    )
+}
+
+/// Verify a `bbs-2023` **pseudonym derived proof**: checks the selective
+/// disclosure and the per-verifier pseudonym binding. `verifier_id` must match
+/// the one used at derivation (the pseudonym context).
+///
+/// The proof configuration and presentation header are checked as
+/// [`verify_derived_proof_with`] checks them, before any BBS work.
+pub fn verify_pseudonym_derived_proof_with(
+    reveal_document: &Value,
+    pk: &bbs::PublicKey,
+    verifier_id: &str,
+    options: &DerivedProofVerifyOptions,
 ) -> Result<bool, DataIntegrityError> {
     let malformed = |m: &str| DataIntegrityError::MalformedProof(m.to_string());
     let proof = reveal_document
@@ -1122,7 +1212,12 @@ pub fn verify_pseudonym_derived_proof(
         .as_object_mut()
         .ok_or_else(|| malformed("proof must be an object"))?;
     cfg.remove("proofValue");
-    check_proof_options(cfg)?;
+    check_derived_proof_config(
+        cfg,
+        reveal_document.get("@context"),
+        &parsed.presentation_header,
+        options,
+    )?;
     if let Some(ctx) = reveal_document.get("@context") {
         cfg.insert("@context".to_string(), ctx.clone());
     }
@@ -1193,41 +1288,133 @@ pub fn verify_pseudonym_derived_proof(
     })
 }
 
-/// Checks a derived proof's `created`, `expires`, `id` and `previousProof`
-/// as [`crate::DataIntegrityProof::verify`] does, against the current time
-/// with the default skews ([`DEFAULT_CLOCK_SKEW`](crate::DEFAULT_CLOCK_SKEW)
-/// for `created`, none after `expires`). These verifiers take no
-/// `VerifyOptions`, so the time cannot be injected and `domain` /
-/// `challenge` are not checked.
-fn check_proof_options(proof: &Map<String, Value>) -> Result<(), DataIntegrityError> {
+/// Checks a derived proof's configuration (the proof without `proofValue`)
+/// and presentation header before any BBS work:
+///
+/// - `type` is `DataIntegrityProof` and `cryptosuite` is `bbs-2023`
+///   ([`DataIntegrityError::Conformance`]), and `bbs-2023` is in
+///   `allowed_suites` when that is non-empty;
+/// - `verificationMethod` and `proofPurpose` are present strings
+///   ([`DataIntegrityError::MalformedProof`]);
+/// - `created`, `expires`, `id` and `previousProof` as
+///   [`crate::DataIntegrityProof::verify`] checks them, at
+///   `verification_time` (or now) with the given skews;
+/// - `expected_context`, `expected_domain` and `expected_challenge` when set
+///   ([`DataIntegrityError::Conformance`]);
+/// - the presentation header equals `expected_presentation_header` when set
+///   ([`DataIntegrityError::Conformance`]).
+fn check_derived_proof_config(
+    proof: &Map<String, Value>,
+    document_context: Option<&Value>,
+    presentation_header: &[u8],
+    options: &DerivedProofVerifyOptions,
+) -> Result<(), DataIntegrityError> {
+    let verify = &options.verify;
+    let malformed = |m: String| DataIntegrityError::MalformedProof(m);
+    let conformance = |m: &str| DataIntegrityError::Conformance(m.to_string());
     let string = |member: &str| -> Result<Option<&str>, DataIntegrityError> {
         match proof.get(member) {
             None => Ok(None),
             Some(Value::String(value)) => Ok(Some(value)),
-            Some(_) => Err(DataIntegrityError::MalformedProof(format!(
-                "{member} must be a string"
-            ))),
+            Some(_) => Err(malformed(format!("{member} must be a string"))),
         }
     };
+
+    if string("type")? != Some("DataIntegrityProof") {
+        return Err(conformance(
+            "Invalid proof type, expected 'DataIntegrityProof'",
+        ));
+    }
+    if string("cryptosuite")? != Some("bbs-2023") {
+        return Err(conformance("Invalid cryptosuite, expected 'bbs-2023'"));
+    }
+    if !verify.allowed_suites.is_empty()
+        && !verify
+            .allowed_suites
+            .contains(&crate::crypto_suites::CryptoSuite::Bbs2023)
+    {
+        return Err(conformance(
+            "cryptosuite bbs-2023 is not in the caller's allowed suites",
+        ));
+    }
+    for member in ["verificationMethod", "proofPurpose"] {
+        if string(member)?.is_none_or(str::is_empty) {
+            return Err(malformed(format!("proof has no {member}")));
+        }
+    }
+
     let previous_proof = proof
         .get("previousProof")
         .map(|value| serde_json::from_value::<crate::StringOrList>(value.clone()))
         .transpose()
-        .map_err(|_| {
-            DataIntegrityError::MalformedProof(
-                "previousProof must be a string or a list of strings".to_string(),
-            )
-        })?;
+        .map_err(|_| malformed("previousProof must be a string or a list of strings".into()))?;
     crate::check_proof_id_values(string("id")?, previous_proof.as_ref())?;
     crate::check_proof_times(
         string("created")?,
         string("expires")?,
         &crate::ProofClock {
-            now: chrono::Utc::now(),
-            created_skew: crate::DEFAULT_CLOCK_SKEW,
-            expiry_skew: chrono::TimeDelta::zero(),
+            now: verify.verification_time.unwrap_or_else(chrono::Utc::now),
+            created_skew: verify.clock_skew,
+            expiry_skew: verify.expiry_clock_skew,
         },
-    )
+    )?;
+
+    if let Some(expected) = &verify.expected_context {
+        let matches = match document_context {
+            Some(Value::String(single)) => expected.len() == 1 && expected[0] == *single,
+            Some(Value::Array(items)) => {
+                items.len() == expected.len()
+                    && items
+                        .iter()
+                        .zip(expected)
+                        .all(|(item, want)| item.as_str() == Some(want.as_str()))
+            }
+            _ => false,
+        };
+        if !matches {
+            return Err(conformance(
+                "Document context does not match the expected context",
+            ));
+        }
+    }
+
+    if let Some(expected) = &verify.expected_domain {
+        let domain = proof
+            .get("domain")
+            .map(|value| serde_json::from_value::<crate::StringOrList>(value.clone()))
+            .transpose()
+            .map_err(|_| malformed("domain must be a string or a list of strings".into()))?;
+        if !domain.is_some_and(|domain| domain.contains(expected)) {
+            return Err(conformance(
+                "proof domain does not match the expected domain",
+            ));
+        }
+    }
+
+    if let Some(expected) = &verify.expected_challenge
+        && string("challenge")? != Some(expected.as_str())
+    {
+        return Err(conformance(
+            "proof challenge does not match the expected challenge",
+        ));
+    }
+
+    if let Some(expected) = &options.expected_presentation_header
+        && !bytes_equal(expected, presentation_header)
+    {
+        return Err(conformance(
+            "presentation header does not match the expected value",
+        ));
+    }
+    Ok(())
+}
+
+/// Byte equality whose running time depends only on the lengths.
+fn bytes_equal(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// `proofHash = SHA-256(RDFC-1.0(proofConfig))`.
@@ -1648,6 +1835,8 @@ fn ensure_intermediate(selected: &mut Value, path: &str, source: &Value) {
 }
 
 #[cfg(test)]
+// The two-argument verifiers stay covered until they are removed.
+#[allow(deprecated)]
 mod tests {
     use super::*;
 
@@ -2361,6 +2550,251 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn w3c_reference_pk() -> bbs::PublicKey {
+        let (_sk, pk) = bbs_keys();
+        pk
+    }
+
+    fn at(text: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(text)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn derived_proof_presentation_header_is_checked_when_expected() {
+        let (sk, pk) = bbs_keys();
+        let base = sign_base_document(
+            &json("windDoc.json"),
+            &["/issuer"],
+            "did:key:zHolder#bbs",
+            "2024-01-01T00:00:00Z",
+            &sk,
+            &pk,
+            &[0x42u8; 32],
+        )
+        .unwrap();
+        let reveal =
+            create_derived_proof(&base, &["/credentialSubject/sailNumber"], b"nonce-1", &pk)
+                .unwrap();
+
+        let expecting = |header: &[u8]| {
+            DerivedProofVerifyOptions::new().with_expected_presentation_header(header)
+        };
+        assert!(verify_derived_proof_with(&reveal, &pk, &expecting(b"nonce-1")).unwrap());
+        assert!(
+            verify_derived_proof_with(&reveal, &pk, &DerivedProofVerifyOptions::new()).unwrap(),
+            "no expected header: any header is accepted"
+        );
+        let others: [&[u8]; 4] = [b"nonce-2", b"nonce-", b"nonce-12", b""];
+        for other in others {
+            assert!(
+                matches!(
+                    verify_derived_proof_with(&reveal, &pk, &expecting(other)),
+                    Err(DataIntegrityError::Conformance(_))
+                ),
+                "header {other:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn pseudonym_derived_proof_presentation_header_is_checked_when_expected() {
+        let pk = pseudonym_pk();
+        let reveal = create_pseudonym_derived_proof(
+            &json("pseudonym/addSignedSDBase.json"),
+            &[],
+            b"test-ph",
+            &pk,
+            &hex_decode(
+                json("pseudonym/proverNym.json")["proverNymHex"]
+                    .as_str()
+                    .unwrap(),
+            ),
+            &hex_decode(
+                json("pseudonym/commitmentInfo.json")["secretProverBlind"]
+                    .as_str()
+                    .unwrap(),
+            ),
+            VERIFIER_ID,
+        )
+        .unwrap();
+
+        let expecting = |header: &[u8]| {
+            DerivedProofVerifyOptions::new().with_expected_presentation_header(header)
+        };
+        assert!(
+            verify_pseudonym_derived_proof_with(&reveal, &pk, VERIFIER_ID, &expecting(b"test-ph"))
+                .unwrap()
+        );
+        assert!(matches!(
+            verify_pseudonym_derived_proof_with(&reveal, &pk, VERIFIER_ID, &expecting(b"other")),
+            Err(DataIntegrityError::Conformance(_))
+        ));
+    }
+
+    #[test]
+    fn derived_proof_type_cryptosuite_and_members_are_checked() {
+        let pk = w3c_reference_pk();
+        let reference = json("derivedRevealDocument.json");
+        let options = DerivedProofVerifyOptions::new();
+        assert!(verify_derived_proof_with(&reference, &pk, &options).unwrap());
+
+        let mut wrong_type = reference.clone();
+        wrong_type["proof"]["type"] = Value::String("Ed25519Signature2020".into());
+        assert!(matches!(
+            verify_derived_proof_with(&wrong_type, &pk, &options),
+            Err(DataIntegrityError::Conformance(_))
+        ));
+        assert!(matches!(
+            verify_derived_proof(&wrong_type, &pk),
+            Err(DataIntegrityError::Conformance(_))
+        ));
+
+        let mut wrong_suite = reference.clone();
+        wrong_suite["proof"]["cryptosuite"] = Value::String("ecdsa-rdfc-2019".into());
+        assert!(matches!(
+            verify_derived_proof_with(&wrong_suite, &pk, &options),
+            Err(DataIntegrityError::Conformance(_))
+        ));
+
+        for member in ["type", "cryptosuite"] {
+            let mut missing = reference.clone();
+            missing["proof"].as_object_mut().unwrap().remove(member);
+            assert!(
+                matches!(
+                    verify_derived_proof_with(&missing, &pk, &options),
+                    Err(DataIntegrityError::Conformance(_))
+                ),
+                "missing {member} must be refused"
+            );
+        }
+        for member in ["verificationMethod", "proofPurpose"] {
+            let mut missing = reference.clone();
+            missing["proof"].as_object_mut().unwrap().remove(member);
+            assert!(
+                matches!(
+                    verify_derived_proof_with(&missing, &pk, &options),
+                    Err(DataIntegrityError::MalformedProof(_))
+                ),
+                "missing {member} must be refused"
+            );
+            let mut not_string = reference.clone();
+            not_string["proof"][member] = serde_json::json!(7);
+            assert!(matches!(
+                verify_derived_proof_with(&not_string, &pk, &options),
+                Err(DataIntegrityError::MalformedProof(_))
+            ));
+        }
+
+        let mut pseudonym_wrong_type = json("pseudonym/derivedRevealDocument.json");
+        pseudonym_wrong_type["proof"]["type"] = Value::String("Other".into());
+        assert!(matches!(
+            verify_pseudonym_derived_proof_with(
+                &pseudonym_wrong_type,
+                &pseudonym_pk(),
+                VERIFIER_ID,
+                &options
+            ),
+            Err(DataIntegrityError::Conformance(_))
+        ));
+    }
+
+    #[test]
+    fn derived_proof_verify_options_are_applied() {
+        let pk = w3c_reference_pk();
+        let reference = json("derivedRevealDocument.json");
+        // The reference proof's `created` is 2023-08-15T23:36:38Z.
+        let with = |verify: crate::VerifyOptions| {
+            DerivedProofVerifyOptions::new().with_verify_options(verify)
+        };
+
+        let after = crate::VerifyOptions::new().with_verification_time(at("2024-01-01T00:00:00Z"));
+        assert!(verify_derived_proof_with(&reference, &pk, &with(after)).unwrap());
+        let before = crate::VerifyOptions::new().with_verification_time(at("2023-01-01T00:00:00Z"));
+        assert!(matches!(
+            verify_derived_proof_with(&reference, &pk, &with(before)),
+            Err(DataIntegrityError::Conformance(_))
+        ));
+
+        let domain = crate::VerifyOptions::new().with_expected_domain("verifier.example");
+        assert!(matches!(
+            verify_derived_proof_with(&reference, &pk, &with(domain)),
+            Err(DataIntegrityError::Conformance(_))
+        ));
+        let challenge = crate::VerifyOptions::new().with_expected_challenge("abc");
+        assert!(matches!(
+            verify_derived_proof_with(&reference, &pk, &with(challenge)),
+            Err(DataIntegrityError::Conformance(_))
+        ));
+
+        let other_suites = crate::VerifyOptions::new()
+            .with_allowed_suites(vec![crate::crypto_suites::CryptoSuite::EcdsaJcs2019]);
+        assert!(matches!(
+            verify_derived_proof_with(&reference, &pk, &with(other_suites)),
+            Err(DataIntegrityError::Conformance(_))
+        ));
+        let bbs_allowed = crate::VerifyOptions::new()
+            .with_allowed_suites(vec![crate::crypto_suites::CryptoSuite::Bbs2023]);
+        assert!(verify_derived_proof_with(&reference, &pk, &with(bbs_allowed)).unwrap());
+
+        // The reference document's @context holds an inline object, so no
+        // list of IRIs matches it.
+        let other_context = crate::VerifyOptions::new()
+            .with_expected_context(vec!["https://www.w3.org/ns/credentials/v2".into()]);
+        assert!(matches!(
+            verify_derived_proof_with(&reference, &pk, &with(other_context)),
+            Err(DataIntegrityError::Conformance(_))
+        ));
+    }
+
+    #[test]
+    fn expected_context_is_compared_with_the_document_context() {
+        let proof = json("derivedRevealDocument.json")["proof"]
+            .as_object()
+            .unwrap()
+            .clone();
+        let expecting = |context: &[&str]| {
+            DerivedProofVerifyOptions::new().with_verify_options(
+                crate::VerifyOptions::new()
+                    .with_expected_context(context.iter().map(|c| c.to_string()).collect()),
+            )
+        };
+        let v2 = "https://www.w3.org/ns/credentials/v2";
+        let other = "https://example.org/context";
+        let list = serde_json::json!([v2, other]);
+        let single = serde_json::json!(v2);
+
+        let check = |context: Option<&Value>, expected: &[&str]| {
+            check_derived_proof_config(&proof, context, b"", &expecting(expected))
+        };
+        assert!(check(Some(&list), &[v2, other]).is_ok());
+        assert!(check(Some(&single), &[v2]).is_ok());
+        for (context, expected) in [
+            (Some(&list), &[other, v2][..]),
+            (Some(&list), &[v2][..]),
+            (Some(&single), &[v2, other][..]),
+            (None, &[v2][..]),
+        ] {
+            assert!(
+                matches!(
+                    check(context, expected),
+                    Err(DataIntegrityError::Conformance(_))
+                ),
+                "{context:?} against {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bytes_equal_compares_length_and_content() {
+        assert!(bytes_equal(b"", b""));
+        assert!(bytes_equal(b"abc", b"abc"));
+        assert!(!bytes_equal(b"abc", b"abd"));
+        assert!(!bytes_equal(b"abc", b"ab"));
+        assert!(!bytes_equal(b"", b"a"));
     }
 
     fn hex_lower(b: &[u8]) -> String {
