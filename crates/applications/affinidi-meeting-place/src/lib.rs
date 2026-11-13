@@ -44,12 +44,20 @@ impl MeetingPlace {
     /// and extracts the `api` service endpoint. Returns
     /// [`MeetingPlaceError::DIDError`] if the DID cannot be resolved, or
     /// [`MeetingPlaceError::Configuration`] if the DID document does not
-    /// expose an `api` endpoint.
+    /// expose an `api` endpoint, or exposes one that
+    /// [`TDKSharedState::check_service_endpoint`] refuses (`http://` to a
+    /// non-loopback host, unless the TDK config allows it).
     pub async fn new(tdk: &TDKSharedState, mp_did: String) -> Result<Self> {
         let did_doc = tdk.did_resolver().resolve(&mp_did).await?;
         let mp_api = find_api_service_endpoint(&did_doc.doc).ok_or_else(|| {
             MeetingPlaceError::Configuration(format!(
                 "Meeting Place DID ({mp_did}) does not expose an `api` service endpoint"
+            ))
+        })?;
+        // Every request to this endpoint carries the profile's access token.
+        tdk.check_service_endpoint(&mp_api).map_err(|e| {
+            MeetingPlaceError::Configuration(format!(
+                "Meeting Place DID ({mp_did}) `api` endpoint refused: {e}"
             ))
         })?;
         Ok(Self { mp_did, mp_api })

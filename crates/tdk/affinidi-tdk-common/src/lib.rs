@@ -129,12 +129,24 @@ pub struct TDKSharedState {
 /// other is a dropped request.
 const POOL_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// Default whole-request timeout of the clients built here.
+///
+/// A request that sets its own `RequestBuilder::timeout` (as the messaging
+/// SDK's REST calls do) uses that instead.
+pub const HTTP_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Connect timeout of the clients built here.
+pub const HTTP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Build a reusable HTTP/HTTPS [`Client`] backed by `rustls` with the platform
 /// trust verifier, optionally extended with `extra_roots`.
 ///
 /// Idle pooled connections are dropped after [`POOL_IDLE_TIMEOUT`] rather than
 /// reqwest's 90s default — see that constant for why the shorter window is the
 /// safe direction to err in.
+///
+/// Connecting is bounded by [`HTTP_CONNECT_TIMEOUT`] and each request by
+/// [`HTTP_REQUEST_TIMEOUT`], unless the request sets its own timeout.
 ///
 /// Pass an empty slice for the default behaviour (platform trust store only).
 /// Non-empty `extra_roots` are added on top of the platform store via
@@ -159,14 +171,73 @@ const POOL_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15
 /// [`reqwest::Client`] cannot be constructed, or if non-empty `extra_roots`
 /// are supplied on Android (see *Platform support*).
 pub fn create_http_client(extra_roots: &[CertificateDer<'static>]) -> Result<Client, TDKError> {
+    http_client_builder(extra_roots)?
+        .build()
+        .map_err(|e| TDKError::Config(format!("HTTP client build failed: {e}")))
+}
+
+/// The client the authentication task uses: [`create_http_client`]'s settings,
+/// but redirects are not followed. Challenge responses and refresh tokens are
+/// POSTed to the endpoint the target DID names, and nowhere else.
+fn create_authentication_http_client(
+    extra_roots: &[CertificateDer<'static>],
+) -> Result<Client, TDKError> {
+    http_client_builder(extra_roots)?
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| TDKError::Config(format!("HTTP client build failed: {e}")))
+}
+
+fn http_client_builder(
+    extra_roots: &[CertificateDer<'static>],
+) -> Result<reqwest::ClientBuilder, TDKError> {
     let tls_config = platform_tls_config(extra_roots)?;
-    reqwest::ClientBuilder::new()
+    Ok(reqwest::ClientBuilder::new()
         .use_rustls_tls()
         .use_preconfigured_tls(tls_config)
         .pool_idle_timeout(POOL_IDLE_TIMEOUT)
-        .user_agent(user_agent())
-        .build()
-        .map_err(|e| TDKError::Config(format!("HTTP client build failed: {e}")))
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .timeout(HTTP_REQUEST_TIMEOUT)
+        .user_agent(user_agent()))
+}
+
+/// Check that a service endpoint taken from a DID document may be sent
+/// credentials: `https://`, or `http://` to a loopback host (`localhost`,
+/// `127.0.0.0/8`, `[::1]`) for local development. Plain `http://` to any other
+/// host is accepted only when `allow_insecure_http` is set (see
+/// [`TDKConfigBuilder::with_allow_insecure_http_endpoints`](config::TDKConfigBuilder::with_allow_insecure_http_endpoints)).
+/// Any other scheme is refused.
+///
+/// # Errors
+///
+/// [`TDKError::Config`] naming the endpoint and why it was refused.
+pub fn check_service_endpoint(endpoint: &str, allow_insecure_http: bool) -> Result<(), TDKError> {
+    let url = reqwest::Url::parse(endpoint).map_err(|e| {
+        TDKError::Config(format!("service endpoint ({endpoint}) is not a URL: {e}"))
+    })?;
+    match url.scheme() {
+        "https" => Ok(()),
+        "http" if allow_insecure_http || is_loopback_host(&url) => Ok(()),
+        "http" => Err(TDKError::Config(format!(
+            "service endpoint ({endpoint}) uses http:// to a non-loopback host; use https://, \
+             or enable TDKConfigBuilder::with_allow_insecure_http_endpoints"
+        ))),
+        scheme => Err(TDKError::Config(format!(
+            "service endpoint ({endpoint}) uses unsupported scheme '{scheme}'"
+        ))),
+    }
+}
+
+fn is_loopback_host(url: &reqwest::Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(address) = host.parse::<std::net::IpAddr>() {
+        return address.is_loopback();
+    }
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    host == "localhost" || host.ends_with(".localhost")
 }
 
 /// Build a [`GuardedClient`](affinidi_net_guard::GuardedClient) for URLs an
@@ -275,7 +346,8 @@ impl TDKSharedState {
     /// # Errors
     ///
     /// Returns [`TDKError::Config`] if the DID resolver or HTTP client fails
-    /// to initialise.
+    /// to initialise, and [`TDKError::Profile`] if the environment file exists
+    /// but cannot be read or parsed (a missing file is not an error).
     pub async fn new(config: TDKConfig) -> Result<Self, TDKError> {
         let did_resolver = if let Some(resolver) = config.did_resolver.clone() {
             resolver
@@ -302,20 +374,22 @@ impl TDKSharedState {
         //    load_environment is true),
         // 3. default empty environment.
         // Its `ssl_certificates` feed the HTTPS client we build next.
+        //
+        // A missing file, or a file without the named environment, falls back
+        // to the default. A file that exists but cannot be read or parsed is
+        // an error: carrying on with an empty environment would silently drop
+        // its profiles and extra trust roots.
         let environment = if let Some(env) = config.prebuilt_environment.clone() {
             env
         } else if config.load_environment {
-            match TDKEnvironments::fetch_from_file(
-                Some(&config.environment_path),
-                &config.environment_name,
-            ) {
-                Ok(env) => env,
-                Err(e) => {
+            let environments = TDKEnvironments::load_file(&config.environment_path)?;
+            match environments.get(&config.environment_name) {
+                Some(env) => env.clone(),
+                None => {
                     warn!(
                         path = %config.environment_path,
                         name = %config.environment_name,
-                        error = %e,
-                        "environment-file load failed; falling back to default"
+                        "environment not found in the environment file; using the default"
                     );
                     TDKEnvironment::default()
                 }
@@ -328,13 +402,15 @@ impl TDKSharedState {
         // roots on top of the platform verifier.
         let extra_roots = environment.load_ssl_certificates()?;
         let client = create_http_client(&extra_roots)?;
+        let authentication_client = create_authentication_http_client(&extra_roots)?;
 
-        let authentication = AuthenticationCache::new(
+        let authentication = AuthenticationCache::with_endpoint_policy(
             config.authentication_cache_limit as u64,
             &did_resolver,
             secrets_resolver.clone(),
-            &client,
+            &authentication_client,
             config.custom_auth_handlers.clone(),
+            config.allow_insecure_http_endpoints,
         );
         authentication.start();
 
@@ -441,8 +517,21 @@ impl TDKSharedState {
     }
 
     /// Shared HTTP/HTTPS client. Cloning is cheap.
+    ///
+    /// Connects time out after [`HTTP_CONNECT_TIMEOUT`] and requests after
+    /// [`HTTP_REQUEST_TIMEOUT`] unless a request sets its own timeout.
     pub fn client(&self) -> &Client {
         &self.client
+    }
+
+    /// [`check_service_endpoint`] under this state's configuration: whether
+    /// a service endpoint read from a DID document may be sent credentials.
+    ///
+    /// # Errors
+    ///
+    /// [`TDKError::Config`] if the endpoint is refused.
+    pub fn check_service_endpoint(&self, endpoint: &str) -> Result<(), TDKError> {
+        check_service_endpoint(endpoint, self.config.allow_insecure_http_endpoints)
     }
 
     /// Active environment (profiles, default mediator, etc).
@@ -459,5 +548,38 @@ impl TDKSharedState {
     /// exit. Call before process shutdown for graceful drain.
     pub async fn shutdown(&self) {
         self.authentication.terminate().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    /// Serve one canned HTTP response on a loopback port; returns its URL.
+    fn serve_once(response: &'static str) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/challenge", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            if let Ok((mut socket, _)) = listener.accept() {
+                let mut request = [0u8; 4096];
+                let _ = socket.read(&mut request);
+                let _ = socket.write_all(response.as_bytes());
+            }
+        });
+        url
+    }
+
+    /// The authentication client hands a redirect back to the caller instead
+    /// of re-sending the request body somewhere else.
+    #[tokio::test]
+    async fn authentication_client_does_not_follow_redirects() {
+        let url = serve_once(
+            "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:9/elsewhere\r\n\
+             Content-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+        let client = create_authentication_http_client(&[]).unwrap();
+        let response = client.post(&url).body("{}").send().await.unwrap();
+        assert_eq!(response.status().as_u16(), 307);
     }
 }

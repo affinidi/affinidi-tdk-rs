@@ -1,5 +1,58 @@
 # Changelog — `affinidi-tdk-common`
 
+## 0.7.1 — environment file written safely; HTTP timeouts; DID-document endpoints checked before credentials are sent
+
+### Environment file
+
+- `TDKEnvironments::save` no longer truncates and rewrites the file in place.
+  It writes a new file in the same directory, flushes it to disk and renames
+  it over the old one, so a crash or full disk part-way leaves the previous
+  file intact. On Unix the new file is created `0600`; before, `0600` applied
+  only when the file did not exist yet, so an existing `0644` file stayed
+  readable by others. A symbolic link is followed and the file it points to is
+  replaced.
+- `TDKSharedState::new` returns the load error when the environment file
+  exists but cannot be read or parsed. It used to log a warning and continue
+  with an empty environment, dropping its profiles and its `ssl_certificates`
+  trust roots. A missing file, or a file without the named environment, still
+  falls back to the default as before.
+
+### HTTP
+
+- `create_http_client` (and so `TDKSharedState::client`) now has a 10 s
+  connect timeout (`HTTP_CONNECT_TIMEOUT`) and a 30 s request timeout
+  (`HTTP_REQUEST_TIMEOUT`). A request that sets `RequestBuilder::timeout`
+  uses its own value, as the messaging SDK's REST calls do.
+- The authentication task uses its own client with the same settings, except
+  that it does not follow redirects: challenge responses and refresh tokens go
+  only to the endpoint the target DID names.
+- New `check_service_endpoint(endpoint, allow_insecure_http)` and
+  `TDKSharedState::check_service_endpoint`: an endpoint read from a DID
+  document may be sent credentials if it is `https://`, or `http://` to a
+  loopback host (`localhost`, `*.localhost`, `127.0.0.0/8`, `[::1]`). Other
+  `http://` hosts need `TDKConfigBuilder::with_allow_insecure_http_endpoints(true)`
+  (new; `TDKConfig::allow_insecure_http_endpoints()` reads it). Other schemes
+  are refused.
+- The authentication task applies that check to the target DID's `#auth`
+  service endpoint before a handshake or refresh, and fails with
+  `DIDAuthError::AuthenticationAbort` when it is refused.
+  `AuthenticationCache::with_endpoint_policy` is new; `AuthenticationCache::new`
+  keeps its signature and applies the strict policy.
+- The doc comment on the legacy keyring reader now says which crate's 0.8
+  removes it (this one).
+
+### Behaviour change (R3.6)
+
+- A corrupt or unreadable environment file now fails `TDKSharedState::new`.
+- Requests on the shared client without their own timeout fail after 30 s.
+- Authentication to a DID whose `#auth` endpoint is `http://` on a
+  non-loopback host, or answers with a redirect, now fails. Deployments that
+  serve plain HTTP on a container or LAN host name set
+  `with_allow_insecure_http_endpoints(true)`.
+- An existing environment file becomes `0600` on the next save.
+
+Additive API only, so a patch release. No new dependencies.
+
 ## Unreleased (0.7.0) — `affinidi-data-integrity` 0.8
 
 Moves to `affinidi-data-integrity` 0.8 (the correctly versioned re-release of 0.7.14, on `affinidi-bbs` 0.4). It is a public dependency here (`TDKError::DataIntegrity` wraps its `DataIntegrityError`), so this crate moves a minor. No source change.

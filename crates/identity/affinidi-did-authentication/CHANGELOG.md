@@ -1,5 +1,11 @@
 # Affinidi DID Authentication
 
+## 0.3.15 — challenge request body built with `serde_json`
+
+The `/challenge` request body was assembled with `format!`, so the DID was not
+JSON-escaped. It is now built with `serde_json::json!`. For any valid DID the
+bytes on the wire are the same apart from whitespace. No API change.
+
 ## Unreleased (0.3.14) — `refresh_check` handles small expiry values
 
 ### Fixed

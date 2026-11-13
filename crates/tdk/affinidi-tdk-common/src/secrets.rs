@@ -18,7 +18,7 @@
  * - **Storage format**: raw UTF-8 JSON bytes of `Vec<Secret>`. Earlier versions
  *   (`affinidi-tdk-common <= 0.5.x`) wrapped the JSON in `BASE64_STANDARD_NO_PAD`;
  *   [`KeyringStore::read`] auto-detects and silently migrates legacy entries on
- *   read. The legacy reader will be removed in 0.8.
+ *   read. The legacy reader will be removed in `affinidi-tdk-common` 0.8.
  *
  * # Default-store registration
  *

@@ -29,6 +29,7 @@ pub struct TDKConfig {
     pub(crate) authentication_cache_limit: usize,
     pub(crate) use_atm: bool,
     pub(crate) custom_auth_handlers: Option<CustomAuthHandlers>,
+    pub(crate) allow_insecure_http_endpoints: bool,
     /// Pre-built environment supplied via
     /// [`TDKConfigBuilder::with_environment`]. When `Some`, takes priority
     /// over the file-load path at [`crate::TDKSharedState::new`] time and
@@ -134,6 +135,13 @@ impl TDKConfig {
         self.custom_auth_handlers.as_ref()
     }
 
+    /// Whether credentials may be sent to `http://` service endpoints on
+    /// non-loopback hosts. See
+    /// [`TDKConfigBuilder::with_allow_insecure_http_endpoints`].
+    pub fn allow_insecure_http_endpoints(&self) -> bool {
+        self.allow_insecure_http_endpoints
+    }
+
     /// Pre-built environment supplied via
     /// [`TDKConfigBuilder::with_environment`], if any. Wins over the file
     /// loader at [`crate::TDKSharedState::new`] time when present.
@@ -173,6 +181,10 @@ impl std::fmt::Debug for TDKConfig {
                     .as_ref()
                     .map(|_| "<CustomAuthHandlers>"),
             )
+            .field(
+                "allow_insecure_http_endpoints",
+                &self.allow_insecure_http_endpoints,
+            )
             .field("prebuilt_environment", &self.prebuilt_environment)
             .finish()
     }
@@ -189,6 +201,7 @@ pub struct TDKConfigBuilder {
     authentication_cache_limit: usize,
     use_atm: bool,
     custom_auth_handlers: Option<CustomAuthHandlers>,
+    allow_insecure_http_endpoints: bool,
     prebuilt_environment: Option<TDKEnvironment>,
 }
 
@@ -204,6 +217,7 @@ impl Default for TDKConfigBuilder {
             authentication_cache_limit: 1_000,
             use_atm: true,
             custom_auth_handlers: None,
+            allow_insecure_http_endpoints: false,
             prebuilt_environment: None,
         }
     }
@@ -226,6 +240,7 @@ impl TDKConfigBuilder {
             authentication_cache_limit: self.authentication_cache_limit,
             use_atm: self.use_atm,
             custom_auth_handlers: self.custom_auth_handlers,
+            allow_insecure_http_endpoints: self.allow_insecure_http_endpoints,
             prebuilt_environment: self.prebuilt_environment,
         })
     }
@@ -265,6 +280,17 @@ impl TDKConfigBuilder {
     /// Defaults to `true`.
     pub fn with_load_environment(mut self, load_environment: bool) -> Self {
         self.load_environment = load_environment;
+        self
+    }
+
+    /// Allow credentials (DID authentication, bearer tokens) to be sent to
+    /// `http://` service endpoints on hosts other than loopback. Defaults to
+    /// `false`: endpoints read from a DID document must be `https://`, or
+    /// `http://` to `localhost` / `127.0.0.0/8` / `[::1]`. Enable for
+    /// development setups that serve plain HTTP on another host name (for
+    /// example a container network).
+    pub fn with_allow_insecure_http_endpoints(mut self, allow: bool) -> Self {
+        self.allow_insecure_http_endpoints = allow;
         self
     }
 
