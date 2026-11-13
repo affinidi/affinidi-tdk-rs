@@ -179,7 +179,3 @@ license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-# Temporary, with the trust-tasks-proof / trust-tasks-rs git patch in the root
-# Cargo.toml (affinidi-crypto 0.3 before trust-tasks-proof is released on it).
-# Remove together with that patch.
-allow-git = ["https://github.com/trustoverip/dtgwg-trust-tasks-tf"]

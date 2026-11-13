@@ -1,5 +1,12 @@
 # Changelog — `affinidi-tdk`
 
+## Unreleased (0.45.0) — affinidi-messaging-sdk 0.47 and trust-tasks 0.39
+
+- **Changed (breaking):** requires `affinidi-messaging-sdk` 0.47
+  (`trust-tasks-rs` / `trust-tasks-proof` 0.39), whose types it re-exports.
+- 0.44.0 (affinidi-crypto 0.3, below) was never published; it ships in this release.
+  `affinidi-messaging-helpers` and `affinidi-messaging-text-client` require this version.
+
 ## Unreleased (0.44.0) — affinidi-crypto 0.3
 
 - **Changed (breaking):** `affinidi_tdk::affinidi_crypto` re-exports

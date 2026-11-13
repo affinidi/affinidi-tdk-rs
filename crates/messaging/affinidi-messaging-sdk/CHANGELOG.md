@@ -1,9 +1,13 @@
 # Changelog
 
-## Unreleased (0.46.4) — affinidi-crypto 0.3
+## Unreleased (0.47.0) — affinidi-crypto 0.3 and trust-tasks 0.39
 
 - **Changed:** requires `affinidi-crypto` 0.3. No code change. `Curve` in the
   curve-preference config now refers to `affinidi-crypto` 0.3.
+- **Changed (breaking):** requires `trust-tasks-rs` and `trust-tasks-proof` 0.39, the
+  releases built on `affinidi-crypto` 0.3. The workspace no longer builds them
+  from a git revision. The SDK re-exports `trust-tasks-rs` types, so this is a
+  minor bump. 0.46.4 was never published.
 ## 0.46.3 — a reply to a message sent over REST is fetched by the id the mediator stored it under
 
 - `send_message` with `wait_for_response` over REST (a profile without a
