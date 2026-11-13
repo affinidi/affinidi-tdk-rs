@@ -169,6 +169,66 @@ impl TDKEnvironment {
     }
 }
 
+/// Replace `path` with `contents` via a temporary file in the same directory
+/// and a rename, so the file is never left truncated or half-written.
+fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    let display = path.display();
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let directory = match target.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => Path::new(".").to_path_buf(),
+    };
+    let file_name = target.file_name().ok_or_else(|| {
+        TDKError::Profile(format!(
+            "Environments file path has no file name ({display})"
+        ))
+    })?;
+    let temporary = directory.join(format!(
+        ".{}.{}-{}.tmp",
+        file_name.to_string_lossy(),
+        std::process::id(),
+        SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+
+    let result = write_then_rename(&temporary, &target, &directory, contents);
+    result.map_err(|err| {
+        let _ = std::fs::remove_file(&temporary);
+        TDKError::Profile(format!(
+            "Failed to write environments file ({display}): {err}"
+        ))
+    })
+}
+
+fn write_then_rename(
+    temporary: &Path,
+    target: &Path,
+    directory: &Path,
+    contents: &[u8],
+) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(temporary)?;
+    file.write_all(contents)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(temporary, target)?;
+    #[cfg(unix)]
+    if let Ok(directory) = File::open(directory) {
+        let _ = directory.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = directory;
+    Ok(())
+}
+
 /// TDK Environments, where each environment is a collection of TDK Profiles.
 /// This can be used to manage for example a local and a remote environment and switch easily between them
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -242,6 +302,15 @@ impl TDKEnvironments {
     /// Persist environments to the file the [`TDKEnvironments`] was loaded
     /// from (or whose name was supplied at construction). Errors if no
     /// file name has been recorded.
+    ///
+    /// The file holds profile secrets in plaintext, so it is replaced, never
+    /// rewritten in place: the JSON goes to a new file in the same directory
+    /// (owner-only, `0600`, on Unix), is flushed to disk, and is then renamed
+    /// over the old one. A failure part-way leaves the previous file intact,
+    /// and a file that was readable by others before is not after. If the
+    /// path is a symbolic link, the file it points to is replaced. On
+    /// non-Unix platforms the new file takes the directory's default
+    /// permissions.
     pub fn save(&self) -> Result<()> {
         let Some(file_name) = &self.file_name else {
             return Err(TDKError::Profile(
@@ -254,35 +323,7 @@ impl TDKEnvironments {
             TDKError::Profile(format!("Failed to serialise TDKEnvironments: {err}"))
         })?;
 
-        // TDKEnvironments serialises `TDKProfile.secrets` (DID private keys);
-        // restrict to owner-only on Unix so other local users can't read them.
-        // `File::create` would honour the process umask (typically 0644).
-        #[cfg(unix)]
-        let mut f = {
-            use std::os::unix::fs::OpenOptionsExt;
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(file_name)
-                .map_err(|err| {
-                    TDKError::Profile(format!("Couldn't create file ({file_name}): {err}"))
-                })?
-        };
-        #[cfg(not(unix))]
-        let mut f = File::create(file_name).map_err(|err| {
-            TDKError::Profile(format!(
-                "Failed to create environments file ({file_name}): {err}"
-            ))
-        })?;
-
-        f.write_all(contents.as_bytes()).map_err(|err| {
-            TDKError::Profile(format!(
-                "Failed to write environments file ({file_name}): {err}"
-            ))
-        })?;
-        Ok(())
+        write_private_file(Path::new(file_name), contents.as_bytes())
     }
 
     /// Get an environment by name
@@ -351,6 +392,96 @@ mod tests {
         let reloaded = TDKEnvironments::load_file(&path).unwrap();
         assert_eq!(reloaded.environments(), vec!["local".to_string()]);
         assert!(reloaded.get("local").unwrap().profile("alice").is_some());
+    }
+
+    #[test]
+    fn save_replaces_the_file_and_leaves_no_temporary_files() {
+        let dir = TempDir::new().unwrap();
+        let path = tmp_path(&dir, "envs.json");
+        std::fs::write(&path, b"{\"environments\":{}}").unwrap();
+
+        let mut envs = TDKEnvironments::load_file(&path).unwrap();
+        envs.add("local", TDKEnvironment::default());
+        envs.save().unwrap();
+        envs.add("dev", TDKEnvironment::default());
+        envs.save().unwrap();
+
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["envs.json".to_string()]);
+        let mut reloaded = TDKEnvironments::load_file(&path).unwrap().environments();
+        reloaded.sort();
+        assert_eq!(reloaded, vec!["dev".to_string(), "local".to_string()]);
+    }
+
+    /// The file holds private keys: a save leaves it owner-only even when the
+    /// existing file was readable by others.
+    #[cfg(unix)]
+    #[test]
+    fn save_makes_an_existing_world_readable_file_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        let path = tmp_path(&dir, "envs.json");
+        std::fs::write(&path, b"{\"environments\":{}}").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let envs = TDKEnvironments::load_file(&path).unwrap();
+        envs.save().unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_through_a_symlink_replaces_the_linked_file() {
+        let dir = TempDir::new().unwrap();
+        let real = tmp_path(&dir, "real.json");
+        let link = tmp_path(&dir, "link.json");
+        std::fs::write(&real, b"{\"environments\":{}}").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let mut envs = TDKEnvironments::load_file(&link).unwrap();
+        envs.add("local", TDKEnvironment::default());
+        envs.save().unwrap();
+
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        let reloaded = TDKEnvironments::load_file(&real).unwrap();
+        assert_eq!(reloaded.environments(), vec!["local".to_string()]);
+    }
+
+    #[test]
+    fn failed_save_leaves_the_previous_file() {
+        let dir = TempDir::new().unwrap();
+        let path = tmp_path(&dir, "envs.json");
+        let mut envs = TDKEnvironments::load_file(&path).unwrap();
+        envs.add("local", TDKEnvironment::default());
+        envs.save().unwrap();
+
+        // A directory where the file should be makes the rename fail.
+        let blocked = tmp_path(&dir, "blocked.json");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(std::path::Path::new(&blocked).join("keep"), b"x").unwrap();
+        let other = TDKEnvironments {
+            file_name: Some(blocked.clone()),
+            ..Default::default()
+        };
+        assert!(other.save().is_err());
+
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 2, "no temporary file left behind: {names:?}");
+        let reloaded = TDKEnvironments::load_file(&path).unwrap();
+        assert_eq!(reloaded.environments(), vec!["local".to_string()]);
     }
 
     #[test]

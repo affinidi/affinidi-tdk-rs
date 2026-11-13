@@ -1,5 +1,18 @@
 # Meeting Place Changelog
 
+## 0.5.1 — the `api` endpoint is checked before tokens are sent to it
+
+`MeetingPlace::new` passes the `api` service endpoint from the Meeting Place
+DID document to `TDKSharedState::check_service_endpoint` and returns
+`MeetingPlaceError::Configuration` if it is refused. Every request to that
+endpoint carries the profile's access token, so it must be `https://`, or
+`http://` to a loopback host, unless the TDK config sets
+`with_allow_insecure_http_endpoints(true)`. Needs `affinidi-tdk-common` 0.7.1.
+
+Behaviour change (R3.6): a Meeting Place DID whose `api` endpoint is plain
+`http://` on another host is refused at construction. Requests also inherit
+the shared client's new connect and request timeouts. No API change.
+
 ## Unreleased (0.5.0) — tdk-common 0.7
 
 Moves to `affinidi-tdk-common` 0.7 (`affinidi-data-integrity` 0.8). `TDKSharedState` and `TDKProfile` are in this crate's public API, so it moves a minor. No source change.

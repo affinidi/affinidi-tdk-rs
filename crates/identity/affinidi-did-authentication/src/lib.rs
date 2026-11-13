@@ -404,7 +404,7 @@ impl DIDAuthentication {
             let step1_response = _http_post::<DidChallenges>(
                 client,
                 &[&endpoint, "/challenge"].concat(),
-                &format!("{{\"did\": \"{profile_did}\"}}").to_string(),
+                &json!({ "did": profile_did }).to_string(),
             )
             .await?;
 
@@ -1424,6 +1424,37 @@ mod tests {
             let err = authenticate(&url, 1).await;
             assert!(!err.is_rate_limited());
             assert_eq!(err.http_status().unwrap().status, 503);
+        }
+
+        /// The challenge request body is JSON built by a serializer, not by
+        /// string formatting.
+        #[tokio::test]
+        async fn challenge_request_body_is_serialized_json() {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut received = Vec::new();
+                let mut buffer = [0u8; 4096];
+                loop {
+                    let read = socket.read(&mut buffer).await.unwrap();
+                    received.extend_from_slice(&buffer[..read]);
+                    if read == 0 || received.ends_with(b"}") {
+                        break;
+                    }
+                }
+                let _ = socket
+                    .write_all(
+                        b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                    )
+                    .await;
+                String::from_utf8(received).unwrap()
+            });
+            let _ = authenticate(&url, 1).await;
+            let request = server.await.unwrap();
+            let body = request.split("\r\n\r\n").nth(1).unwrap();
+            let body: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert_eq!(body, serde_json::json!({ "did": "did:example:alice" }));
         }
 
         /// A 401 is still an ACL denial, returned without retrying.

@@ -75,6 +75,7 @@ struct AuthenticationCacheInner {
     secrets_resolver: ThreadedSecretsResolver,
     client: Client,
     custom_handlers: Option<CustomAuthHandlers>,
+    allow_insecure_http_endpoints: bool,
 }
 
 /// MPSC commands consumed by the background authentication task.
@@ -149,12 +150,38 @@ impl AuthenticationCache {
     /// * `secrets_resolver` — `SecretsResolver`.
     /// * `client` — `reqwest::Client`.
     /// * `custom_handlers` — optional custom authentication handlers.
+    ///
+    /// The `#auth` endpoint of a target DID must pass
+    /// [`check_service_endpoint`](crate::check_service_endpoint) with
+    /// `allow_insecure_http = false`; use
+    /// [`with_endpoint_policy`](Self::with_endpoint_policy) to choose.
     pub fn new(
         max_capacity: u64,
         did_resolver: &DIDCacheClient,
         secrets_resolver: ThreadedSecretsResolver,
         client: &Client,
         custom_handlers: Option<CustomAuthHandlers>,
+    ) -> Self {
+        Self::with_endpoint_policy(
+            max_capacity,
+            did_resolver,
+            secrets_resolver,
+            client,
+            custom_handlers,
+            false,
+        )
+    }
+
+    /// [`new`](Self::new), choosing whether a target DID's `#auth` endpoint
+    /// may be `http://` on a non-loopback host (see
+    /// [`check_service_endpoint`](crate::check_service_endpoint)).
+    pub fn with_endpoint_policy(
+        max_capacity: u64,
+        did_resolver: &DIDCacheClient,
+        secrets_resolver: ThreadedSecretsResolver,
+        client: &Client,
+        custom_handlers: Option<CustomAuthHandlers>,
+        allow_insecure_http_endpoints: bool,
     ) -> Self {
         let (tx, rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
 
@@ -173,6 +200,7 @@ impl AuthenticationCache {
             secrets_resolver,
             client: client.clone(),
             custom_handlers,
+            allow_insecure_http_endpoints,
         };
 
         AuthenticationCache {
@@ -544,8 +572,11 @@ impl AuthenticationCacheInner {
         let client = self.client.clone();
         let profile_copy = profile_did.clone();
         let service_copy = service_endpoint_did.clone();
+        let allow_insecure_http = self.allow_insecure_http_endpoints;
 
         let handle = tokio::spawn(async move {
+            check_auth_endpoint(&service_copy, &did_resolver, allow_insecure_http).await?;
+
             // A forced refresh has to say so. `authenticate` re-derives the
             // decision from the token's expiry and refreshes only inside the
             // last five seconds of its life — which is never true of a
@@ -628,6 +659,31 @@ impl AuthenticationCacheInner {
             }
         }
     }
+}
+
+/// Refuse to authenticate against a target DID whose `#auth` service endpoint
+/// fails [`check_service_endpoint`](crate::check_service_endpoint): the
+/// challenge response and refresh token would be sent there.
+///
+/// A target that is not a DID, or a DID without an `#auth` service, is left to
+/// the authentication flow (a custom handler may not use `#auth` at all).
+async fn check_auth_endpoint(
+    service_endpoint_did: &str,
+    did_resolver: &DIDCacheClient,
+    allow_insecure_http: bool,
+) -> Result<(), DIDAuthError> {
+    if !service_endpoint_did.starts_with("did:") {
+        return Ok(());
+    }
+    let resolved = did_resolver.resolve(service_endpoint_did).await?;
+    let Some(endpoint) = DIDAuthentication::find_service_endpoint(&resolved.doc) else {
+        return Ok(());
+    };
+    crate::check_service_endpoint(&endpoint, allow_insecure_http).map_err(|e| {
+        DIDAuthError::AuthenticationAbort(format!(
+            "{service_endpoint_did}: refusing to authenticate: {e}"
+        ))
+    })
 }
 
 /// Hash key for the auth cache. Writes both DIDs through the hasher with a

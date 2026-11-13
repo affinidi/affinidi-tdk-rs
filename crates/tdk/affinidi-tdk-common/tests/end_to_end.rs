@@ -114,3 +114,89 @@ fn create_guarded_http_client_default_succeeds() {
             .is_ok()
     );
 }
+
+#[test]
+fn service_endpoints_must_be_https_or_loopback_http() {
+    use affinidi_tdk_common::check_service_endpoint;
+
+    for accepted in [
+        "https://mediator.example.com/mediator/v1/authenticate",
+        "http://localhost:7037/mediator/v1",
+        "http://LOCALHOST./api",
+        "http://app.localhost/api",
+        "http://127.0.0.1:7037",
+        "http://127.10.0.1/",
+        "http://[::1]:7037/",
+    ] {
+        assert!(
+            check_service_endpoint(accepted, false).is_ok(),
+            "{accepted}"
+        );
+    }
+    for refused in [
+        "http://mediator.example.com/mediator/v1",
+        "http://10.0.0.5/api",
+        "http://localhost.example.com/api",
+        "ftp://mediator.example.com/",
+        "file:///etc/passwd",
+        "not a url",
+    ] {
+        assert!(check_service_endpoint(refused, false).is_err(), "{refused}");
+    }
+    assert!(check_service_endpoint("http://mediator:7037/api", true).is_ok());
+    assert!(check_service_endpoint("ftp://mediator.example.com/", true).is_err());
+}
+
+#[test]
+fn insecure_http_endpoints_are_opt_in() {
+    let config = TDKConfig::builder().build().unwrap();
+    assert!(!config.allow_insecure_http_endpoints());
+    let config = TDKConfig::builder()
+        .with_allow_insecure_http_endpoints(true)
+        .build()
+        .unwrap();
+    assert!(config.allow_insecure_http_endpoints());
+}
+
+fn environment_file_config(path: &std::path::Path) -> TDKConfig {
+    TDKConfig::builder()
+        .with_environment_path(path.to_string_lossy().into_owned())
+        .with_environment_name("local".to_string())
+        .with_use_atm(false)
+        .build()
+        .unwrap()
+}
+
+/// A missing environment file, or one without the named environment, still
+/// starts with the default environment.
+#[tokio::test]
+async fn missing_environment_file_or_name_uses_the_default() {
+    let dir = tempfile::TempDir::new().unwrap();
+
+    let missing = dir.path().join("missing.json");
+    let state = TDKSharedState::new(environment_file_config(&missing))
+        .await
+        .expect("a missing file is not an error");
+    assert!(state.environment().profiles().is_empty());
+    state.shutdown().await;
+
+    let other = dir.path().join("other.json");
+    std::fs::write(&other, br#"{"environments":{"dev":{}}}"#).unwrap();
+    let state = TDKSharedState::new(environment_file_config(&other))
+        .await
+        .expect("a file without the environment is not an error");
+    assert!(state.environment().profiles().is_empty());
+    state.shutdown().await;
+}
+
+/// A file that exists but cannot be parsed is an error, rather than starting
+/// without its profiles and trust roots.
+#[tokio::test]
+async fn unreadable_environment_file_is_an_error() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let corrupt = dir.path().join("corrupt.json");
+    std::fs::write(&corrupt, b"{\"environments\": {\"local\": ").unwrap();
+
+    let result = TDKSharedState::new(environment_file_config(&corrupt)).await;
+    assert!(result.is_err());
+}
