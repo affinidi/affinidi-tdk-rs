@@ -107,6 +107,25 @@ const MAX_ACK_BATCH: usize = 100;
 /// it is the one answer the socket does not acknowledge.
 const ACK_RESPONSE_TYPE: &str = "https://trusttasks.org/spec/messaging/mux/ack/0.1#response";
 
+/// `messaging/mux/ack`'s request type: a `trust-task-error` refusing it is
+/// pushed like its answer, never stored.
+const ACK_TYPE: &str = "https://trusttasks.org/spec/messaging/mux/ack/0.1";
+
+/// Whether the mediator pushed answer `doc` without storing it: the answer
+/// to `messaging/mux/ack`, or a `trust-task-error` refusing one. There is
+/// nothing to acknowledge for it.
+fn answer_is_pushed(doc: &Value) -> bool {
+    let ty = doc.get("type").and_then(Value::as_str);
+    if ty == Some(ACK_RESPONSE_TYPE) {
+        return true;
+    }
+    crate::errors::is_trust_task_error(doc)
+        && doc
+            .pointer("/payload/inResponseTo/typeUri")
+            .and_then(Value::as_str)
+            == Some(ACK_TYPE)
+}
+
 /// Frames read off the socket and not yet taken by [`TspMuxWebSocket::recv`].
 const FRAME_BUFFER: usize = 64;
 
@@ -1386,7 +1405,7 @@ fn answer_pending(shared: &Arc<Shared>, thread_id: &str, doc: Value, frame: Vec<
         .lock()
         .expect("pending map")
         .remove(thread_id);
-    let stored = doc.get("type").and_then(Value::as_str) != Some(ACK_RESPONSE_TYPE);
+    let stored = !answer_is_pushed(&doc);
     let Some(p) = pending else {
         let mut abandoned = shared.abandoned.lock().expect("abandoned list");
         if let Some(at) = abandoned.iter().position(|t| t == thread_id) {
@@ -1683,6 +1702,25 @@ fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_ack_answer_or_its_refusal_is_pushed_not_stored() {
+        assert!(answer_is_pushed(&json!({ "type": ACK_RESPONSE_TYPE })));
+        assert!(answer_is_pushed(&json!({
+            "type": "https://trusttasks.org/spec/trust-task-error/0.6",
+            "payload": { "code": "unavailable", "retryable": true,
+                         "inResponseTo": { "typeUri": ACK_TYPE } }
+        })));
+        // Any other refusal is stored, and acknowledged once consumed.
+        assert!(!answer_is_pushed(&json!({
+            "type": "https://trusttasks.org/spec/trust-task-error/0.6",
+            "payload": { "code": "unavailable", "retryable": true,
+                         "inResponseTo": { "typeUri": "https://trusttasks.org/spec/messaging/mux/list/0.1" } }
+        })));
+        assert!(!answer_is_pushed(&json!({
+            "type": "https://trusttasks.org/spec/messaging/mux/list/0.1#response"
+        })));
+    }
     use affinidi_tsp::PrivateVid;
     use affinidi_tsp::message::direct;
     use futures_util::SinkExt;

@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.46.2 — Trust Task refusals as `trust-task-error` documents (`ATMError::TrustTaskError`)
+
+- Every Trust Task the SDK sends to the mediator now carries the top-level
+  member `"x-errorFormat": "trust-task-error"` (`ERROR_FORMAT_MEMBER`),
+  added before signing. A mediator that supports it reports a refusal as a
+  `trust-task-error` document (Trust Tasks SPEC §8) instead of a DIDComm
+  problem report. A mediator that does not support it ignores the member,
+  as SPEC §4.2 allows, and answers with problem reports as before.
+- New `ATMError::TrustTaskError(Box<TrustTaskRefusal>)`. It carries the
+  error's `code`, `retryable`, `message`, `retryAfter`, `inResponseTo`
+  (`RefusedDocument`), `details` and the error document's `id` and
+  `threadId`. Every reply path decodes it: DIDComm (HTTP and websocket),
+  the TSP inbox, and the tsp-mux socket.
+- New accessors, which work on either form of refusal:
+  - `ATMError::refusal_code()`: the `trust-task-error` code, or the
+    problem report's code without its `e.p.` prefix.
+  - `ATMError::mediator_code()`: the mediator's own code. This is the
+    problem report's descriptor, or `details.mediatorCode` when the mediator
+    translated it into a standard code (`authorization.admin_required` →
+    `permissionDenied`). Code that matched problem-report codes keeps
+    working if it matches on this instead.
+  - `ATMError::current_epoch()`: the epoch in force for an `…:epochMismatch`.
+    It comes from `details.currentEpoch`, or, from an older mediator, from
+    the problem report's comment.
+  - `ATMError::trust_task_refusal()`.
+- The SDK's own fallbacks recognise either form. These are the 0.2 → 0.1
+  fallback on an unsupported type (`unsupportedType` / `unsupportedVersion`
+  as well as `protocol.trust_task.unsupported`), and the transport adapter's
+  "task not served" check. On the tsp-mux socket, a refusal of
+  `messaging/mux/ack` is pushed rather than stored, like the ack's answer,
+  so it is not acknowledged.
+
+Behaviour change (R3.6): against a mediator that emits `trust-task-error`
+documents, a refused Trust Task is `ATMError::TrustTaskError` where it was
+`ATMError::ProblemReport`. A caller that matches `ATMError::ProblemReport(code, ..)`
+on a Trust Task call should move to `refusal_code()` or `mediator_code()`,
+which give the same answer for both. Against current mediators nothing
+changes. No API is removed; `ATMError` is `#[non_exhaustive]`.
+
 ## 0.46.1 — websocket proxy URLs: credentials stay out of errors; http:// proxies only
 
 - Errors about a malformed `HTTPS_PROXY` / `ALL_PROXY` URL no longer

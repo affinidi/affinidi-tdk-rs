@@ -51,12 +51,25 @@ use uuid::Uuid;
 #[cfg(feature = "tsp")]
 use crate::protocols::trust_task_versions::StatusGate;
 use crate::protocols::trust_task_versions::{
-    Current, MediatorSpeaks, is_unsupported_type, speaks_from_version,
+    Current, MediatorSpeaks, is_unsupported_error, speaks_from_version,
 };
 use crate::{ATM, errors::ATMError, profiles::ATMProfile, transports::SendMessageResponse};
 
 /// DIDComm `type` URI of a Trust Tasks binding envelope.
 pub const ENVELOPE_TYPE: &str = "https://trusttasks.org/binding/didcomm/0.1/envelope";
+
+/// Top-level member of a Trust Task request asking the mediator to report a
+/// refusal with a `trust-task-error` document (Trust Tasks SPEC §8) rather
+/// than a DIDComm problem report. Every request this SDK sends carries it,
+/// with the value [`ERROR_FORMAT_DOCUMENT`]; a mediator that predates it
+/// ignores it (SPEC §4.2 allows additional top-level members) and answers
+/// with problem reports as before. Either way the failure is an [`ATMError`]:
+/// [`ATMError::TrustTaskError`] or [`ATMError::ProblemReport`].
+pub const ERROR_FORMAT_MEMBER: &str = "x-errorFormat";
+
+/// The value of [`ERROR_FORMAT_MEMBER`] that asks for `trust-task-error`
+/// documents.
+pub const ERROR_FORMAT_DOCUMENT: &str = "trust-task-error";
 
 /// Trust Tasks client operations, obtained from [`crate::ATM::trust_tasks`].
 pub struct TrustTasksOps<'a> {
@@ -1028,7 +1041,7 @@ impl TrustTasksOps<'_> {
             {
                 // Refused before any handler ran: nothing was done, so the
                 // same request is re-sent as 0.1 below.
-                Err(ATMError::ProblemReport(code, ..)) if is_unsupported_type(&code) => {
+                Err(e) if is_unsupported_error(&e) => {
                     self.remember_speaks(mediator_did, MediatorSpeaks::V0_1Only);
                 }
                 other => return other,
@@ -1366,7 +1379,9 @@ impl TrustTasksOps<'_> {
     /// enforces proofs it answers `proofRequired`, which surfaces as an error
     /// here. A signing failure with a key in hand is an error, never a silent
     /// downgrade.
-    pub(crate) async fn sign(&self, did: &str, doc: Value) -> Result<Value, ATMError> {
+    pub(crate) async fn sign(&self, did: &str, mut doc: Value) -> Result<Value, ATMError> {
+        // Before signing, so the proof covers it like any other member.
+        ask_for_error_documents(&mut doc);
         let Some(secret) = self.signing_secret(did).await else {
             warn!(
                 did,
@@ -1659,7 +1674,28 @@ const TSP_REPLY_POLL: std::time::Duration = std::time::Duration::from_millis(200
 #[cfg(feature = "tsp")]
 const TSP_REPLY_PAGE: usize = 20;
 
+/// Ask the mediator to refuse `doc` with a `trust-task-error` document
+/// ([`ERROR_FORMAT_MEMBER`]). A value the caller already set is kept.
+pub(crate) fn ask_for_error_documents(doc: &mut Value) {
+    if let Some(obj) = doc.as_object_mut() {
+        obj.entry(ERROR_FORMAT_MEMBER)
+            .or_insert_with(|| Value::String(ERROR_FORMAT_DOCUMENT.to_string()));
+    }
+}
+
+/// Read the mediator's answer to a Trust Task: the response document, or the
+/// `trust-task-error` it refused the task with, as
+/// [`ATMError::TrustTaskError`].
 pub(crate) fn decode_body<R: DeserializeOwned>(body: &Value) -> Result<TrustTask<R>, ATMError> {
+    if crate::errors::is_trust_task_error(body) {
+        return Err(match crate::errors::TrustTaskRefusal::from_document(body) {
+            Some(refusal) => ATMError::TrustTaskError(Box::new(refusal)),
+            None => ATMError::MsgReceiveError(
+                "the mediator answered with a trust-task-error document without a code and retryable"
+                    .to_string(),
+            ),
+        });
+    }
     serde_json::from_value(body.clone()).map_err(|e| {
         ATMError::MsgReceiveError(format!("response is not a Trust Task document: {e}"))
     })
@@ -2497,6 +2533,95 @@ mod tests {
     use super::*;
     use trust_tasks_proof::affinidi::Verifier;
     use trust_tasks_rs::ProofVerifier;
+
+    fn epoch_mismatch_document() -> Value {
+        serde_json::json!({
+            "id": "urn:uuid:00000000-0000-4000-8000-0000000000e1",
+            "type": "https://trusttasks.org/spec/trust-task-error/0.6",
+            "threadId": "urn:uuid:00000000-0000-4000-8000-0000000000a1",
+            "payload": {
+                "code": "messaging/mux/revoke-all:epochMismatch",
+                "retryable": false,
+                "message": "statement voids epoch 5, the DID's current epoch is 3",
+                "inResponseTo": {
+                    "typeUri": "https://trusttasks.org/spec/messaging/mux/revoke-all/0.1",
+                    "id": "urn:uuid:00000000-0000-4000-8000-0000000000a1"
+                },
+                "details": { "currentEpoch": 3 }
+            }
+        })
+    }
+
+    #[test]
+    fn a_trust_task_error_answer_is_a_typed_refusal() {
+        let err = decode_body::<Value>(&epoch_mismatch_document()).unwrap_err();
+        let refusal = err.trust_task_refusal().expect("a TrustTaskError");
+        assert_eq!(refusal.code, "messaging/mux/revoke-all:epochMismatch");
+        assert!(!refusal.retryable);
+        assert_eq!(
+            refusal.in_response_to.as_ref().map(|r| r.type_uri.as_str()),
+            Some("https://trusttasks.org/spec/messaging/mux/revoke-all/0.1")
+        );
+        assert_eq!(
+            refusal.thread_id.as_deref(),
+            Some("urn:uuid:00000000-0000-4000-8000-0000000000a1")
+        );
+        assert_eq!(err.current_epoch(), Some(3));
+        assert_eq!(
+            err.refusal_code(),
+            Some("messaging/mux/revoke-all:epochMismatch")
+        );
+    }
+
+    #[test]
+    fn a_trust_task_error_without_a_code_is_not_read_as_a_response() {
+        let mut doc = epoch_mismatch_document();
+        doc["payload"].as_object_mut().unwrap().remove("code");
+        assert!(matches!(
+            decode_body::<Value>(&doc),
+            Err(ATMError::MsgReceiveError(_))
+        ));
+    }
+
+    #[test]
+    fn a_response_still_decodes() {
+        let doc = serde_json::json!({
+            "id": "urn:uuid:00000000-0000-4000-8000-0000000000e2",
+            "type": "https://trusttasks.org/spec/messaging/mux/revoke-all/0.1#response",
+            "payload": { "epoch": 4 }
+        });
+        assert_eq!(decode_body::<Value>(&doc).unwrap().payload["epoch"], 4);
+    }
+
+    #[test]
+    fn every_request_asks_for_error_documents() {
+        let mut doc = serde_json::json!({ "id": "x", "type": "t", "payload": {} });
+        ask_for_error_documents(&mut doc);
+        assert_eq!(doc[ERROR_FORMAT_MEMBER], ERROR_FORMAT_DOCUMENT);
+        // A value set by the caller is kept.
+        let mut doc = serde_json::json!({ ERROR_FORMAT_MEMBER: "other" });
+        ask_for_error_documents(&mut doc);
+        assert_eq!(doc[ERROR_FORMAT_MEMBER], "other");
+    }
+
+    #[test]
+    fn an_unsupported_type_is_recognised_in_either_form() {
+        use crate::protocols::trust_task_versions::is_unsupported_error;
+        assert!(is_unsupported_error(&ATMError::ProblemReport(
+            "e.p.protocol.trust_task.unsupported".into(),
+            String::new(),
+            "NONE".into(),
+        )));
+        let mut doc = epoch_mismatch_document();
+        doc["payload"]["code"] = "unsupportedType".into();
+        doc["payload"].as_object_mut().unwrap().remove("details");
+        assert!(is_unsupported_error(
+            &decode_body::<Value>(&doc).unwrap_err()
+        ));
+        assert!(!is_unsupported_error(
+            &decode_body::<Value>(&epoch_mismatch_document()).unwrap_err()
+        ));
+    }
 
     /// An Ed25519 `did:key` secret whose `kid` is the DID's own verification
     /// method, so the stock `did:key` verifier can resolve it offline.

@@ -301,12 +301,8 @@ impl MessageTransport for DidCommTransport {
 /// (`protocol.trust_task.unsupported`), or it predates Trust Tasks and refused
 /// the message as not implemented (`me.not_implemented`).
 fn is_unsupported_task(err: &ATMError) -> bool {
-    matches!(
-        err,
-        ATMError::ProblemReport(code, ..)
-            if crate::protocols::trust_task_versions::is_unsupported_type(code)
-                || code.ends_with("me.not_implemented")
-    )
+    crate::protocols::trust_task_versions::is_unsupported_error(err)
+        || matches!(err, ATMError::ProblemReport(code, ..) if code.ends_with("me.not_implemented"))
 }
 
 /// Carry an ATM failure across the [`MessageTransport`] boundary.
