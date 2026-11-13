@@ -192,10 +192,11 @@ pub const DEFAULT_CLOCK_SKEW: chrono::TimeDelta = chrono::TimeDelta::seconds(60)
 ///
 /// These options are honoured by [`crate::DataIntegrityProof::verify`],
 /// [`crate::DataIntegrityProof::verify_with_public_key`] and
-/// [`crate::verify_multi`]. [`crate::verify_conformance`] and the
-/// `bbs-2023` verifiers do not take a `VerifyOptions`: they check `created`
-/// and `expires` against the current time with the default skews, and do
-/// not check `domain` or `challenge`. More fields will be added as the library grows —
+/// [`crate::verify_multi`], and by the `bbs-2023` derived-proof verifiers
+/// through `bbs_2023_transform::DerivedProofVerifyOptions`.
+/// [`crate::verify_conformance`] does not take a `VerifyOptions`: it checks
+/// `created` and `expires` against the current time with the default skews,
+/// and does not check `domain` or `challenge`. More fields will be added as the library grows —
 /// `#[non_exhaustive]` ensures future additions do not break callers.
 #[derive(Clone, Debug)]
 #[non_exhaustive]

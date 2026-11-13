@@ -99,7 +99,7 @@ pub mod bbs_2023;
 /// — **the** `bbs-2023` implementation. Pinned byte-for-byte to the official
 /// `w3c/vc-di-bbs` vectors: issuer ([`bbs_2023_transform::sign_base_document`]),
 /// holder ([`bbs_2023_transform::create_derived_proof`]), verifier
-/// ([`bbs_2023_transform::verify_derived_proof`]), plus per-verifier pseudonym /
+/// ([`bbs_2023_transform::verify_derived_proof_with`]), plus per-verifier pseudonym /
 /// holder binding. Supersedes the legacy [`bbs_2023`] module.
 #[cfg(feature = "bbs-2023")]
 pub mod bbs_2023_transform;
@@ -628,8 +628,8 @@ where
         if matches!(proof_config.cryptosuite, CryptoSuite::Bbs2023) {
             return Err(DataIntegrityError::UnsupportedCryptoSuite {
                 name: "bbs-2023 derived proofs are verified via \
-                       bbs_2023_transform::verify_derived_proof (or \
-                       verify_pseudonym_derived_proof), not the generic verify path"
+                       bbs_2023_transform::verify_derived_proof_with (or \
+                       verify_pseudonym_derived_proof_with), not the generic verify path"
                     .to_string(),
             });
         }
