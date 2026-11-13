@@ -50,6 +50,25 @@ impl SendMessageResponse {
     }
 }
 
+/// The ids of the messages the mediator stored for `recipient` while
+/// answering a REST send: the `Stored` list in the POST's answer.
+fn stored_reply_ids(answer: &SendMessageResponse, recipient: &str) -> Vec<String> {
+    let SendMessageResponse::RestAPI(body) = answer else {
+        return Vec::new();
+    };
+    body.pointer("/data/Stored/messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let entry = entry.as_array()?;
+            let to = entry.first()?.as_str()?;
+            let id = entry.get(1)?.as_str()?;
+            (to == recipient).then(|| id.to_string())
+        })
+        .collect()
+}
+
 impl ATM {
     /// Send a message to a mediator based on a given profile
     /// - profile: The profile to connect to the mediator with
@@ -191,11 +210,20 @@ impl ATM {
             debug!("Response: {:#?}", a);
 
             if wait_for_response {
+                // The mediator stores its reply and names it in the POST's
+                // answer; fetch that. Only when the answer names none for
+                // this profile is the request's own digest asked for, as
+                // before.
+                let (profile_did, _) = profile.dids()?;
+                let mut message_ids = stored_reply_ids(&a, profile_did);
+                if message_ids.is_empty() {
+                    message_ids.push(digest(message));
+                }
                 let response = self
                     .get_messages(
                         profile,
                         &GetMessagesRequest {
-                            message_ids: vec![digest(message)],
+                            message_ids,
                             delete: auto_delete,
                         },
                     )
@@ -203,9 +231,12 @@ impl ATM {
 
                 if let Some(first) = response.success.first() {
                     if let Some(msg) = &first.msg {
-                        let unpack = self.unpack(msg).await?;
-
-                        Ok(SendMessageResponse::Message(Box::new(unpack.0)))
+                        let (unpacked, _) = self.unpack(msg).await?;
+                        if let Ok(MessageType::ProblemReport) = unpacked.typ.parse::<MessageType>()
+                        {
+                            return Err(ATMError::from_problem_report(&unpacked));
+                        }
+                        Ok(SendMessageResponse::Message(Box::new(unpacked)))
                     } else {
                         Err(ATMError::MsgReceiveError(
                             "Received message response, but no actual message".into(),
@@ -326,5 +357,27 @@ impl ATM {
         };
 
         Ok(SendMessageResponse::RestAPI(http_response))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_rest_reply_is_fetched_by_the_id_the_mediator_stored_it_under() {
+        let answer = SendMessageResponse::RestAPI(json!({
+            "data": { "Stored": {
+                "errors": [],
+                "messages": [["did:example:other", "1111"], ["did:example:me", "2222"]],
+            }},
+            "httpCode": 200,
+        }));
+        assert_eq!(stored_reply_ids(&answer, "did:example:me"), vec!["2222"]);
+        assert!(stored_reply_ids(&answer, "did:example:nobody").is_empty());
+        assert!(stored_reply_ids(&SendMessageResponse::EmptyResponse, "did:example:me").is_empty());
+        let not_stored = SendMessageResponse::RestAPI(json!({ "data": { "Ephemeral": "x" } }));
+        assert!(stored_reply_ids(&not_stored, "did:example:me").is_empty());
     }
 }
