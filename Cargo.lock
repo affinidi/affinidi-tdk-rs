@@ -875,7 +875,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
