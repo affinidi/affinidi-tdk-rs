@@ -23,12 +23,12 @@ fn random_kid() -> String {
 impl Secret {
     /// Creates a random SLH-DSA-SHA2-128s signing key pair.
     pub fn generate_slh_dsa_sha2_128s(kid: Option<&str>) -> Self {
-        let kp = affinidi_crypto::slh_dsa::generate_slh_dsa_sha2_128s();
+        let mut kp = affinidi_crypto::slh_dsa::generate_slh_dsa_sha2_128s().into_parts();
         Secret {
             id: kid.map(str::to_string).unwrap_or_else(random_kid),
             type_: SecretType::Multikey,
             secret_material: SecretMaterial::PrivateKeyMultibase(String::new()),
-            private_bytes: kp.private_bytes,
+            private_bytes: std::mem::take(&mut *kp.private_bytes),
             public_bytes: kp.public_bytes,
             key_type: KeyType::SlhDsaSha2_128s,
         }

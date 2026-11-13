@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-messaging-didcomm-v1"
 description = "DIDComm v1 (Aries RFC 0019) messaging implementation for the Affinidi TDK"
-version = "0.2.3"
+version = "0.2.4"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -26,7 +26,7 @@ messaging-core = ["dep:affinidi-messaging-core", "dep:async-trait"]
 # pack/unpack goes through these helpers. Only the `ed25519` feature is needed:
 # v1 has no curve agility (see `crypto` module docs), so the NIST/K-256 curve
 # support the v2 crate pulls in has no v1 counterpart.
-affinidi-crypto = { version = "0.2", default-features = false, features = ["ed25519"] }
+affinidi-crypto = { version = "0.3", default-features = false, features = ["ed25519"] }
 
 # X25519 key agreement for crypto_box. Pinned to the 3.x line so this crate
 # shares the workspace's single curve25519-dalek 5 generation — the RustCrypto
@@ -73,7 +73,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 hex = "0.4"
 # The parity test drives a v1 and a v2.1 adapter through one
 # `dyn MessagingProtocol`, so it needs the v2 crate's adapter too.
-affinidi-messaging-didcomm = { version = "0.15", path = "../affinidi-messaging-didcomm", features = [
+affinidi-messaging-didcomm = { version = "0.15.14", path = "../affinidi-messaging-didcomm", features = [
   "messaging-core",
 ] }
 

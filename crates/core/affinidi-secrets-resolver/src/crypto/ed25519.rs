@@ -13,7 +13,7 @@ impl Secret {
     /// Creates a random ed25519 signing key pair
     /// kid: Key ID, if none specified then a random value is assigned
     pub fn generate_ed25519(kid: Option<&str>, seed: Option<&[u8; 32]>) -> Self {
-        let keypair = affinidi_crypto::ed25519::generate(seed);
+        let mut keypair = affinidi_crypto::ed25519::generate(seed).into_parts();
 
         let kid = kid.map(|k| k.to_string()).unwrap_or_else(|| {
             BASE64_URL_SAFE_NO_PAD.encode(SysRng.try_next_u64().unwrap().to_ne_bytes())
@@ -23,7 +23,7 @@ impl Secret {
             id: kid,
             type_: SecretType::JsonWebKey2020,
             secret_material: SecretMaterial::JWK(keypair.jwk),
-            private_bytes: keypair.private_bytes,
+            private_bytes: std::mem::take(&mut *keypair.private_bytes),
             public_bytes: keypair.public_bytes,
             key_type: KeyType::Ed25519,
         }

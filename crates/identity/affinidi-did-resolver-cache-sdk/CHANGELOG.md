@@ -1,5 +1,10 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.53) — affinidi-crypto 0.3
+
+- **Changed:** requires `affinidi-crypto` 0.3. No code change and no
+  `affinidi-crypto` type in this crate's API.
+
 ## Unreleased (0.8.52) — network mode checks the cache server's answer as local resolution would
 
 ### Changed

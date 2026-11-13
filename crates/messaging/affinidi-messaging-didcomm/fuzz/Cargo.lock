@@ -39,9 +39,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-crypto"
-version = "0.2.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1de4ea837b349a75fda9dee0a5a0af23b49b5ff6c5e591c04a3dcfdcbb13cea8"
+version = "0.3.1"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -82,7 +80,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm"
-version = "0.15.13"
+version = "0.15.14"
 dependencies = [
  "affinidi-crypto",
  "arbitrary",

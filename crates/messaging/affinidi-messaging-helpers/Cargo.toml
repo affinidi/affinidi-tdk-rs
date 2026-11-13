@@ -26,9 +26,9 @@ affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.46" 
 ## task types come from `affinidi_messaging_sdk::tasks`.
 trust-tasks-rs = { version = "0.38", default-features = false }
 ## TDK for DID resolution and crypto utilities
-affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.43" }
+affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.44" }
 ## DIDComm message types — used by example binaries
-affinidi-crypto = { version = "0.2", features = ["jose"] }
+affinidi-crypto = { version = "0.3", features = ["jose"] }
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15", features = ["messaging-core"] }
 ## Protocol-agnostic messaging-core traits — used by `unified_messaging` example
 affinidi-messaging-core = { path = "../affinidi-messaging-core" }

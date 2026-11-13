@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.46.4) — affinidi-crypto 0.3
+
+- **Changed:** requires `affinidi-crypto` 0.3. No code change. `Curve` in the
+  curve-preference config now refers to `affinidi-crypto` 0.3.
 ## 0.46.3 — a reply to a message sent over REST is fetched by the id the mediator stored it under
 
 - `send_message` with `wait_for_response` over REST (a profile without a

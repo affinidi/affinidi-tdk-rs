@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.46.3"
+version = "0.46.4"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -31,8 +31,8 @@ trust-tasks-build = "0.1.2"
 [dependencies]
 # Affinidi Crates
 affinidi-tdk-common = { version = "0.7", path = "../../tdk/affinidi-tdk-common" }
-affinidi-crypto = { version = "0.2", features = ["jose"] }
-affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15.9" }
+affinidi-crypto = { version = "0.3", features = ["jose"] }
+affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15.14" }
 # Protocol-agnostic messaging vocabulary (ConnState, the future MessageTransport
 # trait). The websocket transport publishes ConnState over a watch channel.
 affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.11" }
@@ -50,7 +50,7 @@ affinidi-tsp = { path = "../affinidi-tsp", version = "0.3", optional = true }
 async-trait = "0.1"
 ## Pure-TSP auth handler needs the resolver-cache types named by the
 ## `CustomAuthHandler` trait it implements (tsp feature only).
-affinidi-did-resolver-cache-sdk = { version = "0.8", optional = true }
+affinidi-did-resolver-cache-sdk = { version = "0.8.53", path = "../../identity/affinidi-did-resolver-cache-sdk", optional = true }
 ## The HTTP client type `affinidi-tdk-common` hands out. Named directly so a
 ## non-success response can be read into `HttpStatusError` with its headers.
 ## Named only to recognise hyper's `IncompleteMessage` / closed-connection
@@ -66,10 +66,10 @@ reqwest = { version = "0.13", features = [
 ## call sites continue to resolve their old paths. A crate of its own so the
 ## SDK depends on nothing from the mediator.
 affinidi-messaging-mediator-types = { path = "../affinidi-messaging-mediator-types", version = "0.1" }
-affinidi-did-authentication = "0.3.13"
-affinidi-did-common = { version = "0.4.4", features = ["key-agreement"] }
+affinidi-did-authentication = { version = "0.3.16", path = "../../identity/affinidi-did-authentication" }
+affinidi-did-common = { version = "0.4.7", path = "../../identity/affinidi-did-common", features = ["key-agreement"] }
 affinidi-encoding = "0.1"
-affinidi-secrets-resolver = "0.5"
+affinidi-secrets-resolver = { version = "0.5.18", path = "../../core/affinidi-secrets-resolver" }
 ## Shared background-task supervision (delete-handler restart + health)
 affinidi-task-utils = "0.1"
 
@@ -100,7 +100,7 @@ uuid = { version = "1", features = ["v4", "fast-rng"] }
 tokio = { workspace = true, features = ["net", "io-util", "test-util"] }
 # A did:scid sender, from a signed did:webvh log served on loopback.
 didwebvh-rs = "0.8"
-affinidi-did-resolver-cache-sdk = "0.8"
+affinidi-did-resolver-cache-sdk = { version = "0.8.53", path = "../../identity/affinidi-did-resolver-cache-sdk" }
 clap = { version = "4", features = ["derive"] }
 console = "0.16"
 dialoguer = "0.12"

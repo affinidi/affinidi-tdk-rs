@@ -97,12 +97,16 @@ affinidi-net-guard = { path = "crates/core/affinidi-net-guard" }
 affinidi-did-resolver-cache-sdk = { path = "crates/identity/affinidi-did-resolver-cache-sdk" }
 affinidi-did-resolver-traits = { path = "crates/identity/affinidi-did-resolver-traits" }
 affinidi-did-common = { path = "crates/identity/affinidi-did-common" }
-# affinidi-crypto 0.3.0 is released ahead of its dependents, which still
-# require "0.2" and build against the published 0.2.12. A redirect to the local
-# 0.3.0 cannot satisfy "0.2", so it is off until the workspace moves to 0.3;
-# restore it then, together with removing affinidi-crypto from
-# scripts/workspace-duplicates-allow.txt.
-# affinidi-crypto = { path = "crates/core/affinidi-crypto" }
+affinidi-crypto = { path = "crates/core/affinidi-crypto" }
+# Temporary: trust-tasks-proof 0.38.0 on crates.io still requires
+# affinidi-crypto "0.2", so the workspace builds it from a trust-tasks commit
+# whose only change is affinidi-crypto "0.3". trust-tasks-rs comes from the same
+# commit because trust-tasks-proof takes it through a path in that repository.
+# Remove both lines, and raise affinidi-messaging-sdk's trust-tasks-proof
+# requirement, in the follow-up after trust-tasks-proof is released on
+# affinidi-crypto 0.3.
+trust-tasks-proof = { git = "https://github.com/trustoverip/dtgwg-trust-tasks-tf", rev = "aa20f75f59f34bc147959223dbf1276ebdb76ea6" }
+trust-tasks-rs = { git = "https://github.com/trustoverip/dtgwg-trust-tasks-tf", rev = "aa20f75f59f34bc147959223dbf1276ebdb76ea6" }
 affinidi-encoding = { path = "crates/core/affinidi-encoding" }
 affinidi-data-integrity = { path = "crates/credentials/affinidi-data-integrity" }
 affinidi-rdf-encoding = { path = "crates/credentials/affinidi-rdf-encoding" }

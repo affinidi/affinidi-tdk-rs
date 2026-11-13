@@ -2,6 +2,13 @@
 
 All notable changes to this crate are documented here.
 
+## [0.13.4] - Unreleased
+
+### Changed
+
+- Requires `affinidi-crypto` 0.3. No code change and no `affinidi-crypto`
+  type in this crate's API.
+
 ## [0.13.3] - 2026-11-12
 
 ### Changed

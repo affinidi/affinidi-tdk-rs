@@ -15,7 +15,7 @@ impl Secret {
         kid: Option<&str>,
         secret: Option<&[u8]>,
     ) -> Result<Self, SecretsResolverError> {
-        let keypair = affinidi_crypto::p384::generate(secret)?;
+        let mut keypair = affinidi_crypto::p384::generate(secret)?.into_parts();
 
         let kid = kid.map(|k| k.to_string()).unwrap_or_else(|| {
             BASE64_URL_SAFE_NO_PAD.encode(SysRng.try_next_u64().unwrap().to_ne_bytes())
@@ -25,7 +25,7 @@ impl Secret {
             id: kid,
             type_: SecretType::JsonWebKey2020,
             secret_material: SecretMaterial::JWK(keypair.jwk),
-            private_bytes: keypair.private_bytes,
+            private_bytes: std::mem::take(&mut *keypair.private_bytes),
             public_bytes: keypair.public_bytes,
             key_type: KeyType::P384,
         })
