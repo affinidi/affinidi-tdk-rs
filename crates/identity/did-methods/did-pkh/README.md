@@ -38,9 +38,15 @@ Upstream validated the Solana and Aleo addresses properly but accepted any
 `eip155` address starting with `0x`, and checked only the three-character
 prefix of a Tezos address. This crate additionally:
 
-- validates `eip155` addresses as `0x` + exactly 40 hex digits;
+- validates `eip155` addresses as `0x` + exactly 40 hex digits, and verifies
+  the EIP-55 checksum of a mixed-case address;
+- requires the `eip155` chain reference to be a decimal chain id without
+  leading zeros;
 - verifies the Tezos base58check checksum;
-- enforces the CAIP-2 / CAIP-10 grammar on namespace, reference and address.
+- verifies the base58check checksum and version byte of Bitcoin and Dogecoin
+  mainnet (P2PKH) addresses;
+- enforces the CAIP-2 / CAIP-10 grammar on namespace, reference and address,
+  including the address after a deprecated prefix (`btc:`, `eth:`, …).
 
 A malformed account id is refused here rather than copied into
 `blockchainAccountId`, where it would read as a real account to every consumer

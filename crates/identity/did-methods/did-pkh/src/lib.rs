@@ -48,6 +48,7 @@ use affinidi_did_common::{DocumentBuilder, VerificationMethodBuilder};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use sha3::Keccak256;
 use thiserror::Error;
 
 pub use affinidi_did_common::Document;
@@ -126,7 +127,16 @@ pub fn resolve_identifier(identifier: &str) -> Result<Document, DidPkhError> {
     let did = format!("did:pkh:{identifier}");
 
     // The deprecated prefixes name a chain outright; everything else is read as
-    // a CAIP-10 account id.
+    // a CAIP-10 account id. The address after a deprecated prefix is held to
+    // the same CAIP-10 grammar as one after a full chain id.
+    let legacy = matches!(
+        prefix,
+        "tz" | "eth" | "celo" | "poly" | "sol" | "btc" | "doge"
+    );
+    if legacy && !valid_caip10_address(rest) {
+        return Err(DidPkhError::InvalidIdentifier(identifier.to_string()));
+    }
+
     match prefix {
         "tz" => tezos(&did, rest, REFERENCE_TEZOS_MAINNET),
         "eth" => eip155(&did, rest, REFERENCE_EIP155_ETHEREUM_MAINNET, true),
@@ -161,11 +171,7 @@ fn caip10(did: &str, account_id: &str) -> Result<Document, DidPkhError> {
         && reference
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    let valid_address = (1..=128).contains(&address.len())
-        && address
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '%'));
-    if !valid_namespace || !valid_reference || !valid_address {
+    if !valid_namespace || !valid_reference || !valid_caip10_address(address) {
         return Err(DidPkhError::InvalidIdentifier(account_id.to_string()));
     }
 
@@ -177,6 +183,15 @@ fn caip10(did: &str, account_id: &str) -> Result<Document, DidPkhError> {
         "aleo" => aleo(did, address, reference),
         other => Err(DidPkhError::UnsupportedNamespace(other.to_string())),
     }
+}
+
+/// CAIP-10 `account_address` grammar: 1–128 characters of
+/// `[-.%a-zA-Z0-9]`.
+fn valid_caip10_address(address: &str) -> bool {
+    (1..=128).contains(&address.len())
+        && address
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '%'))
 }
 
 /// Tezos accounts: the `tz1`/`tz2`/`tz3` prefix selects the key algorithm, and
@@ -230,12 +245,24 @@ fn eip155(
     reference: &str,
     legacy: bool,
 ) -> Result<Document, DidPkhError> {
+    // The eip155 chain reference is the decimal chain id (CAIP-3), written
+    // without leading zeros so one chain has one spelling.
+    let valid_chain_id = reference.starts_with(|c: char| matches!(c, '1'..='9'))
+        && reference.chars().all(|c| c.is_ascii_digit());
+    if !valid_chain_id {
+        return Err(DidPkhError::InvalidIdentifier(format!(
+            "eip155:{reference}:{address}"
+        )));
+    }
+
     // Upstream checked only for a `0x` prefix, so a non-hex "address" resolved
-    // to a document naming an account that cannot exist. Validate it properly.
-    let hex_body = address
+    // to a document naming an account that cannot exist. Validate it properly,
+    // including the EIP-55 checksum when the address is written in mixed case.
+    let valid_address = address
         .strip_prefix("0x")
-        .filter(|body| body.len() == 40 && body.chars().all(|c| c.is_ascii_hexdigit()));
-    if hex_body.is_none() {
+        .filter(|body| body.len() == 40 && body.chars().all(|c| c.is_ascii_hexdigit()))
+        .is_some_and(eip55_case_matches);
+    if !valid_address {
         return Err(DidPkhError::InvalidAddress {
             namespace: "eip155",
             address: address.to_string(),
@@ -268,22 +295,60 @@ fn eip155(
     )
 }
 
+/// Whether a 40-digit hex address body is cased as EIP-55 requires.
+///
+/// An address in a single case carries no checksum and is accepted as is. A
+/// mixed-case address must match its EIP-55 checksum exactly: each letter is
+/// upper case where the corresponding nibble of `keccak256(lowercase address)`
+/// is 8 or more.
+fn eip55_case_matches(body: &str) -> bool {
+    let has_upper = body.chars().any(|c| c.is_ascii_uppercase());
+    let has_lower = body.chars().any(|c| c.is_ascii_lowercase());
+    if !(has_upper && has_lower) {
+        return true;
+    }
+    let lower = body.to_ascii_lowercase();
+    let checksum = Keccak256::digest(lower.as_bytes());
+    lower
+        .chars()
+        .zip(body.chars())
+        .enumerate()
+        .all(|(index, (plain, written))| {
+            let byte = checksum[index / 2];
+            let nibble = if index % 2 == 0 {
+                byte >> 4
+            } else {
+                byte & 0x0f
+            };
+            let expected = if nibble >= 8 {
+                plain.to_ascii_uppercase()
+            } else {
+                plain
+            };
+            written == expected
+        })
+}
+
 /// BIP-122 (Bitcoin-family) accounts.
 fn bip122(did: &str, address: &str, reference: &str) -> Result<Document, DidPkhError> {
-    // Only the two chains whose address prefix we know are checked; an
-    // unrecognised chain reference carries no prefix expectation.
-    let expected_prefix = match reference {
-        REFERENCE_BIP122_BITCOIN_MAINNET => Some('1'),
-        REFERENCE_BIP122_DOGECOIN_MAINNET => Some('D'),
+    // Only the two chains whose address format we know are checked: a P2PKH
+    // address, base58check over a version byte and a 20-byte key hash. An
+    // unrecognised chain reference carries no format expectation.
+    let expected = match reference {
+        REFERENCE_BIP122_BITCOIN_MAINNET => Some(('1', 0x00)),
+        REFERENCE_BIP122_DOGECOIN_MAINNET => Some(('D', 0x1e)),
         _ => None,
     };
-    if let Some(prefix) = expected_prefix
-        && !address.starts_with(prefix)
-    {
-        return Err(DidPkhError::InvalidAddress {
-            namespace: "bip122",
-            address: address.to_string(),
-        });
+    if let Some((prefix, version)) = expected {
+        let valid = address.starts_with(prefix)
+            && require_base58check(address, 25)
+                .is_some_and(|payload| payload.first() == Some(&version));
+        if !valid {
+            return Err(DidPkhError::InvalidAddress {
+                namespace: "bip122",
+                address: address.to_string(),
+            });
+        }
     }
 
     let account = format!("bip122:{reference}:{address}");
@@ -392,18 +457,19 @@ fn aleo(did: &str, address: &str, reference: &str) -> Result<Document, DidPkhErr
     )
 }
 
-/// Verify a Tezos-style base58check string and return its payload length.
+/// Verify a base58check string of `expected_len` decoded bytes and return its
+/// payload (without the checksum).
 ///
 /// Base58check is `payload || sha256(sha256(payload))[..4]`; upstream checked
-/// only the three-character prefix, so a mistyped address resolved happily.
-fn require_base58check(address: &str, expected_len: usize) -> Option<()> {
-    let decoded = bs58::decode(address).into_vec().ok()?;
+/// only the address prefix, so a mistyped address resolved happily.
+fn require_base58check(address: &str, expected_len: usize) -> Option<Vec<u8>> {
+    let mut decoded = bs58::decode(address).into_vec().ok()?;
     if decoded.len() != expected_len {
         return None;
     }
-    let (payload, checksum) = decoded.split_at(expected_len - 4);
-    let digest = Sha256::digest(Sha256::digest(payload));
-    (digest[..4] == *checksum).then_some(())
+    let checksum = decoded.split_off(expected_len - 4);
+    let digest = Sha256::digest(Sha256::digest(&decoded));
+    (digest[..4] == *checksum).then_some(decoded)
 }
 
 /// Build one verification method for an account, optionally carrying key material.
@@ -604,5 +670,117 @@ mod tests {
                 .unwrap()
                 .ends_with("#Recovery2020")
         );
+    }
+
+    const BTC: &str = "128Lkh3S7CkDTBZ8W7BbpsN3YYizJMp8p6";
+    const DOGE: &str = "DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L";
+
+    /// Change the last character of a base58 string to another base58
+    /// character, which breaks its checksum.
+    fn with_last_char_changed(address: &str) -> String {
+        let mut changed = address.to_string();
+        let last = changed.pop().unwrap();
+        changed.push(if last == '6' { '7' } else { '6' });
+        changed
+    }
+
+    #[test]
+    fn legacy_prefix_address_follows_the_caip10_grammar() {
+        for bad in [
+            format!("did:pkh:btc:{BTC}:extra"),
+            "did:pkh:btc:1abc/def".to_string(),
+            "did:pkh:doge:D!".to_string(),
+            format!("did:pkh:eth:{ETH}:1"),
+            format!("did:pkh:btc:1{}", "a".repeat(128)),
+        ] {
+            assert!(
+                matches!(resolve(&bad), Err(DidPkhError::InvalidIdentifier(_))),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn bip122_mainnet_addresses_need_a_valid_checksum() {
+        assert!(resolve(&format!("did:pkh:btc:{BTC}")).is_ok());
+        assert!(resolve(&format!("did:pkh:doge:{DOGE}")).is_ok());
+        for bad in [
+            format!("did:pkh:btc:{}", with_last_char_changed(BTC)),
+            format!("did:pkh:doge:{}", with_last_char_changed(DOGE)),
+            "did:pkh:btc:1abc".to_string(),
+            format!(
+                "did:pkh:bip122:{REFERENCE_BIP122_BITCOIN_MAINNET}:{}",
+                with_last_char_changed(BTC)
+            ),
+        ] {
+            assert!(
+                matches!(resolve(&bad), Err(DidPkhError::InvalidAddress { .. })),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn eip155_reference_must_be_a_decimal_chain_id() {
+        for bad in ["abc", "-_-", "0x1", "01", "0"] {
+            assert!(
+                matches!(
+                    resolve(&format!("did:pkh:eip155:{bad}:{ETH}")),
+                    Err(DidPkhError::InvalidIdentifier(_))
+                ),
+                "{bad}"
+            );
+        }
+        assert!(resolve(&format!("did:pkh:eip155:42220:{ETH}")).is_ok());
+    }
+
+    /// Vectors from the EIP-55 specification.
+    const EIP55_VECTORS: [&str; 4] = [
+        "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+        "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
+        "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB",
+        "0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb",
+    ];
+
+    #[test]
+    fn eip155_mixed_case_address_must_match_its_checksum() {
+        for address in EIP55_VECTORS {
+            assert!(
+                resolve(&format!("did:pkh:eip155:1:{address}")).is_ok(),
+                "{address}"
+            );
+            assert!(
+                resolve(&format!("did:pkh:eth:{address}")).is_ok(),
+                "{address}"
+            );
+            // Flip the case of the first letter after `0x`.
+            let mut chars: Vec<char> = address.chars().collect();
+            let position = chars
+                .iter()
+                .skip(2)
+                .position(|c| c.is_ascii_alphabetic())
+                .unwrap()
+                + 2;
+            chars[position] = if chars[position].is_ascii_uppercase() {
+                chars[position].to_ascii_lowercase()
+            } else {
+                chars[position].to_ascii_uppercase()
+            };
+            let miscased: String = chars.into_iter().collect();
+            assert!(
+                matches!(
+                    resolve(&format!("did:pkh:eip155:1:{miscased}")),
+                    Err(DidPkhError::InvalidAddress { .. })
+                ),
+                "{miscased}"
+            );
+        }
+    }
+
+    #[test]
+    fn eip155_single_case_address_needs_no_checksum() {
+        let upper = format!("0x{}", ETH[2..].to_ascii_uppercase());
+        assert!(resolve(&format!("did:pkh:eip155:1:{upper}")).is_ok());
+        assert!(resolve(&format!("did:pkh:eip155:1:{ETH}")).is_ok());
     }
 }

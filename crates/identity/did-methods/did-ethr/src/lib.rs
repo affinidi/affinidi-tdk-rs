@@ -131,7 +131,8 @@ pub fn resolve_identifier(identifier: &str) -> Result<Document, DidEthrError> {
 /// Map a `did:ethr` network segment to its EIP-155 chain id.
 ///
 /// The named networks are the set the method specification froze; anything else
-/// must be given as an explicit `0x`-prefixed hex chain id.
+/// must be given as an explicit `0x`-prefixed hex chain id, in lower case and
+/// without leading zeros, so that one chain has one spelling.
 fn chain_id_for(network: &str) -> Result<u64, DidEthrError> {
     match network {
         "mainnet" => Ok(1),
@@ -140,8 +141,19 @@ fn chain_id_for(network: &str) -> Result<u64, DidEthrError> {
         "rinkeby" => Ok(4),
         "goerli" => Ok(5),
         "kovan" => Ok(42),
-        hex_id if hex_id.starts_with("0x") => u64::from_str_radix(&hex_id[2..], 16)
-            .map_err(|_| DidEthrError::InvalidNetwork(network.to_string())),
+        hex_id if hex_id.starts_with("0x") => {
+            let digits = &hex_id[2..];
+            let canonical = !digits.starts_with('0')
+                && !digits.is_empty()
+                && digits
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f'));
+            if !canonical {
+                return Err(DidEthrError::InvalidNetwork(network.to_string()));
+            }
+            u64::from_str_radix(digits, 16)
+                .map_err(|_| DidEthrError::InvalidNetwork(network.to_string()))
+        }
         _ => Err(DidEthrError::InvalidNetwork(network.to_string())),
     }
 }
@@ -166,9 +178,16 @@ fn require_hex(identifier: &str, hex_digits: usize) -> Result<Vec<u8>, DidEthrEr
 ///
 /// The address is carried through exactly as written in the DID — re-checksumming
 /// it would change the DID's own `blockchainAccountId` and break signatures made
-/// against the document.
+/// against the document. An address written in mixed case must carry a correct
+/// EIP-55 checksum; one written in a single case carries none.
 fn document_for_address(did: &str, chain_id: u64, address: &str) -> Result<Document, DidEthrError> {
     require_hex(address, 40)?;
+    let body = &address[2..];
+    let mixed_case = body.chars().any(|c| c.is_ascii_uppercase())
+        && body.chars().any(|c| c.is_ascii_lowercase());
+    if mixed_case && eip55_checksum(&body.to_ascii_lowercase()) != body {
+        return Err(DidEthrError::InvalidIdentifier(address.to_string()));
+    }
     let account = format!("eip155:{chain_id}:{address}");
 
     let controller = verification_method(
@@ -284,12 +303,15 @@ fn eip55_address(x: &[u8], y: &[u8]) -> String {
     hasher.update(x);
     hasher.update(y);
     let address = hex::encode(&hasher.finalize()[12..]);
+    format!("0x{}", eip55_checksum(&address))
+}
 
-    let checksum = hex::encode(Keccak256::digest(address.as_bytes()));
+/// EIP-55 casing of a lowercase 40-digit hex address body (no `0x`).
+fn eip55_checksum(lowercase_body: &str) -> String {
+    let checksum = hex::encode(Keccak256::digest(lowercase_body.as_bytes()));
 
-    let mut out = String::with_capacity(42);
-    out.push_str("0x");
-    for (c, nibble) in address.chars().zip(checksum.chars()) {
+    let mut out = String::with_capacity(lowercase_body.len());
+    for (c, nibble) in lowercase_body.chars().zip(checksum.chars()) {
         // Digits have no case to carry the checksum bit; only letters do.
         if c.is_ascii_digit() || nibble < '8' {
             out.push(c);
@@ -528,5 +550,66 @@ mod tests {
             address.to_ascii_lowercase(),
             "0xf3beac30c498d9e26865f34fcaa57dbb935b0d74"
         );
+    }
+
+    #[test]
+    fn hex_network_must_be_canonical() {
+        for bad in ["0x+1", "0x01", "0x", "0x2A", "0x0", "0x-1", "0x 1"] {
+            assert!(
+                matches!(chain_id_for(bad), Err(DidEthrError::InvalidNetwork(_))),
+                "{bad}"
+            );
+            assert!(
+                matches!(
+                    resolve(&format!(
+                        "did:ethr:{bad}:0xb9c5714089478a327f09197987f16f9e5d936e8a"
+                    )),
+                    Err(DidEthrError::InvalidNetwork(_))
+                ),
+                "{bad}"
+            );
+        }
+    }
+
+    /// Vectors from the EIP-55 specification.
+    const EIP55_VECTORS: [&str; 4] = [
+        "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+        "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
+        "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB",
+        "0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb",
+    ];
+
+    #[test]
+    fn mixed_case_address_must_match_its_checksum() {
+        for address in EIP55_VECTORS {
+            let doc = resolved(&format!("did:ethr:{address}"));
+            assert_eq!(
+                doc["verificationMethod"][0]["blockchainAccountId"],
+                json!(format!("eip155:1:{address}"))
+            );
+            let miscased = address.replacen(
+                |c: char| c.is_ascii_uppercase(),
+                &address
+                    .chars()
+                    .find(|c| c.is_ascii_uppercase())
+                    .unwrap()
+                    .to_ascii_lowercase()
+                    .to_string(),
+                1,
+            );
+            assert!(
+                matches!(
+                    resolve(&format!("did:ethr:{miscased}")),
+                    Err(DidEthrError::InvalidIdentifier(_))
+                ),
+                "{miscased}"
+            );
+        }
+    }
+
+    #[test]
+    fn single_case_address_needs_no_checksum() {
+        assert!(resolve("did:ethr:0xb9c5714089478a327f09197987f16f9e5d936e8a").is_ok());
+        assert!(resolve("did:ethr:0xB9C5714089478A327F09197987F16F9E5D936E8A").is_ok());
     }
 }
