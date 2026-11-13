@@ -128,7 +128,14 @@ impl TrustListRegistry {
 
         for provider in &tl.trust_service_providers {
             for service in &provider.services {
-                if service.digital_identities.is_empty() {
+                // Only identities with a value are indexed; a service with
+                // none is not added.
+                let identities: Vec<_> = service
+                    .digital_identities
+                    .iter()
+                    .filter(|identity| !identity.is_empty())
+                    .collect();
+                if identities.is_empty() {
                     continue;
                 }
                 let entry = TrustAnchorEntry {
@@ -137,7 +144,7 @@ impl TrustListRegistry {
                     service: service.clone(),
                     list_next_update,
                 };
-                for identity in &service.digital_identities {
+                for identity in identities {
                     self.index
                         .entry(identity.fingerprint())
                         .or_default()
@@ -238,6 +245,10 @@ impl TrustListRegistry {
         now: DateTime<Utc>,
         accept: impl Fn(&TrustAnchorEntry) -> bool,
     ) -> LookupResult {
+        // An empty identity value identifies nothing and is never indexed.
+        if identity.is_empty() {
+            return LookupResult::NotFound;
+        }
         let Some(entries) = self.index.get(&identity.fingerprint()) else {
             return LookupResult::NotFound;
         };
@@ -549,6 +560,84 @@ mod tests {
         assert_eq!(registry.territories().len(), 2);
         assert!(registry.territories().contains(&"DE".to_string()));
         assert!(registry.territories().contains(&"AT".to_string()));
+    }
+
+    #[test]
+    fn empty_identities_are_not_indexed_or_found() {
+        use crate::types::*;
+
+        let tl = TrustServiceStatusList {
+            scheme_information: SchemeInformation {
+                tsl_version: 5,
+                tsl_sequence_number: 1,
+                tsl_type: TslType::EuGeneric,
+                scheme_operator_name: "Test Authority".into(),
+                scheme_territory: "DE".into(),
+                list_issue_date_time: Utc::now() - chrono::Duration::days(1),
+                next_update: Some(Utc::now() + chrono::Duration::days(30)),
+                pointers_to_other_tsl: Vec::new(),
+            },
+            trust_service_providers: vec![TrustServiceProvider {
+                name: "Provider".into(),
+                trade_name: None,
+                territory: "DE".into(),
+                information_uris: Vec::new(),
+                services: vec![
+                    ServiceInformation {
+                        service_type: ServiceType::Pid,
+                        service_name: "No usable identity".into(),
+                        digital_identities: vec![
+                            ServiceDigitalIdentity::PublicKey(Vec::new()),
+                            ServiceDigitalIdentity::Did(String::new()),
+                        ],
+                        service_status: ServiceStatus::Granted,
+                        status_starting_time: Utc::now(),
+                        history: Vec::new(),
+                    },
+                    ServiceInformation {
+                        service_type: ServiceType::Pid,
+                        service_name: "One usable identity".into(),
+                        digital_identities: vec![
+                            ServiceDigitalIdentity::X509Ski(Vec::new()),
+                            ServiceDigitalIdentity::X509Certificate(sample_cert(20)),
+                        ],
+                        service_status: ServiceStatus::Granted,
+                        status_starting_time: Utc::now(),
+                        history: Vec::new(),
+                    },
+                ],
+            }],
+        };
+
+        let mut registry = TrustListRegistry::new();
+        registry.load_trust_list(&tl, Utc::now()).unwrap();
+        assert_eq!(registry.entry_count(), 1);
+        assert!(
+            registry
+                .lookup_by_certificate(&sample_cert(20))
+                .is_trusted()
+        );
+
+        assert!(matches!(
+            registry.lookup_by_public_key(&[]),
+            LookupResult::NotFound
+        ));
+        assert!(matches!(registry.lookup_by_did(""), LookupResult::NotFound));
+        assert!(matches!(
+            registry.lookup_by_ski(&[]),
+            LookupResult::NotFound
+        ));
+        assert!(matches!(
+            registry.lookup_by_certificate(&[]),
+            LookupResult::NotFound
+        ));
+
+        // An entry added with an empty certificate is not found either.
+        registry.add_provider("DE", "Blank", ServiceType::Pid, ServiceStatus::Granted, &[]);
+        assert!(matches!(
+            registry.lookup_by_certificate(&[]),
+            LookupResult::NotFound
+        ));
     }
 
     #[test]

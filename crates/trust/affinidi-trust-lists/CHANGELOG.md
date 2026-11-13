@@ -1,5 +1,20 @@
 # Affinidi Trust Lists Changelog
 
+## Unreleased (0.2.1) — empty identities are not indexed
+
+- A service identity with no value (an empty `X509Certificate`, `X509SKI` or
+  `X509SubjectName` element, or an empty key, SKI, name or DID built in code)
+  is no longer indexed. The XML parser drops empty identity elements, and
+  `load_trust_list` indexes only the identities that have a value; a service
+  left with none is not added, as for a service with no identity.
+- `lookup_by_*` with an empty value (`lookup_by_public_key(&[])`,
+  `lookup_by_did("")`, …) returns `NotFound`.
+- New `ServiceDigitalIdentity::is_empty`.
+
+Behaviour change (R3.6), patch bump: an empty value could previously match an
+entry built from an empty identity element and report `Trusted`; it now never
+does. Index fingerprints are unchanged from 0.2.0 and are only held in memory.
+
 ## Unreleased (0.2.0) — chain signatures verified; list dates and identities parsed
 
 Breaking (R3.6). No in-workspace caller outside `affinidi-tdk`'s re-export
