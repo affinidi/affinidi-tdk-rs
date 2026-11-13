@@ -29,6 +29,7 @@
 //! | `audit/list` | `limit` → `pageSize` | `cursor` → `nextCursor`; `truncated` removed |
 //! | `messaging/message/status` | — | `statuses[].at` → `reachedAt` |
 
+use crate::errors::ATMError;
 use chrono::{DateTime, SecondsFormat};
 use serde_json::{Map, Value};
 
@@ -58,6 +59,19 @@ pub(crate) enum Current {
 /// serve. The refusal comes before any handler runs, so nothing was done.
 pub(crate) fn is_unsupported_type(code: &str) -> bool {
     code.ends_with("protocol.trust_task.unsupported")
+}
+
+/// Whether `err` is the mediator's refusal of a Trust Task type it does not
+/// serve, in either form: a problem report ([`is_unsupported_type`]), or a
+/// `trust-task-error` with `unsupportedType` / `unsupportedVersion`.
+pub(crate) fn is_unsupported_error(err: &ATMError) -> bool {
+    match err {
+        ATMError::ProblemReport(code, ..) => is_unsupported_type(code),
+        ATMError::TrustTaskError(r) => {
+            matches!(r.code.as_str(), "unsupportedType" | "unsupportedVersion")
+        }
+        _ => false,
+    }
 }
 
 /// The first mediator release that answers `messaging/message/status` over

@@ -107,6 +107,25 @@ const MAX_ACK_BATCH: usize = 100;
 /// it is the one answer the socket does not acknowledge.
 const ACK_RESPONSE_TYPE: &str = "https://trusttasks.org/spec/messaging/mux/ack/0.1#response";
 
+/// `messaging/mux/ack`'s request type: a `trust-task-error` refusing it is
+/// pushed like its answer, never stored.
+const ACK_TYPE: &str = "https://trusttasks.org/spec/messaging/mux/ack/0.1";
+
+/// Whether the mediator pushed answer `doc` without storing it: the answer
+/// to `messaging/mux/ack`, or a `trust-task-error` refusing one. There is
+/// nothing to acknowledge for it.
+fn answer_is_pushed(doc: &Value) -> bool {
+    let ty = doc.get("type").and_then(Value::as_str);
+    if ty == Some(ACK_RESPONSE_TYPE) {
+        return true;
+    }
+    crate::errors::is_trust_task_error(doc)
+        && doc
+            .pointer("/payload/inResponseTo/typeUri")
+            .and_then(Value::as_str)
+            == Some(ACK_TYPE)
+}
+
 /// Frames read off the socket and not yet taken by [`TspMuxWebSocket::recv`].
 const FRAME_BUFFER: usize = 64;
 
@@ -420,7 +439,8 @@ pub(crate) enum Sorted {
 fn answer_thread(doc: &Value) -> Option<String> {
     let thread = doc.get("threadId").and_then(Value::as_str)?;
     let ty = doc.get("type").and_then(Value::as_str)?;
-    (ty.contains("#response") || ty.contains("/trust-task-error/")).then(|| thread.to_string())
+    (ty.contains("#response") || crate::errors::is_trust_task_error(doc))
+        .then(|| thread.to_string())
 }
 
 const NOTICE_TYPE: &str = "https://trusttasks.org/spec/messaging/mux/notice/0.1";
@@ -866,6 +886,7 @@ impl TspMuxSender {
             .trust_tasks()
             .sign(&self.shared.principal, body)
             .await?;
+        let request = super::trust_tasks::RequestIds::of(&body);
         let bytes = serde_json::to_vec(&body)
             .map_err(|e| ATMError::MsgSendError(format!("couldn't serialise Trust Task: {e}")))?;
         let frame = self
@@ -895,7 +916,7 @@ impl TspMuxSender {
         }
         let timeout = super::trust_tasks::TSP_REPLY_TIMEOUT;
         match tokio::time::timeout(timeout, answered).await {
-            Ok(Ok(Ok(doc))) => super::trust_tasks::decode_body(&doc),
+            Ok(Ok(Ok(doc))) => super::trust_tasks::decode_reply(&doc, &request),
             Ok(Ok(Err(e))) => Err(e),
             Ok(Err(_)) => Err(self.shared.closed_error()),
             Err(_) => {
@@ -1386,7 +1407,7 @@ fn answer_pending(shared: &Arc<Shared>, thread_id: &str, doc: Value, frame: Vec<
         .lock()
         .expect("pending map")
         .remove(thread_id);
-    let stored = doc.get("type").and_then(Value::as_str) != Some(ACK_RESPONSE_TYPE);
+    let stored = !answer_is_pushed(&doc);
     let Some(p) = pending else {
         let mut abandoned = shared.abandoned.lock().expect("abandoned list");
         if let Some(at) = abandoned.iter().position(|t| t == thread_id) {
@@ -1683,6 +1704,25 @@ fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_ack_answer_or_its_refusal_is_pushed_not_stored() {
+        assert!(answer_is_pushed(&json!({ "type": ACK_RESPONSE_TYPE })));
+        assert!(answer_is_pushed(&json!({
+            "type": "https://trusttasks.org/spec/trust-task-error/0.6",
+            "payload": { "code": "unavailable", "retryable": true,
+                         "inResponseTo": { "typeUri": ACK_TYPE } }
+        })));
+        // Any other refusal is stored, and acknowledged once consumed.
+        assert!(!answer_is_pushed(&json!({
+            "type": "https://trusttasks.org/spec/trust-task-error/0.6",
+            "payload": { "code": "unavailable", "retryable": true,
+                         "inResponseTo": { "typeUri": "https://trusttasks.org/spec/messaging/mux/list/0.1" } }
+        })));
+        assert!(!answer_is_pushed(&json!({
+            "type": "https://trusttasks.org/spec/messaging/mux/list/0.1#response"
+        })));
+    }
     use affinidi_tsp::PrivateVid;
     use affinidi_tsp::message::direct;
     use futures_util::SinkExt;
@@ -2193,6 +2233,25 @@ mod tests {
         assert!(
             matches!(d.sort(error).await, Sorted::Answer { thread_id, .. } if thread_id == "urn:uuid:2")
         );
+        // A `type` that only contains the error path is not a Trust Task
+        // error: data, not an answer.
+        for ty in [
+            "https://example.org/trust-task-error/0.6",
+            "https://trusttasks.org/spec/trust-task-error/0.6/x",
+        ] {
+            let lookalike = doc(json!({
+                "type": ty,
+                "threadId": "urn:uuid:2",
+                "payload": {"code": "unavailable", "retryable": true},
+            }));
+            assert!(
+                matches!(
+                    d.sort(lookalike).await,
+                    Sorted::Frame(TspMuxFrame::Data { .. })
+                ),
+                "{ty}"
+            );
+        }
         // No thread: not an answer.
         let unthreaded = doc(json!({
             "type": "https://trusttasks.org/spec/messaging/ping/0.2#response",
@@ -2770,6 +2829,69 @@ mod tests {
             b"frame".to_vec(),
         );
         assert!(shared.abandoned.lock().unwrap().is_empty(), "consumed");
+    }
+
+    /// A refusal reaches only the request whose thread it names: one for
+    /// another thread leaves a waiting request waiting, and the request's own
+    /// is read as its refusal.
+    #[tokio::test]
+    async fn a_refusal_is_routed_to_its_own_request_only() {
+        let k = keys();
+        let (dialer, _) = serve_each(vec![Conn {
+            selected: "tsp-mux",
+            frames: vec![Message::Binary(ready_frame(&k).into())],
+            close: None,
+        }])
+        .await;
+        let sock = open_on(dialer, &k, None).await;
+        let shared = Arc::clone(&sock.sender.shared);
+        let (answer, mut answered) = oneshot::channel();
+        shared.pending.lock().unwrap().insert(
+            "urn:uuid:mine".into(),
+            Pending {
+                frame_id: "f1".into(),
+                answer,
+            },
+        );
+        let refusal = |thread: &str| {
+            json!({
+                "id": "urn:uuid:e1",
+                "type": "https://trusttasks.org/spec/trust-task-error/0.6",
+                "threadId": thread,
+                "payload": {
+                    "code": "permissionDenied",
+                    "retryable": false,
+                    "inResponseTo": {
+                        "typeUri": "https://trusttasks.org/spec/messaging/mux/list/0.1",
+                        "id": thread,
+                    },
+                },
+            })
+        };
+        answer_pending(
+            &shared,
+            "urn:uuid:other",
+            refusal("urn:uuid:other"),
+            b"frame".to_vec(),
+        );
+        assert!(
+            matches!(
+                answered.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ),
+            "a refusal of another request is not this one's answer"
+        );
+        answer_pending(
+            &shared,
+            "urn:uuid:mine",
+            refusal("urn:uuid:mine"),
+            b"frame".to_vec(),
+        );
+        let doc = answered.await.unwrap().unwrap();
+        let request =
+            crate::protocols::trust_tasks::RequestIds::of(&json!({ "id": "urn:uuid:mine" }));
+        let err = crate::protocols::trust_tasks::decode_reply::<Value>(&doc, &request).unwrap_err();
+        assert_eq!(err.refusal_code(), Some("permissionDenied"));
     }
 
     #[test]

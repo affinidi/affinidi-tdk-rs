@@ -64,9 +64,284 @@ pub enum ATMError {
     MediatorError(String, String),
     #[error("ATM DID Profile error: {0}")]
     ProfileError(String),
+    /// The mediator refused a Trust Task with a `trust-task-error` document
+    /// (Trust Tasks SPEC §8), the framework's own error response. A mediator
+    /// sends one instead of a DIDComm problem report when the request asks
+    /// for it, which every Trust Task this SDK sends does (see
+    /// [`ERROR_FORMAT_MEMBER`](crate::protocols::trust_tasks::ERROR_FORMAT_MEMBER));
+    /// an older mediator still answers with [`ATMError::ProblemReport`].
+    ///
+    /// To act on a refusal whichever form it arrived in, use
+    /// [`ATMError::refusal_code`], [`ATMError::mediator_code`] and
+    /// [`ATMError::current_epoch`] rather than matching either variant.
+    /// Boxed so the variant does not grow every `Result<_, ATMError>`.
+    #[error("Trust Task refused: {0}")]
+    TrustTaskError(Box<TrustTaskRefusal>),
+}
+
+/// The `details` member a mediator adds to a `trust-task-error` whose code it
+/// translated from its own vocabulary into a standard one: the code the same
+/// refusal carries in a problem report.
+pub const MEDIATOR_CODE_DETAIL: &str = "mediatorCode";
+
+/// The longest `code` kept from a `trust-task-error`, in bytes. A longer one
+/// is cut at a character boundary.
+pub const MAX_REFUSAL_CODE_LEN: usize = 256;
+
+/// The longest `message` kept from a `trust-task-error`, in bytes. A longer
+/// one is cut at a character boundary.
+pub const MAX_REFUSAL_MESSAGE_LEN: usize = 2048;
+
+/// The `type` of a `trust-task-error` document, before its `MAJOR.MINOR`.
+const TRUST_TASK_ERROR_TYPE_PREFIX: &str = "https://trusttasks.org/spec/trust-task-error/";
+
+/// A `trust-task-error` document's payload (Trust Tasks SPEC §8.2), with the
+/// identifiers of the error document itself.
+///
+/// `code` is kept as the string on the wire: a standard code
+/// (`permissionDenied`, `unsupportedType`, …) or one an individual
+/// specification declares (`messaging/mux/revoke-all:epochMismatch`).
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TrustTaskRefusal {
+    /// The error code.
+    pub code: String,
+    /// Whether the same request may be sent again.
+    pub retryable: bool,
+    /// Human-readable explanation, for logs and operators.
+    pub message: Option<String>,
+    /// RFC 3339 instant before which a retry should not be sent.
+    pub retry_after: Option<String>,
+    /// The document the error reports on.
+    pub in_response_to: Option<RefusedDocument>,
+    /// Structured data whose shape the code's specification declares, e.g.
+    /// `{"currentEpoch": 3}` for an `…:epochMismatch`.
+    pub details: Option<serde_json::Value>,
+    /// The error document's own `id`.
+    pub id: String,
+    /// The error document's `threadId`: the request's.
+    pub thread_id: Option<String>,
+}
+
+/// `inResponseTo` of a `trust-task-error`: which document was refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RefusedDocument {
+    /// The refused document's `type`.
+    pub type_uri: String,
+    /// The refused document's `id` (omitted under `identityMismatch`).
+    pub id: Option<String>,
+}
+
+impl TrustTaskRefusal {
+    /// Read a `trust-task-error` document. `None` when `doc` is not one (its
+    /// `type` is not a `trust-task-error` Type URI), and when it is one
+    /// without the `code` and `retryable` the specification requires.
+    ///
+    /// `code` and `message` are kept to [`MAX_REFUSAL_CODE_LEN`] and
+    /// [`MAX_REFUSAL_MESSAGE_LEN`] bytes.
+    pub fn from_document(doc: &serde_json::Value) -> Option<Self> {
+        if !is_trust_task_error(doc) {
+            return None;
+        }
+        let payload = doc.get("payload")?;
+        let text =
+            |v: &serde_json::Value, k: &str| v.get(k).and_then(|s| s.as_str()).map(str::to_string);
+        Some(Self {
+            code: truncated(text(payload, "code")?, MAX_REFUSAL_CODE_LEN),
+            retryable: payload.get("retryable")?.as_bool()?,
+            message: text(payload, "message").map(|m| truncated(m, MAX_REFUSAL_MESSAGE_LEN)),
+            retry_after: text(payload, "retryAfter"),
+            in_response_to: payload.get("inResponseTo").and_then(|r| {
+                Some(RefusedDocument {
+                    type_uri: text(r, "typeUri")?,
+                    id: text(r, "id"),
+                })
+            }),
+            details: payload.get("details").filter(|d| d.is_object()).cloned(),
+            id: text(doc, "id").unwrap_or_default(),
+            thread_id: text(doc, "threadId"),
+        })
+    }
+
+    /// Whether this refusal answers the request whose `id` is `request_id`
+    /// (and whose own `threadId`, if it set one, is `request_thread`): the
+    /// error's `threadId` is the request's thread, or its `inResponseTo.id`
+    /// is the request's `id`. A refusal of any other request is not an
+    /// answer to this one.
+    pub fn answers(&self, request_id: &str, request_thread: Option<&str>) -> bool {
+        if request_id.is_empty() {
+            return false;
+        }
+        let thread = self.thread_id.as_deref();
+        thread == Some(request_id)
+            || (request_thread.is_some() && thread == request_thread)
+            || self.in_response_to.as_ref().and_then(|r| r.id.as_deref()) == Some(request_id)
+    }
+
+    /// The code the mediator gives the same refusal in a problem report,
+    /// when it translated it into a standard code here (`details.mediatorCode`);
+    /// otherwise the code itself, which is then the same in both forms.
+    pub fn mediator_code(&self) -> &str {
+        self.details
+            .as_ref()
+            .and_then(|d| d.get(MEDIATOR_CODE_DETAIL))
+            .and_then(|c| c.as_str())
+            .unwrap_or(&self.code)
+    }
+
+    /// For an `…:epochMismatch`: the member DID's epoch in force
+    /// (`details.currentEpoch`).
+    pub fn current_epoch(&self) -> Option<u64> {
+        if !self.code.ends_with(":epochMismatch") {
+            return None;
+        }
+        self.details.as_ref()?.get("currentEpoch")?.as_u64()
+    }
+}
+
+/// `code` and `message` come from the peer, so control characters (and the
+/// Unicode line separators and direction marks) in them are shown escaped:
+/// a refusal always prints as one line of text.
+impl std::fmt::Display for TrustTaskRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "code: ({})", Escaped(&self.code))?;
+        if let Some(m) = &self.message {
+            write!(f, ", message: ({})", Escaped(m))?;
+        }
+        write!(f, ", retryable: {}", self.retryable)
+    }
+}
+
+/// Peer-supplied text for display, with control characters, line and
+/// paragraph separators and bidirectional formatting marks escaped. Other
+/// text, non-ASCII included, is shown as is.
+struct Escaped<'a>(&'a str);
+
+impl std::fmt::Display for Escaped<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use std::fmt::Write;
+        for c in self.0.chars() {
+            if c.is_control() {
+                write!(f, "{}", c.escape_debug())?;
+            } else if matches!(
+                c,
+                '\u{2028}' | '\u{2029}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}'
+                    | '\u{2066}'..='\u{2069}'
+            ) {
+                write!(f, "{}", c.escape_unicode())?;
+            } else {
+                f.write_char(c)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `s` cut to at most `max` bytes, at a character boundary.
+fn truncated(mut s: String, max: usize) -> String {
+    if s.len() > max {
+        let mut end = max;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
+    }
+    s
+}
+
+/// Whether `doc` is a `trust-task-error` document, by its `type`: exactly
+/// `https://trusttasks.org/spec/trust-task-error/<MAJOR.MINOR>` (Trust Tasks
+/// SPEC §8.1), with no fragment and nothing after the version.
+pub(crate) fn is_trust_task_error(doc: &serde_json::Value) -> bool {
+    doc.get("type")
+        .and_then(|t| t.as_str())
+        .and_then(|t| t.strip_prefix(TRUST_TASK_ERROR_TYPE_PREFIX))
+        .and_then(|v| v.split_once('.'))
+        .is_some_and(|(major, minor)| is_version_number(major) && is_version_number(minor))
+}
+
+/// A `MAJOR` or `MINOR` component: ASCII digits, nothing else.
+fn is_version_number(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// A problem report's code without its sorter and scope (`e.p.`), which is
+/// the descriptor the mediator chose: `messaging/mux/revoke-all:epochMismatch`
+/// from `e.p.messaging/mux/revoke-all:epochMismatch`.
+fn problem_descriptor(code: &str) -> &str {
+    let mut parts = code.splitn(3, '.');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some("e" | "w"), Some(_), Some(descriptor)) => descriptor,
+        _ => code,
+    }
+}
+
+/// The number after "current epoch is" in an `epochMismatch` comment, which
+/// is where a mediator that answers with problem reports puts it.
+fn epoch_in_comment(comment: &str) -> Option<u64> {
+    let (_, rest) = comment.split_once("current epoch is ")?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
 }
 
 impl ATMError {
+    /// The `trust-task-error` the mediator refused a Trust Task with, when
+    /// this failure is one.
+    pub fn trust_task_refusal(&self) -> Option<&TrustTaskRefusal> {
+        match self {
+            ATMError::TrustTaskError(r) => Some(r),
+            _ => None,
+        }
+    }
+
+    /// The code a refusal by the mediator carries, whichever form it came
+    /// in: a `trust-task-error`'s `code`, or a problem report's code without
+    /// its `e.p.` prefix. `None` for any other failure.
+    ///
+    /// A code a Trust Task specification declares
+    /// (`messaging/mux/revoke-all:epochMismatch`) is the same in both forms.
+    /// A refusal outside the specifications' vocabulary is a standard code
+    /// in a `trust-task-error` (`permissionDenied`) and the mediator's own in
+    /// a problem report (`authorization.admin_required`); to keep matching
+    /// the latter, use [`mediator_code`](Self::mediator_code).
+    pub fn refusal_code(&self) -> Option<&str> {
+        match self {
+            ATMError::TrustTaskError(r) => Some(&r.code),
+            ATMError::ProblemReport(code, ..) => Some(problem_descriptor(code)),
+            _ => None,
+        }
+    }
+
+    /// The mediator's own code for a refusal, whichever form it came in: a
+    /// problem report's code without its `e.p.` prefix, or what a
+    /// `trust-task-error` names in `details.mediatorCode` when the mediator
+    /// translated it into a standard code (else its `code`). Code that
+    /// matched problem-report codes keeps working on this once the mediator
+    /// answers with `trust-task-error` documents.
+    pub fn mediator_code(&self) -> Option<&str> {
+        match self {
+            ATMError::TrustTaskError(r) => Some(r.mediator_code()),
+            ATMError::ProblemReport(code, ..) => Some(problem_descriptor(code)),
+            _ => None,
+        }
+    }
+
+    /// For an `…:epochMismatch` refusal (`messaging/mux/revoke-all`,
+    /// `messaging/mux/admin-revoke-all`): the member DID's epoch in force,
+    /// to send instead. Read from `details.currentEpoch` of a
+    /// `trust-task-error`; from an older mediator's problem report, from its
+    /// comment.
+    pub fn current_epoch(&self) -> Option<u64> {
+        match self {
+            ATMError::TrustTaskError(r) => r.current_epoch(),
+            ATMError::ProblemReport(code, comment, _) if code.ends_with(":epochMismatch") => {
+                epoch_in_comment(comment)
+            }
+            _ => None,
+        }
+    }
+
     /// The HTTP status error, when this failure is one — including an
     /// authentication that failed on one ([`ATMError::DIDAuth`]).
     pub fn http_status(&self) -> Option<&HttpStatusError> {
@@ -282,6 +557,207 @@ impl From<ACLError> for ATMError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn problem(code: &str, comment: &str) -> ATMError {
+        ATMError::ProblemReport(code.into(), comment.into(), "NONE".into())
+    }
+
+    fn refusal(code: &str, details: Option<serde_json::Value>) -> ATMError {
+        let mut payload = serde_json::json!({ "code": code, "retryable": false });
+        if let Some(d) = details {
+            payload["details"] = d;
+        }
+        ATMError::TrustTaskError(Box::new(
+            TrustTaskRefusal::from_document(&serde_json::json!({
+                "id": "e1",
+                "type": "https://trusttasks.org/spec/trust-task-error/0.6",
+                "payload": payload,
+            }))
+            .expect("a trust-task-error"),
+        ))
+    }
+
+    #[test]
+    fn the_refusal_code_is_read_from_either_form() {
+        let code = "messaging/mux/admin-revoke-all:epochMismatch";
+        assert_eq!(
+            problem(&format!("e.p.{code}"), "").refusal_code(),
+            Some(code)
+        );
+        assert_eq!(refusal(code, None).refusal_code(), Some(code));
+        assert_eq!(ATMError::SDKError("x".into()).refusal_code(), None);
+    }
+
+    #[test]
+    fn the_mediator_code_survives_translation_to_a_standard_code() {
+        let legacy = problem("e.p.authorization.admin_required", "admin only");
+        let translated = refusal(
+            "permissionDenied",
+            Some(serde_json::json!({ "mediatorCode": "authorization.admin_required" })),
+        );
+        assert_eq!(legacy.mediator_code(), Some("authorization.admin_required"));
+        assert_eq!(
+            translated.mediator_code(),
+            Some("authorization.admin_required")
+        );
+        assert_eq!(translated.refusal_code(), Some("permissionDenied"));
+        // Untranslated: the code itself.
+        assert_eq!(
+            refusal("messaging/mux:notMuxConnection", None).mediator_code(),
+            Some("messaging/mux:notMuxConnection")
+        );
+    }
+
+    #[test]
+    fn the_current_epoch_comes_from_details_or_an_older_comment() {
+        let code = "messaging/mux/revoke-all:epochMismatch";
+        assert_eq!(
+            refusal(code, Some(serde_json::json!({ "currentEpoch": 7 }))).current_epoch(),
+            Some(7)
+        );
+        assert_eq!(
+            problem(
+                &format!("e.p.{code}"),
+                "statement voids epoch 9, the DID's current epoch is 7"
+            )
+            .current_epoch(),
+            Some(7)
+        );
+        // Only an epochMismatch carries one.
+        assert_eq!(
+            refusal(
+                "messaging/mux/revoke-all:contended",
+                Some(serde_json::json!({ "currentEpoch": 7 }))
+            )
+            .current_epoch(),
+            None
+        );
+        assert_eq!(refusal(code, None).current_epoch(), None);
+    }
+
+    fn error_document(code: &str, message: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": "e1",
+            "type": "https://trusttasks.org/spec/trust-task-error/0.6",
+            "threadId": "req-1",
+            "payload": {
+                "code": code,
+                "message": message,
+                "retryable": false,
+                "inResponseTo": { "typeUri": "https://trusttasks.org/spec/acl/get/0.1", "id": "req-1" }
+            },
+        })
+    }
+
+    #[test]
+    fn control_characters_in_a_refusal_are_shown_escaped() {
+        let r = TrustTaskRefusal::from_document(&error_document(
+            "permission\nDenied",
+            "line one\r\nINFO second line\u{1b}[31m\u{202e}txt\u{2028}end; café",
+        ))
+        .unwrap();
+        let shown = r.to_string();
+        assert!(!shown.chars().any(char::is_control), "{shown}");
+        assert!(!shown.contains('\u{202e}') && !shown.contains('\u{2028}'));
+        assert_eq!(
+            shown,
+            "code: (permission\\nDenied), message: (line one\\r\\nINFO second line\\u{1b}[31m\\u{202e}txt\\u{2028}end; café), retryable: false"
+        );
+        // The stored values are the peer's, unchanged.
+        assert_eq!(r.code, "permission\nDenied");
+        // And through ATMError's own Display.
+        let err = ATMError::TrustTaskError(Box::new(r));
+        assert!(!err.to_string().contains('\n'));
+    }
+
+    #[test]
+    fn a_long_code_and_message_are_cut_at_a_character_boundary() {
+        let code = "c".repeat(MAX_REFUSAL_CODE_LEN + 10);
+        // A two-byte character straddling the bound.
+        let message = format!(
+            "{}é{}",
+            "m".repeat(MAX_REFUSAL_MESSAGE_LEN - 1),
+            "x".repeat(50)
+        );
+        let r = TrustTaskRefusal::from_document(&error_document(&code, &message)).unwrap();
+        assert_eq!(r.code.len(), MAX_REFUSAL_CODE_LEN);
+        let m = r.message.unwrap();
+        assert_eq!(m.len(), MAX_REFUSAL_MESSAGE_LEN - 1);
+        assert!(m.chars().all(|c| c == 'm'));
+        // Short values are kept whole.
+        let r = TrustTaskRefusal::from_document(&error_document("expired", "é")).unwrap();
+        assert_eq!(
+            (r.code.as_str(), r.message.as_deref()),
+            ("expired", Some("é"))
+        );
+    }
+
+    #[test]
+    fn only_a_trust_task_error_type_uri_is_one() {
+        let with_type = |t: &str| serde_json::json!({ "type": t });
+        for t in [
+            "https://trusttasks.org/spec/trust-task-error/0.1",
+            "https://trusttasks.org/spec/trust-task-error/0.6",
+            "https://trusttasks.org/spec/trust-task-error/1.12",
+        ] {
+            assert!(is_trust_task_error(&with_type(t)), "{t}");
+        }
+        for t in [
+            "https://trusttasks.org/spec/trust-task-error/",
+            "https://trusttasks.org/spec/trust-task-error/0.6#response",
+            "https://trusttasks.org/spec/trust-task-error/0.6/extra",
+            "https://trusttasks.org/spec/trust-task-error/0.6.1",
+            "https://trusttasks.org/spec/trust-task-error/latest",
+            "https://trusttasks.org/spec/trust-task-error/0.",
+            "https://trusttasks.org/spec/trust-task-error-x/0.6",
+            "https://trusttasks.org/spec/acl/get/0.1#response",
+        ] {
+            assert!(!is_trust_task_error(&with_type(t)), "{t}");
+        }
+        assert!(!is_trust_task_error(&serde_json::json!({ "type": 1 })));
+    }
+
+    #[test]
+    fn a_refusal_answers_only_its_own_request() {
+        let r = TrustTaskRefusal::from_document(&error_document("expired", "")).unwrap();
+        assert!(r.answers("req-1", None));
+        assert!(!r.answers("req-2", None));
+
+        // By threadId alone (inResponseTo omitted).
+        let mut doc = error_document("expired", "");
+        doc["payload"]
+            .as_object_mut()
+            .unwrap()
+            .remove("inResponseTo");
+        let r = TrustTaskRefusal::from_document(&doc).unwrap();
+        assert!(r.answers("req-1", None));
+        assert!(!r.answers("req-2", None));
+
+        // By inResponseTo.id alone (threadId names the request's own thread).
+        let mut doc = error_document("expired", "");
+        doc["threadId"] = "thread-9".into();
+        let r = TrustTaskRefusal::from_document(&doc).unwrap();
+        assert!(r.answers("req-1", None));
+        assert!(r.answers("req-2", Some("thread-9")));
+        assert!(!r.answers("req-2", Some("thread-8")));
+
+        // Neither correlator: answers nothing.
+        let mut doc = error_document("expired", "");
+        doc.as_object_mut().unwrap().remove("threadId");
+        doc["payload"]
+            .as_object_mut()
+            .unwrap()
+            .remove("inResponseTo");
+        let r = TrustTaskRefusal::from_document(&doc).unwrap();
+        assert!(!r.answers("req-1", None));
+        assert!(!r.answers("", None));
+    }
+
+    #[test]
+    fn a_problem_code_without_a_sorter_is_kept_whole() {
+        assert_eq!(problem_descriptor("plain.code"), "plain.code");
+        assert_eq!(problem_descriptor("w.m.x.y"), "x.y");
+    }
 
     #[test]
     fn test_from_problem_report_works() {
