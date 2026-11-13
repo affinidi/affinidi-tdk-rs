@@ -14,7 +14,8 @@ over the BLS12-381 pairing-friendly curve.
 - **KeyGen**: Generate BBS key pairs (32-byte secret key, 96-byte public key)
 - **Sign/Verify**: Sign multiple messages, verify with public key
 - **ProofGen/ProofVerify**: Zero-knowledge selective disclosure proofs
-- **Two ciphersuites**: SHA-256 (XMD) and SHAKE-256 (XOF)
+- **Ciphersuite**: BLS12-381-SHA-256 (XMD). BLS12-381-SHAKE-256 is defined
+  but not implemented; using it returns `BbsError::Unsupported`
 - **Unlinkability**: Each proof is cryptographically independent
 - **Pure Rust**: Built on `bls12_381_plus` (no C/FFI dependencies)
 
@@ -32,7 +33,10 @@ Addresses ARF ZKP requirements:
 - **ZKP_01**: Unlinkable selective disclosure
 - **ZKP_02**: Verifier cannot see undisclosed attributes
 - **ZKP_03**: Cross-presentation unlinkability
-- **ZKP_06**: Holder binding via presentation header
+
+A proof is bound to the presentation header it was generated with (for
+example a verifier nonce); the verifier must check that the header is the one
+it expects. The presentation header alone does not bind a proof to a holder.
 
 ## Installation
 
