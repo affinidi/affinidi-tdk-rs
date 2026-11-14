@@ -714,6 +714,10 @@ impl TrustTasksOps<'_> {
     /// `did_hash = None` is the caller's own account; another needs admin
     /// rights, and a privileged account a rootAdmin. The mediator audits every
     /// real purge.
+    ///
+    /// To confirm a dry run without removing messages stored after it, use
+    /// [`queue_purge_with`](Self::queue_purge_with) and
+    /// [`QueuePurge::stored_before`].
     pub async fn queue_purge(
         &self,
         profile: &Arc<ATMProfile>,
@@ -723,22 +727,30 @@ impl TrustTasksOps<'_> {
         older_than_seconds: Option<u64>,
         dry_run: bool,
     ) -> Result<queue::purge::v0_1::Response, ATMError> {
-        let (profile_did, mediator_did) = profile.dids()?;
-        let vid = |v: String| {
-            queue::purge::v0_1::Vid::from_str(&v)
-                .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))
+        let purge = QueuePurge {
+            did_hash,
+            peer,
+            older_than_seconds,
+            dry_run,
+            ..QueuePurge::new(queue)
         };
-        let did = did_hash.map(vid).transpose()?;
-        let peer = peer.map(vid).transpose()?;
+        self.queue_purge_with(profile, &purge).await
+    }
 
-        let p: queue::purge::v0_1::Payload = payload(
-            queue::purge::v0_1::Payload::builder()
-                .did(did)
-                .queue(queue)
-                .peer(peer)
-                .older_than_seconds(older_than_seconds)
-                .dry_run(Some(dry_run)),
-        )?;
+    /// Send the `messaging/queue/purge` Trust Task `purge` describes.
+    ///
+    /// The response's `selected_at` is the instant the mediator took the
+    /// selection, when it reports one. Send a dry run's `selected_at` back as
+    /// [`QueuePurge::stored_before`] on the confirming purge so it removes
+    /// nothing stored after the preview the operator confirmed. A mediator
+    /// that predates `storedBefore` refuses a request carrying it.
+    pub async fn queue_purge_with(
+        &self,
+        profile: &Arc<ATMProfile>,
+        purge: &QueuePurge,
+    ) -> Result<queue::purge::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let p = purge.payload()?;
         let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
         task.recipient = Some(mediator_did.to_string());
@@ -1541,6 +1553,89 @@ impl MonitorSubscription {
                         .and_then(|n| std::num::NonZeroU64::new(u64::from(n))),
                 )
                 .subscription_id(renew),
+        )
+    }
+}
+
+/// What [`TrustTasksOps::queue_purge_with`] asks for
+/// (`messaging/queue/purge` 0.1): which messages of one account queue to
+/// remove, or with `dry_run` only count.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct QueuePurge {
+    /// The account whose queue to purge; `None` is the requester's own.
+    pub did_hash: Option<String>,
+    /// Which of the account's queues.
+    pub queue: queue::purge::v0_1::Queue,
+    /// Only messages exchanged with this counterparty.
+    pub peer: Option<String>,
+    /// Only messages queued at least this many seconds.
+    pub older_than_seconds: Option<u64>,
+    /// Only messages stored at or before this instant.
+    pub stored_before: Option<chrono::DateTime<chrono::Utc>>,
+    /// Count what would be purged and remove nothing.
+    pub dry_run: bool,
+}
+
+impl QueuePurge {
+    /// Every message in `queue` of the requester's own account, removed.
+    pub fn new(queue: queue::purge::v0_1::Queue) -> Self {
+        Self {
+            did_hash: None,
+            queue,
+            peer: None,
+            older_than_seconds: None,
+            stored_before: None,
+            dry_run: false,
+        }
+    }
+
+    /// Purge the queue of the account `did_hash` instead of the requester's.
+    pub fn did_hash(mut self, did_hash: impl Into<String>) -> Self {
+        self.did_hash = Some(did_hash.into());
+        self
+    }
+
+    /// Only messages exchanged with `peer`.
+    pub fn peer(mut self, peer: impl Into<String>) -> Self {
+        self.peer = Some(peer.into());
+        self
+    }
+
+    /// Only messages queued at least `seconds`.
+    pub fn older_than_seconds(mut self, seconds: u64) -> Self {
+        self.older_than_seconds = Some(seconds);
+        self
+    }
+
+    /// Only messages stored at or before `instant` — a dry run's
+    /// `selected_at` when confirming it.
+    pub fn stored_before(mut self, instant: chrono::DateTime<chrono::Utc>) -> Self {
+        self.stored_before = Some(instant);
+        self
+    }
+
+    /// Count what would be purged and remove nothing.
+    pub fn dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
+        self
+    }
+
+    pub(crate) fn payload(&self) -> Result<queue::purge::v0_1::Payload, ATMError> {
+        let vid = |v: &str| {
+            queue::purge::v0_1::Vid::from_str(v)
+                .map_err(|e| ATMError::MsgSendError(format!("invalid account identifier: {e}")))
+        };
+        let did = self.did_hash.as_deref().map(vid).transpose()?;
+        let peer = self.peer.as_deref().map(vid).transpose()?;
+        payload(
+            queue::purge::v0_1::Payload::builder()
+                .did(did)
+                .queue(self.queue)
+                .peer(peer)
+                .older_than_seconds(self.older_than_seconds)
+                .stored_before(self.stored_before)
+                .dry_run(Some(self.dry_run)),
         )
     }
 }
@@ -2997,6 +3092,63 @@ mod tests {
         .expect("0.2 response");
         assert_eq!(response.traffic, Some(false));
         assert!(response.membership.is_some());
+    }
+
+    #[test]
+    fn queue_purges_match_the_spec() {
+        let plain = QueuePurge::new(queue::purge::v0_1::Queue::Receive);
+        let plain = serde_json::to_value(plain.payload().unwrap()).unwrap();
+        assert_eq!(plain, json!({ "queue": "receive", "dryRun": false }));
+
+        let selected_at = chrono::DateTime::parse_from_rfc3339("2026-11-14T03:04:05.250Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let confirming = QueuePurge::new(queue::purge::v0_1::Queue::Send)
+            .did_hash("account")
+            .peer("did:example:peer")
+            .older_than_seconds(60)
+            .stored_before(selected_at);
+        let confirming = serde_json::to_value(confirming.payload().unwrap()).unwrap();
+        assert_eq!(
+            confirming,
+            json!({ "did": "account", "queue": "send", "peer": "did:example:peer",
+                    "olderThanSeconds": 60, "storedBefore": "2026-11-14T03:04:05.250Z",
+                    "dryRun": false })
+        );
+        let parsed: queue::purge::v0_1::Payload =
+            serde_json::from_value(confirming).expect("spec payload");
+        assert_eq!(parsed.stored_before, Some(selected_at));
+
+        let refused = QueuePurge::new(queue::purge::v0_1::Queue::Receive).peer("");
+        assert!(refused.payload().is_err());
+    }
+
+    #[test]
+    fn a_queue_purge_response_carries_selected_at() {
+        let response: queue::purge::v0_1::Response = serde_json::from_value(json!({
+            "matched": 3,
+            "matchedBytes": 1024,
+            "purged": 0,
+            "dryRun": true,
+            "selectedAt": "2026-11-14T03:04:05.250Z",
+        }))
+        .expect("response with selectedAt");
+        let selected_at = response.selected_at.expect("selectedAt");
+        assert_eq!(
+            selected_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "2026-11-14T03:04:05.250Z"
+        );
+        let confirming = QueuePurge::new(queue::purge::v0_1::Queue::Receive)
+            .stored_before(selected_at)
+            .payload()
+            .unwrap();
+        assert_eq!(confirming.stored_before, Some(selected_at));
+
+        let without: queue::purge::v0_1::Response = serde_json::from_value(json!({
+            "matched": 0, "purged": 0, "dryRun": false,
+        }))
+        .expect("response without selectedAt");
+        assert!(without.selected_at.is_none());
     }
 
     #[tokio::test]
