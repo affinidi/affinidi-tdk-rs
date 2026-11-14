@@ -33,7 +33,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use crate::tasks::messaging::{access_list, account, acl, message, monitor, ping, queue, stats};
+use crate::tasks::messaging::{
+    access_list, account, acl, message, monitor, ping, queue, stats, wake,
+};
 use crate::tasks::{audit, config};
 use affinidi_did_common::DocumentExt;
 use affinidi_messaging_didcomm::message::Message;
@@ -1016,6 +1018,124 @@ impl TrustTasksOps<'_> {
         Ok(response.payload)
     }
 
+    /// Send `messaging/wake/set` to the profile's own mediator: give it the
+    /// opaque wake handle the account's push gateway issued at `push/register`,
+    /// or — with `None` — take it back.
+    ///
+    /// With a handle, the mediator can ring the device when a sender that has
+    /// mail queued for it asks ([`wake_request`](Self::wake_request)). It never
+    /// learns the push token, and it rings only if the handle's controller has
+    /// put it on the gateway's allowlist. Send it again whenever the gateway
+    /// issues a new handle, and with `None` on sign-out.
+    ///
+    /// `wake_capable` in the response says whether the mediator now holds a
+    /// handle and will act on it. A mediator that predates the task refuses it
+    /// as unsupported, which surfaces as an error.
+    pub async fn wake_set(
+        &self,
+        profile: &Arc<ATMProfile>,
+        wake_handle: Option<wake::set::v0_1::WakeHandle>,
+    ) -> Result<wake::set::v0_1::Response, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
+        let p: wake::set::v0_1::Payload =
+            payload(wake::set::v0_1::Payload::builder().wake_handle(wake_handle))?;
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+
+        let response: TrustTask<wake::set::v0_1::Response> = self.exchange(profile, task).await?;
+        Ok(response.payload)
+    }
+
+    /// Send `messaging/wake/request` to `mediator_did`, the mediator that holds
+    /// `addressee`'s queue, asking it to ring the addressee's device for the
+    /// messages `msg_ids` this profile just queued for it.
+    ///
+    /// `msg_ids` (1 to 8, distinct) name each message by the identifier the
+    /// addressee's mediator stores it under — for a DIDComm send, the hop id the
+    /// delivery layer records (`OutboxEntry::hop_id`). `urgency` is passed to
+    /// the gateway as a one-bit hint and must not be chosen by task type
+    /// (VTI-TRN-071).
+    ///
+    /// **Fire-and-forget** (VTI-TRN-074): the request is signed (a proof with
+    /// `proofPurpose: authentication` is REQUIRED), sent over DIDComm —
+    /// forwarded through the profile's own mediator when the addressee's is
+    /// another one — and not waited on. `Ok` means it was handed to the
+    /// profile's mediator, nothing more. The mediator answers every request
+    /// with the same empty `messaging/wake/request/0.1#response`, which arrives
+    /// as an ordinary inbound message; it says nothing and should be dropped.
+    ///
+    /// Send at most one request per queued message, and never again while the
+    /// request it carries is pending (VTI-TRN-072). A mediator that does not
+    /// serve the task does not wake; the addressee collects on its next
+    /// connection, which is not an error.
+    pub async fn wake_request(
+        &self,
+        profile: &Arc<ATMProfile>,
+        mediator_did: &str,
+        addressee: &str,
+        msg_ids: &[String],
+        urgency: Option<wake::request::v0_1::PayloadUrgency>,
+    ) -> Result<(), ATMError> {
+        let (profile_did, own_mediator) = profile.dids()?;
+        let ids = wake_msg_ids(msg_ids)?;
+        let addressee = wake::request::v0_1::PayloadAddressee::from_str(addressee)
+            .map_err(|e| ATMError::MsgSendError(format!("invalid addressee: {e}")))?;
+        let p: wake::request::v0_1::Payload = payload(
+            wake::request::v0_1::Payload::builder()
+                .addressee(addressee)
+                .msg_ids(ids)
+                .urgency(urgency),
+        )?;
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(profile_did.to_string());
+        task.recipient = Some(mediator_did.to_string());
+        task.issued_at = Some(chrono::Utc::now());
+
+        let body = serde_json::to_value(&task)
+            .map_err(|e| ATMError::MsgSendError(format!("couldn't serialise Trust Task: {e}")))?;
+        let body = self.sign_for_authentication(profile_did, body).await?;
+
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let msg = Message::build(new_id(), ENVELOPE_TYPE.to_string(), body)
+            .to(mediator_did.into())
+            .from(profile_did.into())
+            .created_time(now)
+            .expires_time(now + WAKE_REQUEST_TTL_SECS)
+            .finalize();
+        let msg_id = msg.id.clone();
+        let (packed, _) = self
+            .atm
+            .inner
+            .pack_encrypted(&msg, mediator_did, Some(profile_did))
+            .await
+            .map_err(|e| ATMError::MsgSendError(format!("couldn't pack Trust Task: {e}")))?;
+
+        if affinidi_did_common::scid::same_reference(mediator_did, own_mediator) {
+            self.atm
+                .send_message(profile, &packed, &msg_id, false, false)
+                .await?;
+        } else {
+            self.atm
+                .forward_and_send_message(
+                    profile,
+                    false,
+                    &packed,
+                    Some(&msg_id),
+                    own_mediator,
+                    mediator_did,
+                    None,
+                    None,
+                    false,
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Exchange a task the SDK speaks at 0.2 (see
     /// [`trust_task_versions`](super::trust_task_versions)): as 0.2 to a
     /// mediator that serves it, otherwise as 0.1 with the reply converted to
@@ -1389,7 +1509,7 @@ impl TrustTasksOps<'_> {
     pub(crate) async fn sign(&self, did: &str, mut doc: Value) -> Result<Value, ATMError> {
         // Before signing, so the proof covers it like any other member.
         ask_for_error_documents(&mut doc);
-        let Some(secret) = self.signing_secret(did).await else {
+        let Some(secret) = self.signing_secret(did, false).await else {
             warn!(
                 did,
                 "no Ed25519 signing key for this profile; sending the Trust Task unsigned — \
@@ -1402,11 +1522,31 @@ impl TrustTasksOps<'_> {
             .map_err(|e| ATMError::MsgSendError(format!("couldn't sign Trust Task: {e}")))
     }
 
+    /// Attach a Data Integrity proof whose `proofPurpose` is `authentication`,
+    /// made with the profile's Ed25519 authentication key, for a task whose
+    /// specification requires one (`messaging/wake/request`). Unlike
+    /// [`Self::sign`] there is no unsigned fallback: a document that must
+    /// carry a proof is not sent without one.
+    async fn sign_for_authentication(&self, did: &str, doc: Value) -> Result<Value, ATMError> {
+        let secret = self.signing_secret(did, true).await.ok_or_else(|| {
+            ATMError::MsgSendError(format!(
+                "no Ed25519 authentication key for {did}; this Trust Task requires a proof"
+            ))
+        })?;
+        sign_trust_task(
+            &doc,
+            &secret,
+            SignOptions::new().with_proof_purpose("authentication"),
+        )
+        .await
+        .map_err(|e| ATMError::MsgSendError(format!("couldn't sign Trust Task: {e}")))
+    }
+
     /// The profile's Ed25519 secret to sign with: an `assertionMethod` key if the
     /// DID document declares one (the proof purpose the signature asserts), else
     /// an `authentication` key — a `did:peer:2` profile typically has only the
-    /// latter.
-    async fn signing_secret(&self, did: &str) -> Option<Secret> {
+    /// latter. With `authentication`, only an `authentication` key.
+    async fn signing_secret(&self, did: &str, authentication_only: bool) -> Option<Secret> {
         let doc = match self.atm.inner.tdk_common.did_resolver().resolve(did).await {
             Ok(resolved) => resolved.doc,
             Err(e) => {
@@ -1415,7 +1555,11 @@ impl TrustTasksOps<'_> {
             }
         };
         let resolver = self.atm.inner.tdk_common.secrets_resolver();
-        let assertion = doc.find_assertion_method(None);
+        let assertion = if authentication_only {
+            Vec::new()
+        } else {
+            doc.find_assertion_method(None)
+        };
         let authentication = doc.find_authentication(None);
         for kid in assertion.into_iter().chain(authentication) {
             if let Some(secret) = resolver.get_secret(kid).await
@@ -1665,6 +1809,37 @@ fn monitor_event_to_v0_2(doc: &mut Value) {
 fn value_task(doc: Value) -> Result<TrustTask<Value>, ATMError> {
     serde_json::from_value(doc)
         .map_err(|e| ATMError::MsgSendError(format!("couldn't serialise Trust Task: {e}")))
+}
+
+/// How long a `messaging/wake/request` stays deliverable. The ids it names are
+/// fresh for ten minutes at the mediator, so a request older than that can
+/// ring nothing.
+const WAKE_REQUEST_TTL_SECS: u64 = 600;
+
+/// The most messages one `messaging/wake/request` may name.
+const WAKE_MAX_MSG_IDS: usize = 8;
+
+/// `msg_ids` as the request's items: 1 to 8 of them, distinct.
+fn wake_msg_ids(
+    msg_ids: &[String],
+) -> Result<Vec<wake::request::v0_1::PayloadMsgIdsItem>, ATMError> {
+    if msg_ids.is_empty() || msg_ids.len() > WAKE_MAX_MSG_IDS {
+        return Err(ATMError::MsgSendError(format!(
+            "a wake request names 1 to {WAKE_MAX_MSG_IDS} messages, not {}",
+            msg_ids.len()
+        )));
+    }
+    let distinct: std::collections::HashSet<&str> = msg_ids.iter().map(String::as_str).collect();
+    if distinct.len() != msg_ids.len() {
+        return Err(ATMError::MsgSendError(
+            "a wake request names each message once".to_string(),
+        ));
+    }
+    msg_ids
+        .iter()
+        .map(|id| wake::request::v0_1::PayloadMsgIdsItem::from_str(id))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| ATMError::MsgSendError(format!("invalid message id: {e}")))
 }
 
 pub(crate) fn new_id() -> String {
@@ -3050,5 +3225,84 @@ mod tests {
         let typed: TrustTask<ping::v0_2::Payload> = serde_json::from_value(signed).unwrap();
 
         assert!(Verifier::for_did_key().verify(&typed).await.is_err());
+    }
+
+    /// A wake request names 1 to 8 distinct messages (the schema's
+    /// `minItems`, `maxItems`, `uniqueItems`), which the generated builder
+    /// does not check.
+    #[test]
+    fn a_wake_request_names_one_to_eight_distinct_messages() {
+        let ids = |n: usize| (0..n).map(|i| format!("{i:064x}")).collect::<Vec<_>>();
+        assert!(wake_msg_ids(&[]).is_err());
+        assert_eq!(wake_msg_ids(&ids(1)).unwrap().len(), 1);
+        assert_eq!(wake_msg_ids(&ids(8)).unwrap().len(), 8);
+        assert!(wake_msg_ids(&ids(9)).is_err());
+        assert!(wake_msg_ids(&["a".to_string(), "a".to_string()]).is_err());
+    }
+
+    /// The request carries the addressee and message ids and nothing else —
+    /// no task type, reason or content (VTI-TRN-071) — and its proof, made
+    /// for `authentication`, verifies on the typed document.
+    #[tokio::test]
+    async fn a_wake_request_is_contentless_and_signed_for_authentication() {
+        let (did, secret) = did_key_secret();
+        let p: wake::request::v0_1::Payload = payload(
+            wake::request::v0_1::Payload::builder()
+                .addressee(
+                    wake::request::v0_1::PayloadAddressee::from_str("did:example:jordan").unwrap(),
+                )
+                .msg_ids(wake_msg_ids(&["5e3f".to_string()]).unwrap())
+                .urgency(Some(wake::request::v0_1::PayloadUrgency::Interactive)),
+        )
+        .unwrap();
+        let mut task = TrustTask::for_payload(new_id(), p);
+        task.issuer = Some(did.clone());
+        task.recipient = Some("did:web:mediator.example".into());
+        task.issued_at = Some(chrono::Utc::now());
+
+        let document = serde_json::to_value(&task).unwrap();
+        assert_eq!(
+            document["payload"],
+            json!({
+                "addressee": "did:example:jordan",
+                "msgIds": ["5e3f"],
+                "urgency": "interactive",
+            })
+        );
+
+        let signed = sign_trust_task(
+            &document,
+            &secret,
+            SignOptions::new().with_proof_purpose("authentication"),
+        )
+        .await
+        .expect("sign");
+        assert_eq!(signed["proof"]["proofPurpose"], "authentication");
+        let typed: TrustTask<wake::request::v0_1::Payload> =
+            serde_json::from_value(signed).expect("signed document parses as typed");
+        Verifier::for_did_key()
+            .verify(&typed)
+            .await
+            .expect("stock verifier accepts the proof");
+    }
+
+    /// No handle is the restrictive reading: the request clears it.
+    #[test]
+    fn a_wake_set_without_a_handle_clears_it() {
+        let cleared: wake::set::v0_1::Payload =
+            payload(wake::set::v0_1::Payload::builder().wake_handle(None)).unwrap();
+        assert_eq!(serde_json::to_value(&cleared).unwrap(), json!({}));
+
+        let handle: wake::set::v0_1::WakeHandle = serde_json::from_value(json!({
+            "gateway": "did:web:push.wallet.example",
+            "handle": "wh_7Q2kR9vXb3LmT0pN",
+        }))
+        .expect("a WakeHandle");
+        let set: wake::set::v0_1::Payload =
+            payload(wake::set::v0_1::Payload::builder().wake_handle(Some(handle))).unwrap();
+        assert_eq!(
+            serde_json::to_value(&set).unwrap()["wakeHandle"]["handle"],
+            "wh_7Q2kR9vXb3LmT0pN"
+        );
     }
 }

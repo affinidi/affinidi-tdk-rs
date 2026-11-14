@@ -22,9 +22,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use affinidi_messaging_core::{MessageTransport, OutboxStatus};
+use affinidi_messaging_core::{DeliveryScope, MessageTransport, OutboxStatus};
 
-use crate::outbox::{OutboxEntry, OutboxError, OutboxState, OutboxStore};
+use crate::outbox::{OutboxEntry, OutboxError, OutboxState, OutboxStore, UnconfirmedReason};
+use crate::reach::ReceiptReach;
 
 /// What one confirmation sweep settled.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -39,6 +40,12 @@ pub struct ConfirmReport {
     /// Expired `Sent` entries **re-sent over an alternate binding** and re-armed
     /// with a fresh window (a dead mediator ≠ a dead peer); still watched.
     pub rebound: usize,
+    /// Expired relayed entries settled `Unconfirmed` with
+    /// [`UnconfirmedReason::NoEvidencePath`]: no class of evidence was available
+    /// on the path, so they were recorded *unconfirmable* and not escalated
+    /// (VTI-TRN-042, VTI-TRN-064). Not a failure. Also counted in
+    /// [`unconfirmed`](Self::unconfirmed).
+    pub unconfirmable: usize,
 }
 
 /// How an expired, still-unconfirmed `Sent` entry is escalated (§5a) — the
@@ -58,6 +65,10 @@ pub enum Escalation {
         /// The alternate hop's id, for outbox-drain correlation (`None` if the
         /// alternate binding returns no id).
         hop_id: Option<String>,
+        /// Whether the alternate binding's mediator holds the message for the
+        /// recipient ([`DeliveryScope`]); `Unknown` if the escalator cannot
+        /// tell, which is polled as before.
+        scope: DeliveryScope,
     },
     /// No alternate binding is possible (a dead mediator with no fallback) → the
     /// delivery-critical send **failed**; surface it. Distinct from a silent
@@ -165,32 +176,79 @@ pub async fn sweep_confirmations(
 }
 
 /// One confirmation sweep that **escalates** each expired `Sent` entry through
-/// `escalator` (§5a) rather than always settling `Unconfirmed`: the window
-/// passing is never a silent success.
+/// `escalator` (§5a) rather than always settling `Unconfirmed`, knowing no
+/// recipient to send receipts.
 ///
-/// Per expired entry, the [`Escalation`] outcome is applied:
-/// - [`Escalation::Rebound`] → re-armed with the fresh window + hop, still `Sent`
-///   (the escalator already re-sent over the alternate binding), the earlier
-///   outbox observation reset so a later drain is unambiguous;
-/// - [`Escalation::Failed`] → `Failed` (surface it);
-/// - [`Escalation::Unconfirmed`] → `Unconfirmed`.
+/// [`sweep_confirmations_with_reach`] with an empty [`ReceiptReach`]: every
+/// expired [`DeliveryScope::Relayed`] entry is recorded unconfirmable without
+/// consulting `escalator`. A service that runs a [`MessagingService`] passes
+/// its [`receipt_reach`] to [`sweep_confirmations_with_reach`] instead, so a
+/// recipient known to send receipts is escalated.
+///
+/// [`MessagingService`]: crate::MessagingService
+/// [`receipt_reach`]: crate::MessagingService::receipt_reach
 pub async fn sweep_confirmations_with(
     store: &dyn OutboxStore,
     now_ms: u64,
     escalator: &dyn ExpiryEscalator,
+) -> Result<ConfirmReport, OutboxError> {
+    sweep_confirmations_with_reach(store, now_ms, escalator, &ReceiptReach::new()).await
+}
+
+/// One confirmation sweep that **escalates** each expired `Sent` entry through
+/// `escalator` (§5a) rather than always settling `Unconfirmed`: the window
+/// passing is never a silent success.
+///
+/// An expired [`DeliveryScope::Relayed`] entry whose recipient `reach` does not
+/// know to send receipts had no evidence path at all: its sender's mediator
+/// relayed it away and cannot answer, and no receipt was coming. It settles
+/// `Unconfirmed` with [`UnconfirmedReason::NoEvidencePath`], logged at `info`,
+/// and `escalator` is not asked — re-sending over another binding would hand
+/// the recipient a second copy of a message it may have had for an hour
+/// (VTI-TRN-042, amended). A relayed entry to a recipient known to send
+/// receipts is escalated like any other: for it, silence means something.
+///
+/// Every other expired entry takes the [`Escalation`] outcome:
+/// - [`Escalation::Rebound`] → re-armed with the fresh window, hop and scope,
+///   still `Sent` (the escalator already re-sent over the alternate binding),
+///   the earlier outbox observation reset so a later drain is unambiguous;
+/// - [`Escalation::Failed`] → `Failed` (surface it);
+/// - [`Escalation::Unconfirmed`] → `Unconfirmed`, with
+///   [`UnconfirmedReason::WindowPassed`].
+pub async fn sweep_confirmations_with_reach(
+    store: &dyn OutboxStore,
+    now_ms: u64,
+    escalator: &dyn ExpiryEscalator,
+    reach: &ReceiptReach,
 ) -> Result<ConfirmReport, OutboxError> {
     let mut report = ConfirmReport::default();
     for mut entry in store.awaiting_confirmation().await? {
         if now_ms < entry.deliver_by_ms {
             continue;
         }
+        if entry.scope == DeliveryScope::Relayed && !reach.sends_receipts(&entry.dest_did, now_ms) {
+            tracing::info!(
+                idempotency_key = %entry.idempotency_key,
+                dest = %entry.dest_did,
+                "delivery unconfirmable: relayed to the recipient's own mediator, and the \
+                 recipient is not known to send receipts; not escalated"
+            );
+            entry.state = OutboxState::Unconfirmed;
+            entry.unconfirmed_reason = Some(UnconfirmedReason::NoEvidencePath);
+            store.put(entry).await?;
+            report.unconfirmed += 1;
+            report.unconfirmable += 1;
+            continue;
+        }
         match escalator.escalate(&entry).await {
             Escalation::Rebound {
                 deliver_by_ms,
                 hop_id,
+                scope,
             } => {
                 entry.deliver_by_ms = deliver_by_ms;
                 entry.hop_id = hop_id;
+                entry.scope = scope;
                 entry.outbox_observed = false;
                 // Stays Sent: the escalator re-sent over the alternate binding
                 // and it hop-accepted; we keep watching for evidence.
@@ -204,6 +262,7 @@ pub async fn sweep_confirmations_with(
             }
             Escalation::Unconfirmed => {
                 entry.state = OutboxState::Unconfirmed;
+                entry.unconfirmed_reason = Some(UnconfirmedReason::WindowPassed);
                 store.put(entry).await?;
                 report.unconfirmed += 1;
             }
@@ -228,11 +287,32 @@ pub async fn confirmation_loop_with(
     interval: Duration,
     escalator: Arc<dyn ExpiryEscalator>,
 ) {
+    confirmation_loop_with_reach(store, interval, escalator, Arc::new(ReceiptReach::new())).await
+}
+
+/// [`confirmation_loop_with`], escalating a relayed entry only when `reach`
+/// knows its recipient to send receipts (see
+/// [`sweep_confirmations_with_reach`]). Pass the
+/// [`MessagingService::receipt_reach`](crate::MessagingService::receipt_reach)
+/// of the service whose dispatcher sees the receipts.
+pub async fn confirmation_loop_with_reach(
+    store: Arc<dyn OutboxStore>,
+    interval: Duration,
+    escalator: Arc<dyn ExpiryEscalator>,
+    reach: Arc<ReceiptReach>,
+) {
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
-        match sweep_confirmations_with(store.as_ref(), now_unix_ms(), escalator.as_ref()).await {
+        match sweep_confirmations_with_reach(
+            store.as_ref(),
+            now_unix_ms(),
+            escalator.as_ref(),
+            reach.as_ref(),
+        )
+        .await
+        {
             Ok(report) if report.failed > 0 => {
                 tracing::warn!(
                     failed = report.failed,
@@ -244,6 +324,7 @@ pub async fn confirmation_loop_with(
             Ok(report) if report != ConfirmReport::default() => {
                 tracing::debug!(
                     unconfirmed = report.unconfirmed,
+                    unconfirmable = report.unconfirmable,
                     rebound = report.rebound,
                     "confirmation sweep escalated expired entries",
                 );
@@ -384,6 +465,15 @@ async fn poll_outbox_drain_inner(
     if let Some(report) = poll_outbox_status(transport, store, pacer).await? {
         return Ok(report);
     }
+    let entries: Vec<OutboxEntry> = store
+        .awaiting_confirmation()
+        .await?
+        .into_iter()
+        .filter(is_pollable)
+        .collect();
+    if entries.is_empty() {
+        return Ok(DrainPollReport::default());
+    }
     let Some(ids) = transport
         .outbox_message_ids()
         .await
@@ -394,7 +484,7 @@ async fn poll_outbox_drain_inner(
     let present: HashSet<&str> = ids.iter().map(String::as_str).collect();
 
     let mut report = DrainPollReport::default();
-    for mut entry in store.awaiting_confirmation().await? {
+    for mut entry in entries {
         let Some(hop_id) = entry.hop_id.clone() else {
             continue;
         };
@@ -441,7 +531,7 @@ async fn poll_outbox_status(
         .awaiting_confirmation()
         .await?
         .into_iter()
-        .filter(|entry| entry.hop_id.is_some())
+        .filter(is_pollable)
         .collect();
     if entries.is_empty() {
         if let Some((pacer, _)) = pacer.as_mut() {
@@ -507,6 +597,16 @@ async fn poll_outbox_status(
         }
     }
     Ok(Some(report))
+}
+
+/// Whether the sender's mediator can say anything about `entry`: it has a hop
+/// id, and it was not relayed to another mediator. A relayed entry is never
+/// asked about — that mediator no longer holds it and can only answer
+/// `unknown` (VTI-TRN-064: a sender MUST NOT poll for evidence it has
+/// established is unavailable). An `Unknown` scope is polled, as every entry
+/// was before scopes existed.
+fn is_pollable(entry: &OutboxEntry) -> bool {
+    entry.hop_id.is_some() && entry.scope != DeliveryScope::Relayed
 }
 
 async fn settle_from_status(
@@ -731,6 +831,7 @@ mod tests {
         let esc = FixedEscalator(Escalation::Rebound {
             deliver_by_ms: 200_000,
             hop_id: Some("h2".into()),
+            scope: DeliveryScope::Local,
         });
         let report = sweep_confirmations_with(&store, 61_000, &esc)
             .await
@@ -743,6 +844,7 @@ mod tests {
         assert_eq!(e.state, OutboxState::Sent); // still watched
         assert_eq!(e.deliver_by_ms, 200_000); // fresh window
         assert_eq!(e.hop_id.as_deref(), Some("h2")); // alternate hop
+        assert_eq!(e.scope, DeliveryScope::Local); // the alternate's scope
         assert!(!e.outbox_observed); // reset for the alternate binding
 
         // Before the NEW window expires, another sweep leaves it alone.
@@ -1239,5 +1341,120 @@ mod tests {
         transport.set_outbox(vec![]);
         let r = poll_outbox_drain(&transport, &store).await.unwrap();
         assert_eq!((r.delivered, r.drained), (0, 1), "{r:?}");
+    }
+
+    // ── Relayed entries (VTI-TRN-042 amended, VTI-TRN-064) ───────────────
+
+    async fn relayed_with_hop(store: &InMemoryOutboxStore, key: &str, hop: &str) {
+        let mut e = OutboxEntry::new(key, "did:example:bob", vec![1], 1_000, 61_000)
+            .with_scope(DeliveryScope::Relayed);
+        e.state = OutboxState::Sent;
+        e.hop_id = Some(hop.to_string());
+        store.put(e).await.unwrap();
+    }
+
+    /// The sender's mediator relayed the message away and can only ever
+    /// answer `unknown` for it, so it is not asked — neither for status nor in
+    /// the outbox listing. A local entry beside it is asked about as before.
+    #[tokio::test]
+    async fn a_relayed_entry_is_never_polled() {
+        let store = InMemoryOutboxStore::new();
+        relayed_with_hop(&store, "relayed", "h-relayed").await;
+        sent_with_hop(&store, "local", "h-local").await;
+        let transport = DrainMockTransport::with_status(
+            Some(vec!["h-relayed".to_string(), "h-local".to_string()]),
+            &[
+                ("h-relayed", OutboxStatus::Collected),
+                ("h-local", OutboxStatus::Queued),
+            ],
+        );
+
+        let r = poll_outbox_drain(&transport, &store).await.unwrap();
+        assert_eq!(asked_about(&transport), vec!["h-local".to_string()]);
+        assert_eq!((r.delivered, r.observed), (0, 1), "{r:?}");
+        assert_eq!(
+            store.get("relayed").await.unwrap().unwrap().state,
+            OutboxState::Sent
+        );
+    }
+
+    #[tokio::test]
+    async fn only_relayed_entries_waiting_asks_the_mediator_nothing() {
+        let store = InMemoryOutboxStore::new();
+        relayed_with_hop(&store, "relayed", "h-relayed").await;
+        let transport = DrainMockTransport::new(Some(vec!["h-relayed".to_string()]));
+
+        let r = poll_outbox_drain(&transport, &store).await.unwrap();
+        assert!(asked_about(&transport).is_empty());
+        assert_eq!(r, DrainPollReport::default());
+        assert!(!store.get("relayed").await.unwrap().unwrap().outbox_observed);
+    }
+
+    /// An escalator that counts how often it was asked.
+    struct CountingEscalator(std::sync::atomic::AtomicUsize, Escalation);
+    #[async_trait::async_trait]
+    impl ExpiryEscalator for CountingEscalator {
+        async fn escalate(&self, _entry: &OutboxEntry) -> Escalation {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.1.clone()
+        }
+    }
+
+    /// No evidence class was available: the entry is recorded unconfirmable
+    /// with its reason, and nothing escalates it to a second copy.
+    #[tokio::test]
+    async fn a_relayed_entry_with_no_receipt_is_unconfirmable_and_not_escalated() {
+        let store = InMemoryOutboxStore::new();
+        relayed_with_hop(&store, "k", "h").await;
+        let escalator = CountingEscalator(Default::default(), Escalation::Failed);
+
+        let report = sweep_confirmations_with(&store, 61_000, &escalator)
+            .await
+            .unwrap();
+        assert_eq!(escalator.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!((report.unconfirmed, report.unconfirmable), (1, 1));
+        assert_eq!(report.failed, 0);
+        let e = store.get("k").await.unwrap().unwrap();
+        assert_eq!(e.state, OutboxState::Unconfirmed);
+        assert_eq!(
+            e.unconfirmed_reason,
+            Some(UnconfirmedReason::NoEvidencePath)
+        );
+    }
+
+    /// For a recipient known to send receipts the path exists, so its silence
+    /// means something and VTI-TRN-042 escalation applies.
+    #[tokio::test]
+    async fn a_relayed_entry_to_a_recipient_known_to_send_receipts_is_escalated() {
+        let store = InMemoryOutboxStore::new();
+        relayed_with_hop(&store, "k", "h").await;
+        let reach = ReceiptReach::new();
+        reach.record("did:example:bob", 30_000);
+        let escalator = CountingEscalator(Default::default(), Escalation::Failed);
+
+        let report = sweep_confirmations_with_reach(&store, 61_000, &escalator, &reach)
+            .await
+            .unwrap();
+        assert_eq!(escalator.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!((report.failed, report.unconfirmable), (1, 0));
+        assert_eq!(
+            store.get("k").await.unwrap().unwrap().state,
+            OutboxState::Failed
+        );
+    }
+
+    /// A path that could have produced evidence and did not is recorded as
+    /// such, apart from one that never could.
+    #[tokio::test]
+    async fn a_local_entry_whose_window_passed_says_so() {
+        let store = InMemoryOutboxStore::new();
+        sent_with_hop(&store, "k", "h").await;
+
+        let report = sweep_confirmations(&store, 61_000).await.unwrap();
+        assert_eq!((report.unconfirmed, report.unconfirmable), (1, 0));
+        assert_eq!(
+            store.get("k").await.unwrap().unwrap().unconfirmed_reason,
+            Some(UnconfirmedReason::WindowPassed)
+        );
     }
 }

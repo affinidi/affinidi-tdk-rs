@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.47.1 — delivery receipts, delivery scope, and `messaging/wake/set` / `messaging/wake/request`
+
+- **Wake through the recipient's mediator.** Pins `messaging/wake/set/0.1`,
+  `messaging/wake/request/0.1` and `messaging/receipt/0.1` (generated into
+  `tasks::messaging::{wake, receipt}`; no `trust-tasks-rs` change).
+  - `trust_tasks().wake_set(profile, handle)` gives the profile's own mediator
+    the opaque wake handle its push gateway issued, or (`None`) takes it back.
+  - `trust_tasks().wake_request(profile, mediator_did, addressee, msg_ids,
+    urgency)` asks the addressee's mediator to ring for messages this profile
+    queued, named by the id that mediator stores them under (the delivery
+    layer's hop id). Signed with `proofPurpose: authentication` (REQUIRED),
+    sent over DIDComm — forwarded through the profile's mediator when the
+    addressee's is another — and not waited on (VTI-TRN-070 – VTI-TRN-074).
+    The mediator's constant `{}` response arrives as an ordinary inbound
+    message.
+- **Delivery receipts** (`delivery` module, VTI-TRN-060 – VTI-TRN-063).
+  - `request_receipt(message, delivery_id)` stamps the DIDComm `delivery_id`
+    header; `tsp_envelope(document, delivery_id)` builds the TSP binding
+    envelope with `deliveryId`.
+  - `DidCommTransport` surfaces either as `Inbound::delivery_id`.
+  - `AtmReceiptPacker` is the delivery layer's `ReceiptPacker`: it builds
+    `messaging/receipt/0.1` and returns it authcrypted for DIDComm, or seals
+    and sends it itself over TSP (cross-mediator nested where needed). It
+    sends only as its own profile.
+- **Delivery scope.** `ATM::delivery_scope(profile, dest)` reads `dest`'s DID
+  document as the mediator's routing does: `Local` when the profile's mediator
+  holds the message, `Relayed` when it relays it to another, `Unknown` when it
+  cannot tell. `DidCommTransport` implements `MessageTransport::delivery_scope`
+  with it, so the delivery layer stops polling status for relayed sends.
+- `TspOps::send_to_peer(profile, to, payload)`: the TSP send `ATM::send_to`
+  uses (nested and routed through both mediators when the peer's is another).
+- Depends on `affinidi-messaging-delivery` 0.2 and `affinidi-messaging-core`
+  0.1.12. No breaking change.
+
 ## Unreleased (0.47.0) — affinidi-crypto 0.3 and trust-tasks 0.39
 
 - **Changed:** requires `affinidi-crypto` 0.3. No code change. `Curve` in the

@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use affinidi_messaging_core::{
-    ConnState, Inbound, InboundAck, MessageTransport, MessagingError, OutboxStatus,
+    ConnState, DeliveryScope, Inbound, InboundAck, MessageTransport, MessagingError, OutboxStatus,
     ReceivedMessage, SendReceipt, TransportKind,
 };
 use futures_util::stream::{self, BoxStream, StreamExt};
@@ -23,7 +23,8 @@ use tokio::task::JoinHandle;
 use crate::ack::{AckQueue, AckStats};
 use crate::confirm::confirm_delivered_by;
 use crate::outbox::{Key, OutboxEntry, OutboxState, OutboxStore};
-use crate::receipt::{self, Receipt, ReceiptPacker};
+use crate::reach::ReceiptReach;
+use crate::receipt::{self, PackedReceipt, ReceiptPacker, ReceiptRequest};
 
 /// The delivery guarantee for a [`MessagingService::send`].
 #[derive(Debug, Clone)]
@@ -135,6 +136,9 @@ struct ServiceInner {
     waiters: WaiterMap,
     subscribers: broadcast::Sender<Inbound>,
     receipt_packer: Option<Arc<dyn ReceiptPacker>>,
+    /// Recipients whose receipts have settled one of this service's deliveries
+    /// — the recipients known to send receipts (VTI-TRN-064 item 1).
+    reach: Arc<ReceiptReach>,
     /// Every transport's forwarder sends `(source id, inbound)` here; the single
     /// dispatcher drains it.
     inbound_tx: mpsc::Sender<(TransportId, Inbound)>,
@@ -314,9 +318,9 @@ impl MessagingService {
     /// dispatcher. Must be called inside a Tokio runtime. Installs `transport`
     /// as the `"default"` primary.
     ///
-    /// The layer-receipt **consume** half is always active — an inbound receipt
-    /// confirms its matching outbox entry `Sent → Delivered` (§5a). To also
-    /// **emit** receipts for messages this service receives, build with
+    /// The receipt **consume** half is always active — an inbound receipt from
+    /// an entry's recipient confirms it `Sent → Delivered`. To also **emit**
+    /// receipts for messages that ask for one, build with
     /// [`with_receipts`](Self::with_receipts).
     pub fn new(transport: Arc<dyn MessageTransport>, outbox: Arc<dyn OutboxStore>) -> Self {
         let svc = Self::build_empty(outbox, None);
@@ -325,12 +329,17 @@ impl MessagingService {
         svc
     }
 
-    /// Build the service and, additionally, **emit** a fire-and-forget layer
-    /// receipt (§5a) for every unsolicited message it durably receives, using
-    /// `receipt_packer` to encrypt the receipt to the sender. This is what lets
-    /// a peer's `Guaranteed` outbox entry settle `Delivered` with no
-    /// application-protocol reply. Installs `transport` as the `"default"`
-    /// primary.
+    /// Build the service and, additionally, **emit** a fire-and-forget
+    /// `messaging/receipt/0.1` for every message that asks for one
+    /// ([`Inbound::delivery_id`]), using `receipt_packer` to build and seal it
+    /// to the sender. This is what lets a peer's outbox entry settle
+    /// `Delivered` with no application-protocol reply, across mediators.
+    /// Installs `transport` as the `"default"` primary.
+    ///
+    /// A receipt is sent only for a message that asked, only to the sender the
+    /// transport authenticated, only once the message has been handed off, and
+    /// over the transport it arrived on (VTI-TRN-061). A message that did not
+    /// ask gets nothing.
     pub fn with_receipts(
         transport: Arc<dyn MessageTransport>,
         outbox: Arc<dyn OutboxStore>,
@@ -366,6 +375,7 @@ impl MessagingService {
             waiters,
             subscribers,
             receipt_packer,
+            reach: Arc::new(ReceiptReach::new()),
             inbound_tx,
             fallback_conn,
             acks: AckQueue::default(),
@@ -396,6 +406,17 @@ impl MessagingService {
     /// `abandoned` is that happening. See [`AckStats`].
     pub fn ack_stats(&self) -> AckStats {
         self.inner.acks.stats()
+    }
+
+    /// The recipients this service's dispatcher has seen send receipts.
+    ///
+    /// Pass it to
+    /// [`confirmation_loop_with_reach`](crate::confirmation_loop_with_reach) so
+    /// an expired relayed delivery to a recipient that sends receipts is
+    /// escalated, and one to any other recipient is recorded unconfirmable
+    /// (VTI-TRN-042, VTI-TRN-064).
+    pub fn receipt_reach(&self) -> Arc<ReceiptReach> {
+        self.inner.reach.clone()
     }
 
     /// Install a secondary `transport` under `id`. It starts **receiving**
@@ -740,6 +761,23 @@ impl MessagingService {
             .map(|entry| entry.state))
     }
 
+    /// The outbox entry of a `Guaranteed` send, or `None` if the key was never
+    /// enqueued (or has been reaped).
+    ///
+    /// Its [`hop_id`](OutboxEntry::hop_id), once `Sent`, is the identifier the
+    /// recipient's mediator stores the message under — what a
+    /// `messaging/wake/request` names (VTI-TRN-070).
+    pub async fn outbox_entry(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<OutboxEntry>, MessagingError> {
+        self.inner
+            .outbox
+            .get(idempotency_key)
+            .await
+            .map_err(|e| MessagingError::Transport(format!("outbox read failed: {e}")))
+    }
+
     fn remove_waiter(&self, thid: &str) {
         self.inner
             .waiters
@@ -860,15 +898,22 @@ impl MessageTransport for PrimaryTransport {
             .ok_or_else(|| MessagingError::Transport("no primary transport".into()))?;
         transport.outbox_status(hop_ids).await
     }
+
+    async fn delivery_scope(&self, dest: &str) -> DeliveryScope {
+        match self.inner.primary_transport() {
+            Some(transport) => transport.delivery_scope(dest).await,
+            None => DeliveryScope::Unknown,
+        }
+    }
 }
 
 /// The single inbound dispatcher, over the **merged** inbound of every installed
 /// transport. For each `(source id, message)` it either
-/// 1. **consumes** it as a layer receipt — confirm its outbox entry `Sent →
-///    Delivered` (§5a) and never surface it to the application; or
+/// 1. **consumes** it as a delivery receipt — confirm its outbox entry `Sent →
+///    Delivered` and never surface it to the application; or
 /// 2. **routes** it to a matching `request` waiter (by thread id) or to
-///    `subscribe`, emitting a fire-and-forget receipt (over the current primary)
-///    for unsolicited traffic when a packer is configured;
+///    `subscribe`, and — when the message asked for a receipt and a packer is
+///    configured — emits one after the handoff, over the transport it arrived on;
 ///
 /// then acks it once after handoff **over the transport it arrived on**.
 async fn run_dispatcher(inner: Arc<ServiceInner>, mut rx: mpsc::Receiver<(TransportId, Inbound)>) {
@@ -878,6 +923,8 @@ async fn run_dispatcher(inner: Arc<ServiceInner>, mut rx: mpsc::Receiver<(Transp
         // routing arms, and a warning that cannot name the message is one an
         // operator cannot act on.
         let item_thread_id = item.thread_id.clone();
+        // What a receipt needs, read before `item` is moved into routing.
+        let receipt_request = requested_receipt(&item);
 
         // 1. A layer receipt is consumed by the layer, not the application: it
         //    confirms the matching outbox entry Sent → Delivered. A receipt for
@@ -894,7 +941,12 @@ async fn run_dispatcher(inner: Arc<ServiceInner>, mut rx: mpsc::Receiver<(Transp
             };
             match confirmed {
                 Ok(true) => {
-                    tracing::debug!(idempotency_key = %key, "layer receipt confirmed delivery")
+                    // The receipt named a delivery addressed to its sender and
+                    // settled it (VTI-TRN-062): that recipient sends receipts.
+                    if let Some(peer) = sender.as_deref() {
+                        inner.reach.record(peer, now_unix_ms());
+                    }
+                    tracing::debug!(idempotency_key = %key, "receipt confirmed delivery")
                 }
                 Ok(false) => tracing::debug!(
                     idempotency_key = %key,
@@ -917,23 +969,15 @@ async fn run_dispatcher(inner: Arc<ServiceInner>, mut rx: mpsc::Receiver<(Transp
         //    confirmed the same entry. The reply is still ordinary application
         //    traffic — it is also routed below. As with a receipt, only a reply
         //    from the entry's recipient counts.
-        let confirmed_our_send = match (item.thread_id.as_deref(), sender.as_deref()) {
-            (Some(thid), Some(peer)) => {
-                match confirm_delivered_by(inner.outbox.as_ref(), thid, peer).await {
-                    Ok(confirmed) => {
-                        if confirmed {
-                            tracing::debug!(idempotency_key = %thid, "protocol reply confirmed delivery");
-                        }
-                        confirmed
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed to apply protocol-reply evidence");
-                        false
-                    }
+        if let (Some(thid), Some(peer)) = (item.thread_id.as_deref(), sender.as_deref()) {
+            match confirm_delivered_by(inner.outbox.as_ref(), thid, peer).await {
+                Ok(true) => {
+                    tracing::debug!(idempotency_key = %thid, "protocol reply confirmed delivery")
                 }
+                Ok(false) => {}
+                Err(e) => tracing::warn!(error = %e, "failed to apply protocol-reply evidence"),
             }
-            _ => false,
-        };
+        }
 
         // 3. Route application traffic. A waiter takes only a reply from the
         //    peer its request went to; anything else in the thread is left to
@@ -944,8 +988,7 @@ async fn run_dispatcher(inner: Arc<ServiceInner>, mut rx: mpsc::Receiver<(Transp
             .and_then(|thid| take_waiter(&inner, thid, sender.as_deref()));
 
         let handed_off = match waiter {
-            // A reply for an in-flight request → its waiter. A reply is its own
-            // evidence (the protocol-reply source); we do NOT also receipt it.
+            // A reply for an in-flight request → its waiter.
             //
             // The send is on a clone so a *dead* waiter — the caller timed out
             // and dropped its receiver between our `remove` above and here — does
@@ -954,9 +997,9 @@ async fn run_dispatcher(inner: Arc<ServiceInner>, mut rx: mpsc::Receiver<(Transp
             // delivering to whoever else is listening rather than discarding.
             Some(tx) => match tx.send(item.message.clone()) {
                 Ok(()) => true,
-                Err(_) => deliver_unsolicited(&inner, confirmed_our_send, item),
+                Err(_) => deliver_unsolicited(&inner, item),
             },
-            None => deliver_unsolicited(&inner, confirmed_our_send, item),
+            None => deliver_unsolicited(&inner, item),
         };
 
         // Ack once, HERE, after handoff — over the transport the message arrived
@@ -975,6 +1018,11 @@ async fn run_dispatcher(inner: Arc<ServiceInner>, mut rx: mpsc::Receiver<(Transp
         // keeps its copy and offers it again on the next pickup, where a
         // subscriber that has since appeared collects it.
         if handed_off {
+            // A receipt only once the message is held (VTI-TRN-061): a message
+            // nobody took is not held, and is redelivered and receipted then.
+            if let (Some(request), Some(packer)) = (receipt_request, inner.receipt_packer.clone()) {
+                spawn_receipt(&inner, packer, &src_id, request);
+            }
             ack_via_source(&inner, &src_id, ack).await;
         } else {
             // Counted as well as logged. This arm is the contract working, not
@@ -1020,33 +1068,31 @@ fn take_waiter(
     }
 }
 
-/// Offer an unsolicited inbound to `subscribe()` consumers, emitting a delivery
-/// receipt first when this layer runs one.
+/// Offer an unsolicited inbound to `subscribe()` consumers.
 ///
 /// Returns whether anyone actually received it — `broadcast::send` reports `Err`
 /// when there are no subscribers, and that is the signal
 /// [`run_dispatcher`] needs to decide whether acking would be honest.
-///
-/// If we run the layer (a packer is configured) AND this is a fresh inbound
-/// rather than a reply to our own Guaranteed send, emit a fire-and-forget receipt
-/// echoing the correlation so *that* sender's outbox entry settles Delivered. A
-/// message that just confirmed one of our sends is a reply, not a fresh
-/// Guaranteed push, so it needs no receipt from us (its thread id is the original
-/// thread, not the reply's own key — a receipt would be a no-op on the peer).
-///
-/// A receipt goes only to a sender the transport authenticated: a sender a
-/// message merely names is not someone this service should pack for and send to.
-fn deliver_unsolicited(inner: &Arc<ServiceInner>, confirmed_our_send: bool, item: Inbound) -> bool {
-    if !confirmed_our_send
-        && let Some(packer) = inner.receipt_packer.as_ref()
-        && let (Some(to), Some(confirms)) = (
-            proven_sender(&item.message).map(str::to_string),
-            item.thread_id.clone(),
-        )
-    {
-        spawn_receipt(inner, packer.clone(), to, confirms);
-    }
+fn deliver_unsolicited(inner: &Arc<ServiceInner>, item: Inbound) -> bool {
     inner.subscribers.send(item).is_ok()
+}
+
+/// The receipt `item` asks for, if it asks for one and can have one.
+///
+/// Only a message that carries a delivery id asked (VTI-TRN-061: "only for a
+/// message that requests one"), and only its transport-authenticated sender
+/// may be sent a receipt: a sender a message merely names is not someone this
+/// service should seal for and send to. Thread ids play no part — a message
+/// that asked for nothing gets nothing, in either receipt form.
+fn requested_receipt(item: &Inbound) -> Option<ReceiptRequest> {
+    let confirms = item.delivery_id.clone()?;
+    let to = proven_sender(&item.message)?.to_string();
+    Some(ReceiptRequest::new(
+        to,
+        item.message.recipient.clone(),
+        confirms,
+        item.message.protocol,
+    ))
 }
 
 /// Ack `ack` over the transport it arrived on (`src_id`). If that transport was
@@ -1161,30 +1207,36 @@ async fn run_ack_retry(inner: Arc<ServiceInner>) {
     }
 }
 
-/// Pack and send a fire-and-forget layer receipt confirming `confirms` back to
-/// `to`, over the **current primary**, on a detached task so a slow pack/send
-/// never stalls the dispatcher. Skipped (logged) if there is no primary. A pack
-/// or send failure is only logged: the receipt is self-healing (the sender's
-/// delivery window expires and it re-sends; the receiver re-emits).
+/// Build and send a fire-and-forget receipt on a detached task, so a slow
+/// pack or send never stalls the dispatcher.
+///
+/// It goes back over the transport the receipted message arrived on (the
+/// binding it came by, `messaging/receipt` producer rule 4), or the current
+/// primary if that transport has since been removed. A failure is only logged:
+/// a lost receipt costs the sender one re-send, which is received as a
+/// duplicate and receipted again.
 fn spawn_receipt(
     inner: &Arc<ServiceInner>,
     packer: Arc<dyn ReceiptPacker>,
-    to: String,
-    confirms: String,
+    src_id: &str,
+    request: ReceiptRequest,
 ) {
-    let Some(transport) = inner.primary_transport() else {
-        tracing::debug!(to = %to, "no primary transport; skipping layer receipt emit");
+    let Some(transport) = inner
+        .transport_by_id(src_id)
+        .or_else(|| inner.primary_transport())
+    else {
+        tracing::debug!(to = %request.to, "no transport to send a receipt over; skipping it");
         return;
     };
     tokio::spawn(async move {
-        let body = Receipt::new(confirms).encode();
-        match packer.pack_receipt(&to, body).await {
-            Ok(packed) => {
-                if let Err(e) = transport.send(&to, packed).await {
-                    tracing::debug!(error = %e, to = %to, "layer receipt send failed (self-healing on window expiry)");
+        match packer.pack_receipt(&request).await {
+            Ok(PackedReceipt::Packed(packed)) => {
+                if let Err(e) = transport.send(&request.to, packed).await {
+                    tracing::debug!(error = %e, to = %request.to, "receipt send failed; the sender's re-send is receipted again");
                 }
             }
-            Err(e) => tracing::warn!(error = %e, to = %to, "failed to pack layer receipt"),
+            Ok(PackedReceipt::Sent) => {}
+            Err(e) => tracing::warn!(error = %e, to = %request.to, "failed to pack a receipt"),
         }
     });
 }
@@ -1766,32 +1818,57 @@ mod tests {
         assert_eq!(svc.status(), MessagingStatus::Connected);
     }
 
-    // ── Layer-receipt evidence (§5a) ─────────────────────────────────────
+    // ── Delivery receipts (VTI-TRN-060 – VTI-TRN-063) ────────────────────
 
-    /// A trivial packer: records who it packed for and wraps the body so the
-    /// test can prove the receipt reached the transport.
+    /// A trivial packer: records what it was asked for and "packs" a bare
+    /// `messaging/receipt/0.1` document, so the test can read it back.
     struct MockPacker {
         packed_for: Mutex<Vec<String>>,
+        requests: Mutex<Vec<ReceiptRequest>>,
     }
     impl MockPacker {
         fn new() -> Arc<Self> {
             Arc::new(Self {
                 packed_for: Mutex::new(Vec::new()),
+                requests: Mutex::new(Vec::new()),
             })
         }
     }
     #[async_trait::async_trait]
     impl ReceiptPacker for MockPacker {
-        async fn pack_receipt(&self, to: &str, body: Vec<u8>) -> Result<Vec<u8>, MessagingError> {
-            self.packed_for.lock().unwrap().push(to.to_string());
-            Ok(body) // "packed" == the raw receipt body, for assertion
+        async fn pack_receipt(
+            &self,
+            request: &ReceiptRequest,
+        ) -> Result<PackedReceipt, MessagingError> {
+            self.packed_for.lock().unwrap().push(request.to.clone());
+            self.requests.lock().unwrap().push(request.clone());
+            Ok(PackedReceipt::Packed(task_receipt(&request.confirms)))
         }
     }
 
-    /// An inbound whose payload IS a layer receipt confirming `confirms`.
+    /// A bare `messaging/receipt/0.1` document confirming `confirms`.
+    fn task_receipt(confirms: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "id": "urn:uuid:receipt",
+            "type": receipt::RECEIPT_TASK_TYPE,
+            "issuedAt": "2026-11-14T09:30:02Z",
+            "payload": { "confirms": confirms },
+        }))
+        .unwrap()
+    }
+
+    /// An inbound whose payload is a receipt in the earlier form, which a
+    /// sender still accepts (VTI-TRN-063).
     fn inbound_receipt(confirms: &str, ack: &str) -> Inbound {
         let mut item = inbound("receipt-msg", None, ack);
-        item.message.payload = Receipt::new(confirms).encode();
+        item.message.payload = crate::receipt::Receipt::new(confirms).encode();
+        item
+    }
+
+    /// An inbound whose payload is a `messaging/receipt/0.1` Trust Task.
+    fn inbound_task_receipt(confirms: &str, ack: &str) -> Inbound {
+        let mut item = inbound("receipt-msg", None, ack);
+        item.message.payload = task_receipt(confirms);
         item
     }
 
@@ -1831,6 +1908,48 @@ mod tests {
         );
     }
 
+    /// The Trust Task form settles a delivery exactly as the earlier one does,
+    /// and teaches the service that this recipient sends receipts.
+    #[tokio::test]
+    async fn a_task_receipt_from_the_recipient_settles_and_is_remembered() {
+        let h = mock();
+        let outbox = Arc::new(InMemoryOutboxStore::new());
+        sent_entry(&outbox, "k").await;
+        let svc = MessagingService::new(h.transport.clone(), outbox.clone());
+        let _sub = svc.subscribe();
+        assert!(!svc.receipt_reach().sends_receipts(ALICE, now_unix_ms()));
+
+        h.inbound_tx
+            .send(inbound_task_receipt("k", "q-receipt"))
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert_eq!(
+            outbox.get("k").await.unwrap().unwrap().state,
+            OutboxState::Delivered
+        );
+        assert!(svc.receipt_reach().sends_receipts(ALICE, now_unix_ms()));
+        assert!(
+            h.transport.sent.lock().unwrap().is_empty(),
+            "a receipt is never answered"
+        );
+    }
+
+    /// A receipt that settles nothing teaches nothing (VTI-TRN-062).
+    #[tokio::test]
+    async fn a_receipt_that_settles_nothing_is_not_remembered() {
+        let h = mock();
+        let outbox = Arc::new(InMemoryOutboxStore::new());
+        let svc = MessagingService::new(h.transport.clone(), outbox.clone());
+        let _sub = svc.subscribe();
+
+        h.inbound_tx
+            .send(inbound_task_receipt("never-sent", "q"))
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!svc.receipt_reach().sends_receipts(ALICE, now_unix_ms()));
+    }
+
     #[tokio::test]
     async fn a_receipt_for_an_unknown_key_is_a_harmless_noop() {
         let h = mock();
@@ -1849,7 +1968,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unsolicited_message_emits_a_receipt_when_a_packer_is_configured() {
+    async fn a_message_that_asks_for_a_receipt_gets_one_from_the_addressee() {
         let h = mock();
         let packer = MockPacker::new();
         let svc = MessagingService::with_receipts(
@@ -1859,9 +1978,9 @@ mod tests {
         );
         let mut sub = svc.subscribe();
 
-        // Unsolicited (no matching waiter), with a sender + correlation thid.
+        // Asks for a receipt with a delivery id; its thread id plays no part.
         h.inbound_tx
-            .send(inbound("push-1", Some("corr-key"), "q-push"))
+            .send(inbound("push-1", Some("a-thread"), "q-push").with_delivery_id("corr-key"))
             .unwrap();
 
         // Still delivered to the app…
@@ -1872,16 +1991,66 @@ mod tests {
         assert_eq!(got.message.id, "push-1");
 
         // …and a receipt was packed for the sender and sent back to it,
-        // echoing the correlation as the confirmed key.
+        // echoing the delivery id, from the identity the message was for, over
+        // the binding it came by.
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(
             packer.packed_for.lock().unwrap().as_slice(),
             &["did:example:alice"]
         );
+        let request = packer.requests.lock().unwrap()[0].clone();
+        assert_eq!(request.confirms, "corr-key");
+        assert_eq!(request.from, "did:example:bob");
+        assert_eq!(request.protocol, Protocol::DIDComm);
         let sent = h.transport.sent.lock().unwrap();
         let (dest, body) = sent.last().expect("a receipt was sent");
         assert_eq!(dest, "did:example:alice");
         assert_eq!(receipt::receipt_key(body).as_deref(), Some("corr-key"));
+    }
+
+    /// Requested, never automatic: a thread id is not a request, so a message
+    /// that asked for nothing gets nothing (VTI-TRN-061).
+    #[tokio::test]
+    async fn a_message_that_does_not_ask_gets_no_receipt() {
+        let h = mock();
+        let packer = MockPacker::new();
+        let svc = MessagingService::with_receipts(
+            h.transport.clone(),
+            Arc::new(InMemoryOutboxStore::new()),
+            packer.clone(),
+        );
+        let mut sub = svc.subscribe();
+
+        h.inbound_tx
+            .send(inbound("push-1", Some("corr-key"), "q-push"))
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), sub.next())
+            .await
+            .expect("subscribe yields the push")
+            .expect("stream item");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(packer.packed_for.lock().unwrap().is_empty());
+        assert!(h.transport.sent.lock().unwrap().is_empty());
+    }
+
+    /// A message nobody took is not held, so it is not receipted; its
+    /// redelivery is.
+    #[tokio::test]
+    async fn a_message_with_no_consumer_is_not_receipted() {
+        let h = mock();
+        let packer = MockPacker::new();
+        let _svc = MessagingService::with_receipts(
+            h.transport.clone(),
+            Arc::new(InMemoryOutboxStore::new()),
+            packer.clone(),
+        );
+
+        h.inbound_tx
+            .send(inbound("push-1", None, "q-push").with_delivery_id("k"))
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(packer.packed_for.lock().unwrap().is_empty());
+        assert!(h.transport.acked.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -2159,7 +2328,7 @@ mod tests {
         );
         let mut sub = svc.subscribe();
 
-        let mut push = inbound("push-1", Some("corr-key"), "q-push");
+        let mut push = inbound("push-1", None, "q-push").with_delivery_id("corr-key");
         push.message.verified = false;
         h.inbound_tx.send(push).unwrap();
 

@@ -1,6 +1,22 @@
 # Affinidi Messaging Core Changelog
 
 ## Unreleased
+### 0.1.12 — a transport can say where a sent message is held, and an inbound can ask for a receipt
+
+- `DeliveryScope` (`Local`, `Relayed`, `Unknown`, the default) and
+  `MessageTransport::delivery_scope(dest)`: whether a message sent to `dest`
+  stays at the sender's own mediator or is relayed to the recipient's. A
+  relayed message leaves the sender's mediator at once, so its status can
+  never be reported there (VTI-TRN-064). Defaults to `Unknown`, so existing
+  transports are unaffected.
+- `Inbound::delivery_id` and `Inbound::with_delivery_id`: the delivery id a
+  sender stamped to ask for a delivery receipt — the DIDComm binding's
+  `delivery_id` header or the TSP binding envelope's `deliveryId` (binding
+  0.2 §2.1). `Inbound` is `#[non_exhaustive]`, so the field is additive.
+- `MAX_DELIVERY_ID_LEN` (256) and `is_valid_delivery_id`.
+
+No breaking change.
+
 ### 0.1.11 — a transport can say why a message left the outbox
 
 `MessageTransport::outbox_status(hop_ids)` reports where each sent message

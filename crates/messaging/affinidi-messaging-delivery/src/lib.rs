@@ -29,6 +29,8 @@ pub mod confirm;
 pub mod conformance;
 pub mod drain;
 pub mod outbox;
+/// Which recipients are known to send delivery receipts (VTI-TRN-064).
+pub mod reach;
 /// Removing outbox entries that are finished with — the trait had no way to
 /// remove anything, so a keyspace grew for the life of the deployment.
 pub mod reap;
@@ -38,10 +40,17 @@ pub mod service;
 pub use ack::AckStats;
 pub use confirm::{
     ConfirmReport, DrainPollReport, Escalation, ExpiryEscalator, StatusPacer, confirm_delivered,
-    confirm_delivered_by, confirmation_loop, confirmation_loop_with, outbox_drain_loop,
-    poll_outbox_drain, poll_outbox_drain_paced, sweep_confirmations, sweep_confirmations_with,
+    confirm_delivered_by, confirmation_loop, confirmation_loop_with, confirmation_loop_with_reach,
+    outbox_drain_loop, poll_outbox_drain, poll_outbox_drain_paced, sweep_confirmations,
+    sweep_confirmations_with, sweep_confirmations_with_reach,
 };
 pub use drain::{DrainReport, drain_loop, drain_loop_via, drain_once, drain_once_via};
-pub use outbox::{InMemoryOutboxStore, Key, OutboxEntry, OutboxError, OutboxState, OutboxStore};
-pub use receipt::{RECEIPT_TYPE, Receipt, ReceiptPacker, receipt_key, receipt_of};
+pub use outbox::{
+    InMemoryOutboxStore, Key, OutboxEntry, OutboxError, OutboxState, OutboxStore, UnconfirmedReason,
+};
+pub use reach::ReceiptReach;
+pub use receipt::{
+    PackedReceipt, RECEIPT_TASK_TYPE, RECEIPT_TYPE, Receipt, ReceiptPacker, ReceiptRequest,
+    receipt_key, receipt_of,
+};
 pub use service::{Delivery, MessagingService, MessagingStatus, Sent};

@@ -951,21 +951,7 @@ impl ATM {
                 let payload = serde_json::to_vec(message).map_err(|e| {
                     ATMError::MsgSendError(format!("couldn't serialise message for TSP: {e}"))
                 })?;
-                // Route cross-mediator (metadata-private) when the peer's mediator
-                // is known and differs from ours; otherwise Direct via our mediator.
-                let peer_mediator = self.tsp().peer_mediator(profile, to).await?;
-                let (_, own_mediator) = profile.dids()?;
-                match peer_mediator {
-                    Some(peer_mediator) if peer_mediator != own_mediator => {
-                        let route = [own_mediator.to_string(), peer_mediator];
-                        self.tsp()
-                            .send_nested_routed(profile, &route, to, &payload)
-                            .await?;
-                    }
-                    _ => {
-                        self.tsp().send(profile, to, &payload).await?;
-                    }
-                }
+                self.tsp().send_to_peer(profile, to, &payload).await?;
             }
             SendProtocol::DidComm => {
                 // Pack for the recipient, then wrap in a single `forward` to the
@@ -1783,6 +1769,29 @@ impl TspOps<'_> {
         .map_err(|e| ATMError::MsgSendError(format!("couldn't pack TSP message: {e}")))?;
 
         Ok(packed.bytes)
+    }
+
+    /// Send `payload` to `to` over TSP the way [`ATM::send_to`] does: routed
+    /// cross-mediator with metadata privacy ([`send_nested_routed`]) when the
+    /// peer's mediator is known and differs from ours, otherwise Direct via our
+    /// mediator.
+    ///
+    /// [`send_nested_routed`]: Self::send_nested_routed
+    pub async fn send_to_peer(
+        &self,
+        profile: &Arc<ATMProfile>,
+        to: &str,
+        payload: &[u8],
+    ) -> Result<(), ATMError> {
+        let peer_mediator = self.peer_mediator(profile, to).await?;
+        let (_, own_mediator) = profile.dids()?;
+        match peer_mediator {
+            Some(peer_mediator) if peer_mediator != own_mediator => {
+                let route = [own_mediator.to_string(), peer_mediator];
+                self.send_nested_routed(profile, &route, to, payload).await
+            }
+            _ => self.send(profile, to, payload).await,
+        }
     }
 
     /// Pack a TSP Direct message and send it to the mediator `/inbound`.
