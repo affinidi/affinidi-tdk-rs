@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.47.2 — `queue/purge` confirms a dry run by when it was taken (`storedBefore`, `selectedAt`)
+
+- The vendored `messaging/queue/purge` 0.1 bundle is refreshed to the
+  registry's in-place draft revision (`sha256:13faf739…`, was
+  `sha256:13538e34…`). The request gains an optional `storedBefore`
+  (date-time): only messages stored at or before that instant. The response
+  gains an optional `selectedAt` (date-time): the instant the mediator took
+  the selection. The generated `queue::purge::v0_1::Payload` has
+  `stored_before` and `Response` has `selected_at`, both
+  `Option<chrono::DateTime<Utc>>`. A response carrying `selectedAt` used to
+  fail to decode, because the response type refuses unknown members; it now
+  decodes.
+- New `TrustTasksOps::queue_purge_with(profile, &QueuePurge)` and the
+  `QueuePurge` options type (`new(queue)`, `did_hash`, `peer`,
+  `older_than_seconds`, `stored_before`, `dry_run`). Send a dry run's
+  `selected_at` back as `stored_before` on the confirming purge so it removes
+  nothing stored after the preview. `queue_purge` keeps its signature and
+  sends the same request as before.
+
+Additive. A mediator that predates `storedBefore` refuses a request
+carrying it; `queue_purge` never sends it.
+
 ## 0.47.1 — delivery receipts, delivery scope, and `messaging/wake/set` / `messaging/wake/request`
 
 - **Wake through the recipient's mediator.** Pins `messaging/wake/set/0.1`,
