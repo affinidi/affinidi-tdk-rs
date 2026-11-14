@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.47.0"
+version = "0.47.1"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -35,7 +35,10 @@ affinidi-crypto = { version = "0.3", features = ["jose"] }
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15.14" }
 # Protocol-agnostic messaging vocabulary (ConnState, the future MessageTransport
 # trait). The websocket transport publishes ConnState over a watch channel.
-affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.11" }
+affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.12" }
+## The delivery layer's receipt contract (`ReceiptPacker`), which
+## `delivery::AtmReceiptPacker` implements over this SDK.
+affinidi-messaging-delivery = { path = "../affinidi-messaging-delivery", version = "0.2" }
 ## Trust Tasks runtime. The task types themselves are generated at build time
 ## from the versions pinned in trust-tasks.lock (see build.rs and `crate::tasks`),
 ## so no prebuilt specification module is compiled.

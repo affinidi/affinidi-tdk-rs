@@ -222,6 +222,7 @@ const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 //pub mod authentication;
 pub mod config;
 pub mod delete_handler;
+pub mod delivery;
 pub mod errors;
 pub mod messages;
 pub mod profiles;

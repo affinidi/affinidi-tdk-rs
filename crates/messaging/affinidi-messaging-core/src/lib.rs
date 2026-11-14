@@ -31,7 +31,8 @@ pub use error::MessagingError;
 pub use http_status::{HttpStatusError, QueueFullGate};
 pub use traits::{IdentityResolver, MessagingProtocol, RelationshipManager};
 pub use transport::{
-    ConnState, Inbound, InboundAck, InboundKind, MessageTransport, OutboxStatus,
-    RelationshipRequest, SendReceipt, TransportKind,
+    ConnState, DeliveryScope, Inbound, InboundAck, InboundKind, MAX_DELIVERY_ID_LEN,
+    MessageTransport, OutboxStatus, RelationshipRequest, SendReceipt, TransportKind,
+    is_valid_delivery_id,
 };
 pub use types::{Protocol, ReceivedMessage, RelationshipState, ResolvedIdentity};

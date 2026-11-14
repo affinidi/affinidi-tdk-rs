@@ -1,5 +1,76 @@
 # Changelog
 
+## 0.2.0 — receipts on request, as `messaging/receipt/0.1`; relayed sends are not polled and settle unconfirmable
+
+Implements the delivery-receipt and evidence-path requirements of the VTI
+specification (VTI-TRN-042 as amended, VTI-TRN-060 – VTI-TRN-064) and the
+`messaging/receipt/0.1` Trust Task. Breaking: see below.
+
+**A relayed send is not polled.** A message the sender's mediator relays to
+the recipient's own mediator leaves it at once, so `messaging/message/status`
+could only ever answer `unknown` for it, every ten seconds for the whole
+window.
+
+- `OutboxEntry::scope` (`DeliveryScope`): `Local`, `Relayed` or `Unknown`.
+  The drain sets it when an entry is first sent, from
+  `MessageTransport::delivery_scope`, unless the caller set it with
+  `OutboxEntry::with_scope`. Bounded by `SCOPE_TIMEOUT` (10 s); a scope not
+  established stays `Unknown`.
+- The status poll and the outbox-listing fallback skip `Relayed` entries
+  (VTI-TRN-064: a sender must not poll for evidence it has established is
+  unavailable). `Local` and `Unknown` entries are polled exactly as before, so
+  a recipient on the same mediator that sends no receipts still confirms by
+  status.
+- `OutboxEntry::hop_id` is still recorded for a relayed DIDComm entry: it is
+  the id the recipient's mediator stores the message under, which a
+  `messaging/wake/request` names. `MessagingService::outbox_entry` reads it.
+
+**An unconfirmable delivery is recorded as one, not escalated.**
+
+- `OutboxEntry::unconfirmed_reason` (`UnconfirmedReason`): `WindowPassed` (a
+  path that could have produced evidence stayed silent) or `NoEvidencePath`.
+- When a `Relayed` entry's window closes with no receipt, and its recipient is
+  not known to send receipts, it settles `Unconfirmed` with `NoEvidencePath`,
+  logged at `info`, and the `ExpiryEscalator` is not asked (VTI-TRN-042, as
+  amended). `ConfirmReport::unconfirmable` counts these; they are also counted
+  in `unconfirmed`.
+- `ReceiptReach` remembers recipients whose receipts settled one of this
+  service's deliveries, for a stated period (30 days by default). For those,
+  a missing receipt is silence and escalation applies as before.
+  `MessagingService::receipt_reach` returns the one its dispatcher fills;
+  pass it to `confirmation_loop_with_reach` / `sweep_confirmations_with_reach`.
+  `confirmation_loop_with` / `sweep_confirmations_with` use an empty one.
+
+**Receipts are requested, and sent as `messaging/receipt/0.1`.**
+
+- A service built `with_receipts` now sends a receipt only for a message that
+  asks for one with a delivery id (`Inbound::delivery_id`), only to the sender
+  the transport authenticated, only after the message was handed off, and over
+  the transport it arrived on (VTI-TRN-061). It used to send one for every
+  unsolicited message with a thread id; a thread id is no longer a request.
+- The receipt is the `messaging/receipt/0.1` Trust Task, `confirms` the
+  delivery id. `ReceiptPacker::pack_receipt` now takes a `ReceiptRequest`
+  (`to`, `from`, `confirms`, `protocol`) and returns a `PackedReceipt`:
+  `Packed(bytes)` for the delivery layer to send, or `Sent` when the packer
+  sent it itself. `affinidi-messaging-sdk` provides `AtmReceiptPacker`.
+- On receive, both forms settle an entry, under the same rules (VTI-TRN-062,
+  VTI-TRN-063): the Trust Task form (`RECEIPT_TASK_TYPE`, read from a DIDComm
+  envelope `body`, a TSP envelope `document`, or bare) and the earlier
+  `RECEIPT_TYPE` body. A receipt is never answered.
+- A sender asks for a receipt by stamping the entry's idempotency key as the
+  delivery id, so a receipt settles that entry.
+
+**Breaking changes.**
+
+- `OutboxEntry` is `#[non_exhaustive]` and has two new fields (both
+  `#[serde(default)]`, so stored entries load unchanged). Build one with
+  `OutboxEntry::new` and the `with_*` builders.
+- `Escalation::Rebound` has a new `scope` field.
+- `ReceiptPacker::pack_receipt` has a new signature (above).
+- A service built `with_receipts` no longer receipts messages that did not
+  ask. No released packer existed, so no deployment sent receipts before.
+- Requires `affinidi-messaging-core` 0.1.12.
+
 ## 0.1.23 — a listing drain is not a delivery; bounded inbound queue and drain sends
 
 **The outbox listing no longer settles `Delivered`.** Without the mediator's

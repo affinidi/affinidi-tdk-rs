@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use affinidi_messaging_core::DeliveryScope;
 use serde::{Deserialize, Serialize};
 
 /// An idempotency or ordering key. The idempotency key is the dedup anchor; the
@@ -44,6 +45,28 @@ impl OutboxState {
     }
 }
 
+/// Why an entry settled [`OutboxState::Unconfirmed`].
+///
+/// Two different facts end the same way, and a reader of the outbox needs to
+/// tell them apart: a path that could have produced evidence and stayed
+/// silent, and a path that never could. Only the first says anything about the
+/// recipient.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum UnconfirmedReason {
+    /// The delivery window passed on a path that could have produced evidence
+    /// — the sender's mediator held the message, or the recipient is known to
+    /// send receipts — and none came.
+    WindowPassed,
+    /// No class of evidence was available on the path (VTI-TRN-064): the
+    /// message was relayed to the recipient's own mediator, which cannot
+    /// answer the sender, and the recipient is not known to send receipts.
+    /// The delivery is *unconfirmable*, which is neither delivered nor failed
+    /// (VTI-TRN-042), and it is not escalated.
+    NoEvidencePath,
+}
+
 /// A durable, transport-independent unit of delivery-critical work.
 ///
 /// The entry records **who** the message is for (`dest_did`), not which wire —
@@ -56,7 +79,11 @@ impl OutboxState {
 /// (e.g. a service backing the outbox with an on-disk keyspace). The derive is
 /// format-agnostic — a JSON store encodes `packed` as a byte array, a CBOR/
 /// bincode store compactly.
+///
+/// `#[non_exhaustive]`: build one with [`OutboxEntry::new`] and the `with_*`
+/// builders, so a field added later is not a break for every caller.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct OutboxEntry {
     /// Dedup anchor. The receiver drops a duplicate carrying the same key, which
     /// is what makes at-least-once retry safe.
@@ -99,10 +126,18 @@ pub struct OutboxEntry {
     /// Unix-ms delivery-window deadline — the acceptable recovery time. Past
     /// this without success the entry settles visibly, never a silent success.
     pub deliver_by_ms: u64,
-    /// The transport hop-id (mediator queue-id) for the accepted frame, recorded
-    /// when the entry becomes `Sent`. Used to watch this exact message drain from
-    /// the sender's outbox (§5a outbox-drain evidence). `None` until sent, or if
-    /// the transport returns no hop-id.
+    /// The transport hop-id for the accepted frame, recorded when the entry
+    /// becomes `Sent`; `None` until sent, or if the transport returns none.
+    ///
+    /// For a DIDComm send this is the identifier the **recipient's** mediator
+    /// stores the message under (`sha256` of the packed message a `forward`
+    /// carries), whichever mediator that is. Two things use it:
+    ///
+    /// - the status poll, for a [`DeliveryScope::Local`] entry, where the
+    ///   sender's mediator is the one holding it; and
+    /// - a `messaging/wake/request` to the recipient's mediator, which names
+    ///   the queued message by exactly this id (VTI-TRN-070). That holds for a
+    ///   [`DeliveryScope::Relayed`] entry too: the relay carries the same bytes.
     pub hop_id: Option<String>,
     /// Whether `hop_id` has been seen present in the transport's outbox at least
     /// once. Guards the outbox-drain check against the mediator's eventual
@@ -111,6 +146,27 @@ pub struct OutboxEntry {
     /// present. A drain is not delivery evidence (pickup and expiry look the
     /// same); see [`poll_outbox_drain`](crate::poll_outbox_drain).
     pub outbox_observed: bool,
+    /// Whether the sender's own mediator holds this message for its recipient
+    /// ([`DeliveryScope`]). Set by the caller ([`with_scope`](Self::with_scope))
+    /// or, when left `Unknown`, by the drain from
+    /// [`MessageTransport::delivery_scope`] when the entry is first sent.
+    ///
+    /// A [`DeliveryScope::Relayed`] entry is never polled for status, and with
+    /// no receipt it settles `Unconfirmed` with
+    /// [`UnconfirmedReason::NoEvidencePath`] instead of being escalated —
+    /// unless its recipient is known to send receipts
+    /// ([`ReceiptReach`](crate::ReceiptReach)).
+    ///
+    /// `#[serde(default)]` so entries persisted before this field existed load
+    /// as `Unknown`, which is polled as before.
+    ///
+    /// [`MessageTransport::delivery_scope`]: affinidi_messaging_core::MessageTransport::delivery_scope
+    #[serde(default)]
+    pub scope: DeliveryScope,
+    /// Why the entry settled `Unconfirmed`, once it has; `None` otherwise.
+    /// `#[serde(default)]` for entries persisted before it existed.
+    #[serde(default)]
+    pub unconfirmed_reason: Option<UnconfirmedReason>,
 }
 
 impl OutboxEntry {
@@ -135,7 +191,17 @@ impl OutboxEntry {
             deliver_by_ms,
             hop_id: None,
             outbox_observed: false,
+            scope: DeliveryScope::Unknown,
+            unconfirmed_reason: None,
         }
+    }
+
+    /// Builder-style: state whether the recipient shares the sender's mediator,
+    /// when the caller already knows (see [`scope`](Self::scope)). Left
+    /// `Unknown`, the drain asks the transport.
+    pub fn with_scope(mut self, scope: DeliveryScope) -> Self {
+        self.scope = scope;
+        self
     }
 
     /// Builder-style: set the ordering key (per-key FIFO drain).
@@ -373,6 +439,8 @@ mod tests {
         e.next_attempt_at_ms = 1_500;
         e.hop_id = Some("hop-abc".to_string());
         e.outbox_observed = true;
+        e.scope = DeliveryScope::Relayed;
+        e.unconfirmed_reason = Some(UnconfirmedReason::NoEvidencePath);
 
         let json = serde_json::to_vec(&e).unwrap();
         let back: OutboxEntry = serde_json::from_slice(&json).unwrap();
@@ -388,6 +456,27 @@ mod tests {
         assert_eq!(back.deliver_by_ms, 61_000);
         assert_eq!(back.hop_id.as_deref(), Some("hop-abc"));
         assert!(back.outbox_observed);
+        assert_eq!(back.scope, DeliveryScope::Relayed);
+        assert_eq!(
+            back.unconfirmed_reason,
+            Some(UnconfirmedReason::NoEvidencePath)
+        );
+    }
+
+    /// Entries on disk from before scope and reason existed load as an
+    /// unknown scope (polled as before) with no reason.
+    #[test]
+    fn an_entry_persisted_without_scope_loads_as_unknown() {
+        let mut old = serde_json::to_value(entry("k1", 1_000)).unwrap();
+        let fields = old.as_object_mut().expect("entry serialises as an object");
+        fields.remove("scope").expect("scope serialises");
+        fields
+            .remove("unconfirmed_reason")
+            .expect("unconfirmed_reason serialises");
+
+        let loaded: OutboxEntry = serde_json::from_value(old).unwrap();
+        assert_eq!(loaded.scope, DeliveryScope::Unknown);
+        assert_eq!(loaded.unconfirmed_reason, None);
     }
 
     #[tokio::test]

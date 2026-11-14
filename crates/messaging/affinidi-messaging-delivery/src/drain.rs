@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use affinidi_messaging_core::{MessageTransport, MessagingError};
+use affinidi_messaging_core::{DeliveryScope, MessageTransport, MessagingError};
 
 use crate::outbox::{OutboxError, OutboxState, OutboxStore};
 
@@ -31,6 +31,11 @@ const QUEUE_FULL_FALLBACK_MS: u64 = 30_000;
 /// is retried with backoff, and the receiver dedups on the idempotency key if
 /// the stalled attempt did arrive.
 pub const SEND_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long the drain waits for [`MessageTransport::delivery_scope`] once an
+/// entry is sent. Answering may resolve the recipient's DID document; a scope
+/// not established in time stays `Unknown`, which is polled as before.
+pub const SCOPE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Exponential backoff for the `attempts`-th failed send: 1s, 2s, 4s, … capped
 /// at 60s. `attempts == 0` is `0` (a fresh entry attempts immediately).
@@ -243,9 +248,12 @@ async fn drain_filtered(
         match sent {
             Ok(receipt) => {
                 entry.state = OutboxState::Sent;
-                // Record the hop-id so the confirmation watcher can watch this
-                // exact message drain from the sender's outbox (§5a).
+                // Record the hop-id: the status poll asks about it, and a wake
+                // request names the queued message by it.
                 entry.hop_id = receipt.hop_id;
+                if entry.scope == DeliveryScope::Unknown {
+                    entry.scope = scope_of(transport, &entry.dest_did).await;
+                }
                 store.put(entry).await?;
                 report.sent += 1;
             }
@@ -345,6 +353,21 @@ async fn drain_filtered(
     }
 
     Ok(report)
+}
+
+/// Where a message sent to `dest` is held, bounded by [`SCOPE_TIMEOUT`].
+async fn scope_of(transport: &dyn MessageTransport, dest: &str) -> DeliveryScope {
+    match tokio::time::timeout(SCOPE_TIMEOUT, transport.delivery_scope(dest)).await {
+        Ok(scope) => scope,
+        Err(_elapsed) => {
+            tracing::debug!(
+                dest,
+                "delivery scope not established within {SCOPE_TIMEOUT:?}; the entry is polled \
+                 as before"
+            );
+            DeliveryScope::Unknown
+        }
+    }
 }
 
 /// Run [`drain_once`] every `interval`, forever (until the task is dropped),
@@ -455,6 +478,8 @@ mod tests {
         /// Destination that answers with a queue-full 503, and the
         /// `Retry-After` it carries (`None` = the header is absent).
         queue_full_dest: Mutex<Option<(String, Option<u64>)>>,
+        /// What `delivery_scope` answers for every destination.
+        scope: Mutex<DeliveryScope>,
         _conn_tx: watch::Sender<ConnState>,
         conn_rx: watch::Receiver<ConnState>,
     }
@@ -467,6 +492,7 @@ mod tests {
                 sent: Mutex::new(Vec::new()),
                 dests: Mutex::new(Vec::new()),
                 queue_full_dest: Mutex::new(None),
+                scope: Mutex::new(DeliveryScope::Unknown),
                 _conn_tx: tx,
                 conn_rx: rx,
             }
@@ -530,6 +556,43 @@ mod tests {
         async fn ack(&self, _ack: InboundAck) -> Result<(), MessagingError> {
             Ok(())
         }
+        async fn delivery_scope(&self, _dest: &str) -> DeliveryScope {
+            *self.scope.lock().unwrap()
+        }
+    }
+
+    /// The drain records where a sent message is held, as the transport says,
+    /// so the status poll can leave relayed entries alone (VTI-TRN-064).
+    #[tokio::test]
+    async fn a_sent_entry_takes_its_scope_from_the_transport() {
+        let store = InMemoryOutboxStore::new();
+        store.put(queued("k1", 1_000)).await.unwrap();
+        let transport = MockTransport::new(false);
+        *transport.scope.lock().unwrap() = DeliveryScope::Relayed;
+
+        drain_once(&store, &transport, 1_000).await.unwrap();
+        let entry = store.get("k1").await.unwrap().unwrap();
+        assert_eq!(entry.state, OutboxState::Sent);
+        assert_eq!(entry.scope, DeliveryScope::Relayed);
+    }
+
+    /// A scope the caller stated is kept: the caller may know better than a
+    /// transport reading the recipient's DID document.
+    #[tokio::test]
+    async fn a_scope_the_caller_stated_is_not_overwritten() {
+        let store = InMemoryOutboxStore::new();
+        store
+            .put(queued("k1", 1_000).with_scope(DeliveryScope::Local))
+            .await
+            .unwrap();
+        let transport = MockTransport::new(false);
+        *transport.scope.lock().unwrap() = DeliveryScope::Relayed;
+
+        drain_once(&store, &transport, 1_000).await.unwrap();
+        assert_eq!(
+            store.get("k1").await.unwrap().unwrap().scope,
+            DeliveryScope::Local
+        );
     }
 
     fn queued(key: &str, now: u64) -> OutboxEntry {

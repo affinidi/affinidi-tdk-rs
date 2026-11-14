@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use affinidi_messaging_core::{
-    ConnState, Inbound, InboundAck, MessageTransport, MessagingError, OutboxStatus, Protocol,
-    ReceivedMessage, SendReceipt, TransportKind,
+    ConnState, DeliveryScope, Inbound, InboundAck, MessageTransport, MessagingError, OutboxStatus,
+    Protocol, ReceivedMessage, SendReceipt, TransportKind,
 };
 #[cfg(feature = "tsp")]
 use affinidi_messaging_core::{InboundKind, RelationshipRequest};
@@ -294,6 +294,12 @@ impl MessageTransport for DidCommTransport {
                 })
                 .collect(),
         ))
+    }
+
+    /// Read from `dest`'s DID document ([`ATM::delivery_scope`]): whether the
+    /// profile's mediator holds a message to `dest` or relays it onward.
+    async fn delivery_scope(&self, dest: &str) -> DeliveryScope {
+        self.atm.delivery_scope(&self.profile, dest).await
     }
 }
 
@@ -634,8 +640,14 @@ async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> O
         verified: true,
         encrypted: true,
     };
-    // TSP correlation is out of band, not the DIDComm `thid` demux.
-    Some(Inbound::new(received, None, InboundAck(ack)))
+    // TSP correlation is out of band, not the DIDComm `thid` demux. A receipt
+    // request is the binding envelope's `deliveryId`.
+    let delivery_id = crate::delivery::tsp_delivery_id(&received.payload);
+    let inbound = Inbound::new(received, None, InboundAck(ack));
+    Some(match delivery_id {
+        Some(delivery_id) => inbound.with_delivery_id(delivery_id),
+        None => inbound,
+    })
 }
 
 /// Release a frame the delivery layer will never ack, because it never becomes
@@ -719,11 +731,16 @@ fn to_inbound(message: Message, meta: &UnpackMetadata) -> Option<Inbound> {
         verified,
         encrypted: meta.encrypted,
     };
-    Some(Inbound::new(
+    let inbound = Inbound::new(
         received,
         message.thid.clone(),
         InboundAck(meta.sha256_hash.clone()),
-    ))
+    );
+    // A receipt request is the `delivery_id` header, never `thid`.
+    Some(match crate::delivery::didcomm_delivery_id(&message) {
+        Some(delivery_id) => inbound.with_delivery_id(delivery_id),
+        None => inbound,
+    })
 }
 
 /// The cryptographically-authenticated sender DID of an authcrypt message, or
@@ -936,6 +953,37 @@ mod tests {
         assert_eq!(inbound.ack, InboundAck("queue-id-abc".to_string()));
         // Payload is the full plaintext message JSON (parseable downstream).
         assert!(!inbound.message.payload.is_empty());
+        // No `delivery_id` header: no receipt asked for, whatever the thread.
+        assert_eq!(inbound.delivery_id, None);
+    }
+
+    /// A receipt is asked for by the `delivery_id` header (DIDComm binding 0.2
+    /// §2.1), which the delivery layer reads off the `Inbound`.
+    #[test]
+    fn a_delivery_id_header_is_surfaced_as_a_receipt_request() {
+        let message = crate::delivery::request_receipt(
+            Message::build(
+                "urn:uuid:msg-1".to_string(),
+                "https://example.org/test/1.0".to_string(),
+                json!({}),
+            )
+            .from("did:example:alice".to_string())
+            .to("did:example:bob".to_string())
+            .finalize(),
+            "dlv-1",
+        )
+        .unwrap();
+        let meta = UnpackMetadata {
+            authenticated: true,
+            encrypted: true,
+            encrypted_from_kid: Some("did:example:alice#key-1".to_string()),
+            sha256_hash: "queue-id-abc".to_string(),
+            ..Default::default()
+        };
+
+        let inbound = to_inbound(message, &meta).expect("valid message maps to Inbound");
+        assert_eq!(inbound.delivery_id.as_deref(), Some("dlv-1"));
+        assert_eq!(inbound.thread_id, None);
     }
 
     fn msg_from(from: &str) -> Message {

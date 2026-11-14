@@ -71,6 +71,46 @@ pub struct SendReceipt {
     pub hop_id: Option<String>,
 }
 
+/// Whether the sender's own mediator holds a sent message for its recipient,
+/// established when the message is sent.
+///
+/// A mediator can answer for a message only while it holds it. When sender and
+/// recipient share a mediator ([`Local`](Self::Local)), the sender's mediator
+/// keeps the message until the recipient collects it, so
+/// [`MessageTransport::outbox_status`] can report the collection. When the
+/// recipient's DID names another mediator ([`Relayed`](Self::Relayed)), the
+/// sender's mediator relays the message onward at once and can never say
+/// anything about it again, so asking it is pointless (VTI-TRN-064 item 3: a
+/// sender MUST NOT poll for evidence it has established is unavailable).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum DeliveryScope {
+    /// The recipient is an account at the sender's own mediator, which holds
+    /// the message until it is collected and can report that it was.
+    Local,
+    /// The sender's mediator relays the message to the recipient's own
+    /// mediator. No status the sender's mediator gives is evidence about it;
+    /// only a receipt from the recipient is.
+    Relayed,
+    /// Not established — the transport cannot tell, or the recipient's DID
+    /// document could not be read. Treated as [`Local`](Self::Local) by
+    /// anything that polls, which is what every sender did before this
+    /// existed.
+    #[default]
+    Unknown,
+}
+
+/// The longest delivery id the bindings allow (DIDComm binding 0.2 §2.1, TSP
+/// binding 0.2 §2.1).
+pub const MAX_DELIVERY_ID_LEN: usize = 256;
+
+/// Whether `delivery_id` is a delivery id the bindings allow: a string of 1 to
+/// [`MAX_DELIVERY_ID_LEN`] characters.
+pub fn is_valid_delivery_id(delivery_id: &str) -> bool {
+    (1..=MAX_DELIVERY_ID_LEN).contains(&delivery_id.chars().count())
+}
+
 /// An opaque, transport-scoped acknowledgement handle for exactly one
 /// [`Inbound`]. The delivery layer passes it back to [`MessageTransport::ack`]
 /// once the message is durably handed off. Its contents are transport-specific
@@ -99,6 +139,16 @@ pub struct Inbound {
     /// What this message *is* — application data, or a request about the
     /// relationship itself. See [`InboundKind`].
     pub kind: InboundKind,
+    /// The delivery id the sender stamped to ask for a delivery receipt — the
+    /// DIDComm binding's `delivery_id` header or the TSP binding envelope's
+    /// `deliveryId` — when it asked for one.
+    ///
+    /// Its presence is the request: a receiver that sends receipts sends one
+    /// only for a message that carries this, and only to the transport-
+    /// authenticated sender (VTI-TRN-061). It is never the document `id`, a
+    /// thread id or a dedup key. A transport sets it only to a value that
+    /// passes [`is_valid_delivery_id`].
+    pub delivery_id: Option<String>,
 }
 
 impl Inbound {
@@ -113,7 +163,19 @@ impl Inbound {
             thread_id,
             ack,
             kind: InboundKind::Application,
+            delivery_id: None,
         }
+    }
+
+    /// Record the delivery id the sender stamped on this message to ask for a
+    /// receipt (see [`Inbound::delivery_id`]). An id that fails
+    /// [`is_valid_delivery_id`] is ignored, so a malformed request is treated
+    /// as no request rather than echoed back. Chained onto [`Inbound::new`].
+    #[must_use]
+    pub fn with_delivery_id(mut self, delivery_id: impl Into<String>) -> Self {
+        let delivery_id = delivery_id.into();
+        self.delivery_id = is_valid_delivery_id(&delivery_id).then_some(delivery_id);
+        self
     }
 
     /// Mark what this message is. Chained onto [`Inbound::new`].
@@ -304,6 +366,22 @@ pub trait MessageTransport: Send + Sync {
     ) -> Result<Option<HashMap<String, OutboxStatus>>, MessagingError> {
         Ok(None)
     }
+
+    /// Whether a message this transport sends to `dest` stays at the sender's
+    /// own mediator or is relayed to another one (see [`DeliveryScope`]).
+    ///
+    /// The delivery layer asks once, when an entry is first hop-accepted, and
+    /// polls [`outbox_status`](Self::outbox_status) only for entries that are
+    /// not [`DeliveryScope::Relayed`]. A transport answers from the recipient's
+    /// DID document; it must not answer `Relayed` unless it established that
+    /// the recipient's mediator is not its own, because that stops the status
+    /// poll for the entry.
+    ///
+    /// The default is [`DeliveryScope::Unknown`], which keeps the poll exactly
+    /// as it was.
+    async fn delivery_scope(&self, _dest: &str) -> DeliveryScope {
+        DeliveryScope::Unknown
+    }
 }
 
 /// Where a sent message stands at the sender's mediator.
@@ -391,6 +469,51 @@ mod tests {
         let inbound = Inbound::new(a_message(), None, InboundAck("ack-1".into()));
         assert_eq!(inbound.kind, InboundKind::Application);
         assert!(!inbound.is_relationship_control());
+    }
+
+    /// A message that asks for no receipt carries no delivery id, and a
+    /// malformed one is no request at all (DIDComm / TSP binding 0.2 §2.1).
+    #[test]
+    fn a_delivery_id_is_recorded_only_when_the_bindings_allow_it() {
+        let plain = Inbound::new(a_message(), None, InboundAck("ack-1".into()));
+        assert_eq!(plain.delivery_id, None);
+
+        let asked = plain.clone().with_delivery_id("dlv_Hk3q9ZpX2mYc7RtW");
+        assert_eq!(asked.delivery_id.as_deref(), Some("dlv_Hk3q9ZpX2mYc7RtW"));
+
+        assert_eq!(plain.clone().with_delivery_id("").delivery_id, None);
+        let too_long = "x".repeat(MAX_DELIVERY_ID_LEN + 1);
+        assert_eq!(plain.clone().with_delivery_id(too_long).delivery_id, None);
+        let longest = "x".repeat(MAX_DELIVERY_ID_LEN);
+        assert_eq!(
+            plain.with_delivery_id(longest.clone()).delivery_id,
+            Some(longest)
+        );
+    }
+
+    /// A transport that says nothing about scope keeps the status poll as it
+    /// was: `Unknown`, never `Relayed`.
+    #[tokio::test]
+    async fn a_transport_that_cannot_tell_reports_an_unknown_scope() {
+        let (conn, _) = watch::channel(ConnState::Connected);
+        let transport = NoopTransport { conn };
+        assert_eq!(
+            transport.delivery_scope("did:example:bob").await,
+            DeliveryScope::Unknown
+        );
+        assert_eq!(DeliveryScope::default(), DeliveryScope::Unknown);
+    }
+
+    #[test]
+    fn delivery_scope_serialises_in_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&DeliveryScope::Relayed).unwrap(),
+            "\"relayed\""
+        );
+        assert_eq!(
+            serde_json::from_str::<DeliveryScope>("\"local\"").unwrap(),
+            DeliveryScope::Local
+        );
     }
 
     /// A relationship request carries what answering it requires.
