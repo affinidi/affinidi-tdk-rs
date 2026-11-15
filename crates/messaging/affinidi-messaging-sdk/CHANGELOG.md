@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.49.5] - 2026-11-16
+
+TSP control messages through the control core shared with `TspAgent`, and
+opt-in refusal of signed-only TSP messages (#1168)
+
+- **`TspOps::record_incoming_control` runs `affinidi_tsp::inbound_control`.**
+  The rules it applied — §7.2.5 referral verification, repeated invites, the
+  §7.2.3 race, §7.3 cancellations, duplicate accepts, §7.2.4 reply paths and
+  the crash-safe write order — now live in `affinidi-tsp`, shared with
+  `TspAgent`, and the SDK's copy is deleted. What only the SDK can do stays
+  here: learning the peer's mediator and TSP capability, and sending the §7.3
+  answer. Errors are reported as before (`MsgReceiveError` for a refusal,
+  `ConfigError` for an invalid transition, the store's own error for a store
+  failure). One rule is new to the SDK: an accept whose `Reply_Digest` names
+  an invite other than the one this endpoint recorded is refused
+  (`TspAgent` already refused it).
+- **`ThreadDigests` is now a re-export of `affinidi_tsp::inbound_control::ThreadDigests`**
+  — the same type, fields and derives; no change for callers.
+- **New `ATMConfigBuilder::with_tsp_receive_policy`.** With
+  `affinidi_tsp::ReceivePolicy::require_confidential()` every TSP receive
+  (`unpack`, `unpack_message`, `unpack_control`, the TSP mux) refuses a
+  signed-only (Rev 3 §3.5) message — control messages included, which then
+  never change relationship state — as a non-transient unpack failure. The
+  default accepts them, as before.
+- Requires `affinidi-tsp` 0.4.3.
+
 ## [0.49.4] - 2026-11-15
 
 Warn when websocket trust roots are not trusted by the REST client (AgenticSec #531)

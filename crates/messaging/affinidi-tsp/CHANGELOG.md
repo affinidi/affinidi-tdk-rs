@@ -1,5 +1,56 @@
 # Affinidi TSP Changelog
 
+## [0.4.3] - 2026-11-16
+
+One control-message path for `TspAgent` and the messaging SDK, and opt-in
+refusal of signed-only messages (#1168)
+
+- **New `inbound_control` module.** `inbound_control::apply_control` applies a
+  received relationship control message (invite, accept, cancellation) to
+  relationship state, over a `ControlStore` trait. `TspStore` implements it,
+  and the messaging SDK implements it over its `RelationshipStore`, so the two
+  endpoints now share one implementation instead of each keeping its own
+  (`TspAgent::handle_control` is gone; the SDK's copy is gone too). Also new:
+  `ThreadDigests` (moved here from the SDK, which re-exports it unchanged),
+  `AppliedControl`, `ControlContext`, `HistoryOp`, `is_duplicate_accept`.
+- **New `receive::ReceivePolicy` (re-exported at the crate root),
+  `receive::receive_with_policy` and `TspAgent::with_receive_policy`.**
+  `ReceivePolicy::require_confidential()` refuses every signed-only
+  (non-confidential, Rev 3 §3.5) message with `TspError::Discarded` after it
+  verifies and before it has any effect — a signed-only control message no
+  longer changes relationship state. The default
+  (`ReceivePolicy::accept_signed_only()`) accepts them, as before;
+  `receive::receive` is `receive_with_policy` under the default.
+- **New `TspAgent::answer_cancellation` and `TspAgent::reply_path`**, and
+  `TspStore::set_reply_path` / `TspStore::reply_path`.
+
+### Behaviour change: `TspAgent::receive` (R3.6)
+
+`TspAgent` now applies control messages with the SDK's semantics:
+
+- **§7.2.5 referrals are verified, and not applied.** An invite carrying a
+  referral is checked against the introduced VID's own signature (resolved
+  through the agent's resolver) and refused with `TspError::Discarded` when
+  the VID cannot be resolved or did not sign. A verified referral leaves the
+  relationship it arrived on unchanged — previously the agent drove
+  `ReceiveInvite` on that relationship, taking an established one back to
+  `InviteReceived`. The referral is reported in `ReceivedMessage::control`.
+- **A duplicate accept is idempotent.** A re-sent accept for a relationship
+  already `Bidirectional` returns `Ok` and changes nothing; it used to fail
+  as an invalid transition.
+- **Reply paths (§7.2.4) are recorded** — `TspAgent::reply_path` — and
+  forgotten with the relationship.
+- **The §7.3 answer can be sent.** On `ControlOutcome::ReplyToCancellation`
+  the relationship is already gone, so `send_relationship_cancel` refused to
+  answer; `answer_cancellation` packs the answer without running the state
+  machine.
+- **Key state is kept across a cancellation.** Cancelling (sending or
+  receiving) the last relationship with a peer no longer drops its key-state
+  bookkeeping, so cancelling and re-forming a relationship cannot reset a
+  refresh back-off or the silence measurement. The tracker grows with the
+  peers ever related to, as the invite history does.
+- Refusal messages inside `TspError::Discarded` are worded as the SDK's were.
+
 ## [0.4.2] - 2026-11-15
 
 One receive path for `TspAgent` and the messaging SDK (#1141)

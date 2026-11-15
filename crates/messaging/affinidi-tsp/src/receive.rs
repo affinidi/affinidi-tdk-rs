@@ -9,12 +9,11 @@
 //! synchronous resolver, every future it produces is ready at once, and
 //! [`TspAgent::receive`] completes the whole receive in a single poll.
 //!
-//! What it does not do is apply a control message to relationship state: the
-//! two endpoints keep that state in different stores with different
-//! persistence (an in-memory [`TspStore`](crate::store::TspStore), and the
-//! SDK's durable `RelationshipStore`), so each applies the
-//! [`ControlMessage`](crate::message::control::ControlMessage) it gets back
-//! here to its own store. Nor does it apply the §7.2.2 relationship gate,
+//! What it does not do is apply a control message to relationship state:
+//! that is [`inbound_control::apply_control`](crate::inbound_control::apply_control),
+//! which both endpoints run over their own stores (an in-memory
+//! [`TspStore`](crate::store::TspStore), and the SDK's durable
+//! `RelationshipStore`). Nor does it apply the §7.2.2 relationship gate,
 //! because which messages the gate covers depends on what the caller does with
 //! control and padding messages; [`Verified::admits_application_message`]
 //! answers it.
@@ -155,8 +154,82 @@ impl Verified {
     }
 }
 
+/// What a receiving endpoint refuses beyond what verification refuses, set
+/// per endpoint ([`TspAgent::with_receive_policy`](crate::TspAgent::with_receive_policy),
+/// and the messaging SDK's TSP configuration).
+///
+/// The default accepts everything that verifies, as [`receive`] always has.
+/// `#[non_exhaustive]`: build one from [`ReceivePolicy::default`] or the
+/// constructors.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ReceivePolicy {
+    /// Refuse a signed-only (non-confidential, Rev 3 §3.5) message — control
+    /// messages included — with [`TspError::Discarded`].
+    ///
+    /// §3.5 lets a sender publish a message signed but not sealed. It verifies
+    /// just as a sealed one does, so without this every consumer that relies
+    /// on confidentiality has to check
+    /// [`UnpackedMessage::confidential`] itself; with it a signed-only
+    /// message never reaches the consumer, and a signed-only control message
+    /// never changes relationship state. The refusal comes after the message
+    /// verified, and before the sender is recorded as seen.
+    pub require_confidential: bool,
+}
+
+impl ReceivePolicy {
+    /// Accept signed-only messages (the default).
+    pub const fn accept_signed_only() -> Self {
+        Self {
+            require_confidential: false,
+        }
+    }
+
+    /// Refuse signed-only messages; accept only sealed ones.
+    pub const fn require_confidential() -> Self {
+        Self {
+            require_confidential: true,
+        }
+    }
+
+    /// Refuse `unpacked` if this policy does not admit it.
+    fn check(&self, unpacked: &UnpackedMessage) -> Result<(), TspError> {
+        if self.require_confidential && !unpacked.confidential {
+            return Err(TspError::Discarded(format!(
+                "signed-only (non-confidential) {:?} message from {} refused: this endpoint \
+                 requires confidentiality",
+                unpacked.message_type, unpacked.sender
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// [`receive_with_policy`] under the default [`ReceivePolicy`], which accepts
+/// signed-only messages.
+pub async fn receive<R, S>(
+    ctx: &ReceiveContext<'_, R, S>,
+    our_vid: &str,
+    our_decryption_key: &[u8; 32],
+    wire: &[u8],
+) -> Result<Verified, TspError>
+where
+    R: AsyncVidResolver + ?Sized,
+    S: RelationshipLookup + ?Sized,
+{
+    receive_with_policy(
+        ctx,
+        &ReceivePolicy::default(),
+        our_vid,
+        our_decryption_key,
+        wire,
+    )
+    .await
+}
+
 /// Open `wire`, addressed to `our_vid`, with `our_decryption_key`, verifying it
-/// against its sender's key state kept fresh per Rev 3 §7.4.2.
+/// against its sender's key state kept fresh per Rev 3 §7.4.2, and refusing
+/// what `policy` refuses.
 ///
 /// Two occasions refresh the sender's key state, both only where this
 /// endpoint resolves key state for itself ([`KeyStatePolicy::self_resolving`])
@@ -184,8 +257,9 @@ impl Verified {
 /// outside is not, so the tracker grows with relationships rather than with
 /// senders. A caller whose control handling forms a relationship records the
 /// sender itself ([`KeyStateTracker::record_seen`]).
-pub async fn receive<R, S>(
+pub async fn receive_with_policy<R, S>(
     ctx: &ReceiveContext<'_, R, S>,
+    policy: &ReceivePolicy,
     our_vid: &str,
     our_decryption_key: &[u8; 32],
     wire: &[u8],
@@ -266,6 +340,10 @@ where
             }
         }
     };
+
+    // A message the policy refuses has no effect at all, not even on the
+    // silence measurement.
+    policy.check(&unpacked)?;
 
     if established {
         ctx.key_state.record_seen(&sender, ctx.now_ms);

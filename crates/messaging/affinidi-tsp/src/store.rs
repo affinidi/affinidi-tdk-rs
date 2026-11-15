@@ -63,6 +63,10 @@ pub struct TspStore {
     /// invite from an earlier relationship is no fresher than one from the
     /// current relationship. Key format: "{our_vid}\0{their_vid}".
     seen_invites: RwLock<HashMap<String, VecDeque<[u8; 32]>>>,
+    /// The `Reply_Path` each pair's latest invite carried (Rev 3 §7.2.4), one
+    /// per pair and no larger than the verified invite it came in. Key
+    /// format: "{our_vid}\0{their_vid}".
+    reply_paths: RwLock<HashMap<String, Vec<String>>>,
 }
 
 impl TspStore {
@@ -74,7 +78,35 @@ impl TspStore {
             thread_digests: RwLock::new(HashMap::new()),
             reply_thread_digests: RwLock::new(HashMap::new()),
             seen_invites: RwLock::new(HashMap::new()),
+            reply_paths: RwLock::new(HashMap::new()),
         }
+    }
+
+    // --- Reply paths (§7.2.4) ---
+
+    /// Record the `Reply_Path` an invite from `their_vid` carried: the route
+    /// the accept is to travel back over. An empty path (a direct reply) is
+    /// not stored.
+    pub fn set_reply_path(&self, our_vid: &str, their_vid: &str, path: Vec<String>) {
+        let key = relationship_key(our_vid, their_vid);
+        let mut paths = self.reply_paths.write().unwrap();
+        if path.is_empty() {
+            paths.remove(&key);
+        } else {
+            paths.insert(key, path);
+        }
+    }
+
+    /// The `Reply_Path` recorded for the pair; empty for a direct reply or
+    /// when none is recorded.
+    pub fn reply_path(&self, our_vid: &str, their_vid: &str) -> Vec<String> {
+        let key = relationship_key(our_vid, their_vid);
+        self.reply_paths
+            .read()
+            .unwrap()
+            .get(&key)
+            .cloned()
+            .unwrap_or_default()
     }
 
     // --- Invites already acted on ---

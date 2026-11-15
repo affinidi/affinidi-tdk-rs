@@ -41,6 +41,7 @@
 pub mod adapter;
 pub mod crypto;
 pub mod error;
+pub mod inbound_control;
 pub mod keystate;
 pub mod message;
 pub mod receive;
@@ -54,6 +55,7 @@ pub use message::MessageType;
 pub use message::direct::{Padding, pack_padding_message, pack_signed_only};
 pub use message::meta::{MetaEnvelope, TSP_MAGIC_BYTE, is_tsp};
 pub use message::routed::{MAX_HOPS, RouteStep};
+pub use receive::ReceivePolicy;
 pub use relationship::{RelationshipPolicy, RelationshipState};
 pub use vid::resolver::VidResolver;
 #[cfg(feature = "did-resolver")]
@@ -82,6 +84,7 @@ pub struct TspAgent {
     pub(crate) key_state_policy: KeyStatePolicy,
     pub(crate) key_state: KeyStateTracker,
     pub(crate) clock: Box<dyn Clock>,
+    pub(crate) receive_policy: ReceivePolicy,
 }
 
 impl TspAgent {
@@ -94,7 +97,17 @@ impl TspAgent {
             key_state_policy: KeyStatePolicy::default(),
             key_state: KeyStateTracker::new(),
             clock: Box::new(keystate::SystemClock),
+            receive_policy: ReceivePolicy::default(),
         }
+    }
+
+    /// Set what [`receive`](Self::receive) refuses beyond what verification
+    /// refuses — e.g. [`ReceivePolicy::require_confidential`] to refuse
+    /// signed-only (Rev 3 §3.5) messages, control messages included. The
+    /// default accepts them.
+    pub fn with_receive_policy(mut self, policy: ReceivePolicy) -> Self {
+        self.receive_policy = policy;
+        self
     }
 
     /// Set how this endpoint keeps a peer's key state fresh (Rev 3 §7.4.2).
@@ -135,6 +148,7 @@ impl TspAgent {
             key_state_policy: KeyStatePolicy::default(),
             key_state: KeyStateTracker::new(),
             clock: Box::new(keystate::SystemClock),
+            receive_policy: ReceivePolicy::default(),
         }
     }
 
@@ -243,9 +257,46 @@ impl TspAgent {
         self.store
             .transition_relationship(our_vid, their_vid, RelationshipEvent::SendCancel)?;
         self.store.clear_thread_digest(our_vid, their_vid);
-        self.forget_key_state_if_unrelated(their_vid);
+        self.store.set_reply_path(our_vid, their_vid, Vec::new());
 
         Ok(packed)
+    }
+
+    /// Answer a peer's cancellation (Rev 3 §7.3) with one of our own, naming
+    /// `relationship_digest` — the digest the peer's cancellation named
+    /// (`ReceivedMessage::control`'s `reply`).
+    ///
+    /// [`receive`](Self::receive) reports that one is owed with
+    /// [`ControlOutcome::ReplyToCancellation`]. By then the relationship is
+    /// already forgotten, which is why
+    /// [`send_relationship_cancel`](Self::send_relationship_cancel) cannot be
+    /// used (`SendCancel` is not a transition out of `None`): this packs the
+    /// cancellation without running the state machine. Refused while a
+    /// relationship with `their_vid` is still held.
+    pub fn answer_cancellation(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        relationship_digest: [u8; 32],
+    ) -> Result<PackedMessage, TspError> {
+        let state = self.store.relationship_state(our_vid, their_vid);
+        if state != RelationshipState::None {
+            return Err(TspError::Relationship(format!(
+                "no §7.3 answer to send: {our_vid} still holds a relationship with {their_vid} \
+                 ({state:?}); cancel it with send_relationship_cancel"
+            )));
+        }
+        self.pack_control(
+            our_vid,
+            their_vid,
+            &ControlMessage::cancel(relationship_digest),
+        )
+    }
+
+    /// The `Reply_Path` (Rev 3 §7.2.4) the invite from `their_vid` carried:
+    /// the route the accept must travel back over. Empty for a direct reply.
+    pub fn reply_path(&self, our_vid: &str, their_vid: &str) -> Vec<String> {
+        self.store.reply_path(our_vid, their_vid)
     }
 
     // --- Messaging ---
@@ -273,7 +324,19 @@ impl TspAgent {
     /// Unpack (verify + decrypt) a received message.
     ///
     /// Returns the decrypted payload along with sender/receiver metadata.
-    /// For control messages, also updates the relationship state.
+    /// For control messages, also updates the relationship state, through
+    /// the control core shared with the messaging SDK
+    /// ([`inbound_control::apply_control`]): a §7.2.5 referral is verified and
+    /// reported, not applied; a duplicate accept is a no-op; an invite's
+    /// `Reply_Path` is recorded ([`reply_path`](Self::reply_path)); a
+    /// cancellation of a bidirectional relationship reports
+    /// [`ControlOutcome::ReplyToCancellation`]
+    /// (see [`answer_cancellation`](Self::answer_cancellation)); and the
+    /// peer's key-state bookkeeping is kept across a cancellation.
+    ///
+    /// A message the [`ReceivePolicy`] refuses (with
+    /// [`with_receive_policy`](Self::with_receive_policy)) is
+    /// [`TspError::Discarded`] and changes nothing.
     ///
     /// An invite whose thread digest has already been acted on for this pair
     /// is refused with [`TspError::Discarded`] (or, re-sent while it is still
@@ -294,8 +357,9 @@ impl TspAgent {
             policy: &self.key_state_policy,
             now_ms: self.clock.now_ms(),
         };
-        let verified = receive::complete_now(receive::receive(
+        let verified = receive::complete_now(receive::receive_with_policy(
             &ctx,
+            &self.receive_policy,
             our_vid,
             &our_private.decryption_key,
             wire,
@@ -314,10 +378,8 @@ impl TspAgent {
             TspError::KeyStateUnconfirmed { reason, .. } => TspError::Discarded(reason),
             other => other,
         })?;
-        let established = verified.admits_application_message();
         let now_ms = ctx.now_ms;
         let unpacked = verified.unpacked;
-        let envelope_sender = unpacked.sender.clone();
 
         // Handle control messages
         if unpacked.message_type == MessageType::Control {
@@ -325,16 +387,26 @@ impl TspAgent {
                 .control
                 .clone()
                 .ok_or_else(|| TspError::InvalidMessage("control message has no payload".into()))?;
-            let outcome =
-                self.handle_control(our_vid, &unpacked.sender, &control, unpacked.thread_digest)?;
-            if !established
-                && self
-                    .store
-                    .relationship_state(our_vid, &envelope_sender)
-                    .admits_application_message()
-            {
-                self.key_state.record_seen(&envelope_sender, now_ms);
-            }
+            let control_ctx = inbound_control::ControlContext {
+                resolver: &resolver,
+                store: &self.store,
+                key_state: &self.key_state,
+                now_ms,
+            };
+            let applied = receive::complete_now(inbound_control::apply_control(
+                &control_ctx,
+                our_vid,
+                &unpacked.sender,
+                &control,
+            ))
+            .ok_or_else(|| {
+                TspError::InvalidMessage("synchronous control path unexpectedly pending".into())
+            })??;
+            let outcome = if applied.cancellation_answer.is_some() {
+                ControlOutcome::ReplyToCancellation
+            } else {
+                ControlOutcome::None
+            };
 
             return Ok(ReceivedMessage {
                 payload: unpacked.payload,
@@ -554,161 +626,6 @@ impl TspAgent {
     pub fn key_state_refresh_failures(&self, peer_vid: &str) -> u32 {
         self.key_state.consecutive_refresh_failures(peer_vid)
     }
-
-    /// Drop the key-state bookkeeping for `their_vid` once no local VID holds
-    /// a relationship with it.
-    fn forget_key_state_if_unrelated(&self, their_vid: &str) {
-        let related = self.store.list_private_vids().iter().any(|our_vid| {
-            self.store.relationship_state(our_vid, their_vid) != RelationshipState::None
-        });
-        if !related {
-            self.key_state.forget(their_vid);
-        }
-    }
-
-    /// Apply a received control message to the relationship FSM, correlating it
-    /// to the relationship-forming message via the thread digest.
-    ///
-    /// `thread_digest` is the `SHA256` of the received message's plaintext frame
-    /// (for an invite it is the value the accepter must echo back as `reply`).
-    fn handle_control(
-        &self,
-        our_vid: &str,
-        their_vid: &str,
-        control: &ControlMessage,
-        thread_digest: [u8; 32],
-    ) -> Result<ControlOutcome, TspError> {
-        use message::control::ControlType;
-
-        let state = self.store.relationship_state(our_vid, their_vid);
-
-        match control.control_type {
-            ControlType::RelationshipFormingInvite => {
-                // A copy of an invite already acted on. Every invite carries a
-                // fresh nonce, so a peer re-forming the relationship sends one
-                // with a new digest; a digest seen before is the same message
-                // again and is no reason to reopen the relationship. Re-sent
-                // while we are still deciding on it, it is the no-op it always
-                // was; in any other state it is refused and changes nothing.
-                if self
-                    .store
-                    .has_seen_invite(our_vid, their_vid, &thread_digest)
-                {
-                    if state == RelationshipState::InviteReceived
-                        && self.store.thread_digest(our_vid, their_vid) == Some(thread_digest)
-                    {
-                        return Ok(ControlOutcome::None);
-                    }
-                    return Err(TspError::Discarded(format!(
-                        "invite from {their_vid} was already received; a repeated copy does \
-                         not reopen the relationship"
-                    )));
-                }
-
-                // §7.2.3, the invite race. Both endpoints may invite each other
-                // for the same VID pair at once. Both keep the invite whose
-                // digest is lexicographically lower and discard the other, so
-                // the two sides converge on one exchange and one thread id
-                // rather than each believing it opened the relationship.
-                if state == RelationshipState::Pending {
-                    let ours = self.store.thread_digest(our_vid, their_vid);
-                    if let Some(ours) = ours {
-                        if ours.as_slice() < thread_digest.as_slice() {
-                            // The losing invite is settled too: a later copy of
-                            // it, arriving once the race is over, must not
-                            // reopen the relationship ours formed.
-                            self.store
-                                .record_seen_invite(our_vid, their_vid, thread_digest);
-                            return Err(TspError::Discarded(format!(
-                                "invite race with {their_vid}: ours has the lower digest, \
-                                 keeping it"
-                            )));
-                        }
-                        // Theirs wins: adopt it, replacing the invite we sent.
-                        self.store.set_relationship_state(
-                            our_vid,
-                            their_vid,
-                            RelationshipState::InviteReceived,
-                        );
-                        self.store
-                            .set_thread_digest(our_vid, their_vid, thread_digest);
-                        self.store
-                            .record_seen_invite(our_vid, their_vid, thread_digest);
-                        return Ok(ControlOutcome::None);
-                    }
-                }
-
-                self.store.transition_relationship(
-                    our_vid,
-                    their_vid,
-                    RelationshipEvent::ReceiveInvite,
-                )?;
-                // Remember the invite's digest: our accept echoes it back, and
-                // a cancellation names the relationship by it.
-                self.store
-                    .set_thread_digest(our_vid, their_vid, thread_digest);
-                self.store
-                    .record_seen_invite(our_vid, their_vid, thread_digest);
-            }
-            ControlType::RelationshipFormingAccept => {
-                // The accept's first digest is the invite it answers.
-                let reply = control.require_reply()?;
-                if let Some(expected) = self.store.thread_digest(our_vid, their_vid)
-                    && reply != &expected
-                {
-                    return Err(TspError::Discarded(format!(
-                        "accept from {their_vid} answers an invite we did not send"
-                    )));
-                }
-                self.store.transition_relationship(
-                    our_vid,
-                    their_vid,
-                    RelationshipEvent::ReceiveAccept,
-                )?;
-                // The accept's own digest identifies the other direction; a
-                // cancellation may name either half (§7.2.1).
-                self.store
-                    .set_reply_thread_digest(our_vid, their_vid, thread_digest);
-            }
-            ControlType::RelationshipCancel => {
-                // §7.3. What we do depends on what we hold:
-                //
-                //   nothing            -> ignore the cancellation entirely
-                //   one direction only -> remove it, send no reply
-                //   bidirectional      -> reply with a cancellation, then remove
-                //
-                // A cancellation naming a relationship we do not recognise is
-                // ignored rather than answered, so it cannot be used to probe
-                // which relationships we hold.
-                if state == RelationshipState::None {
-                    return Err(TspError::Discarded(format!(
-                        "cancellation from {their_vid} names no relationship we hold"
-                    )));
-                }
-                if let Some(named) = control.reply.as_ref()
-                    && !self.store.recognizes_digest(our_vid, their_vid, named)
-                {
-                    return Err(TspError::Discarded(format!(
-                        "cancellation from {their_vid} names an unrecognised relationship"
-                    )));
-                }
-
-                let reply_expected = state == RelationshipState::Bidirectional;
-                self.store.transition_relationship(
-                    our_vid,
-                    their_vid,
-                    RelationshipEvent::ReceiveCancel,
-                )?;
-                self.store.clear_thread_digest(our_vid, their_vid);
-                self.forget_key_state_if_unrelated(their_vid);
-                if reply_expected {
-                    return Ok(ControlOutcome::ReplyToCancellation);
-                }
-            }
-        }
-
-        Ok(ControlOutcome::None)
-    }
 }
 
 impl Default for TspAgent {
@@ -751,9 +668,11 @@ pub struct ReceivedMessage {
     /// Whether the message was sealed (HPKE or sealed box) rather than signed
     /// only. Rev 3 §3.5 lets a sender send a non-confidential, signed-only
     /// message; it verifies just the same, so a consumer that requires
-    /// confidentiality must check this. `receive` does not refuse a
-    /// signed-only message, and applies a signed-only control message to the
-    /// relationship state like any other.
+    /// confidentiality must check this, or refuse them all with
+    /// [`ReceivePolicy::require_confidential`]
+    /// ([`TspAgent::with_receive_policy`]). Under the default policy
+    /// `receive` does not refuse a signed-only message, and applies a
+    /// signed-only control message to the relationship state like any other.
     pub confidential: bool,
 }
 
@@ -1444,6 +1363,10 @@ mod tests {
             bob.relationship_state("did:example:bob", "did:example:alice"),
             RelationshipState::None
         );
+        // The answer the outcome asks for can be packed now.
+        let named = got.control.as_ref().and_then(|c| c.reply).unwrap();
+        bob.answer_cancellation("did:example:bob", "did:example:alice", named)
+            .unwrap();
     }
 
     /// §7.2.1: a cancellation may name either half. The accepter recognises
@@ -2054,10 +1977,12 @@ mod tests {
         ));
     }
 
-    /// Cancelling the only relationship with a peer drops its key-state
-    /// bookkeeping.
+    /// Cancelling the only relationship with a peer keeps its key-state
+    /// bookkeeping (#1168, the SDK's semantics): cancelling and re-forming a
+    /// relationship must not reset the peer's silence measurement or refresh
+    /// back-off.
     #[test]
-    fn cancelling_the_last_relationship_forgets_the_peers_key_state() {
+    fn cancelling_the_last_relationship_keeps_the_peers_key_state() {
         let (bob, _clock, _resolver, _send) = bob_after_a_silence();
         assert!(bob.key_state.silent_longer_than(
             "did:example:alice",
@@ -2067,11 +1992,252 @@ mod tests {
 
         bob.send_relationship_cancel("did:example:bob", "did:example:alice")
             .unwrap();
-        assert!(!bob.key_state.silent_longer_than(
-            "did:example:alice",
-            std::time::Duration::ZERO,
-            u64::MAX
+        assert!(
+            bob.key_state.silent_longer_than(
+                "did:example:alice",
+                std::time::Duration::ZERO,
+                u64::MAX
+            ),
+            "the bookkeeping survives the cancellation"
+        );
+    }
+
+    // ── The shared control core (#1168) ────────────────────────────────────
+
+    /// A re-sent accept for a relationship already held is a no-op, not an
+    /// invalid transition.
+    #[test]
+    fn a_duplicate_accept_is_idempotent() {
+        let (alice, bob) = two_strangers();
+        let invite = alice
+            .send_relationship_invite("did:example:alice", "did:example:bob")
+            .unwrap();
+        bob.receive("did:example:bob", &invite.bytes).unwrap();
+        let accept = bob
+            .send_relationship_accept("did:example:bob", "did:example:alice")
+            .unwrap();
+        alice.receive("did:example:alice", &accept.bytes).unwrap();
+        let again = alice
+            .receive("did:example:alice", &accept.bytes)
+            .expect("a duplicate accept is accepted as a no-op");
+        assert_eq!(again.outcome, ControlOutcome::None);
+        assert_eq!(
+            alice.relationship_state("did:example:alice", "did:example:bob"),
+            RelationshipState::Bidirectional
+        );
+    }
+
+    /// §7.2.4: the `Reply_Path` an invite carries is recorded, and forgotten
+    /// with the relationship.
+    #[test]
+    fn an_invites_reply_path_is_recorded() {
+        let (alice, bob) = two_strangers();
+        let route = vec!["did:example:hop1".to_string(), "did:example:alice".into()];
+        let packed = alice
+            .pack_control(
+                "did:example:alice",
+                "did:example:bob",
+                &ControlMessage::invite_routed(route.clone()),
+            )
+            .unwrap();
+        bob.receive("did:example:bob", &packed.bytes).unwrap();
+        assert_eq!(
+            bob.reply_path("did:example:bob", "did:example:alice"),
+            route
+        );
+
+        bob.send_relationship_cancel("did:example:bob", "did:example:alice")
+            .unwrap();
+        assert!(
+            bob.reply_path("did:example:bob", "did:example:alice")
+                .is_empty()
+        );
+    }
+
+    /// §7.3: the owed answer to a cancellation can be packed once the
+    /// relationship is gone, and the canceller ignores it rather than
+    /// answering again.
+    #[test]
+    fn a_cancellation_answer_is_packed_and_not_answered_again() {
+        let (alice, bob) = two_strangers();
+        establish(&alice, &bob);
+        let cancel = alice
+            .send_relationship_cancel("did:example:alice", "did:example:bob")
+            .unwrap();
+        let got = bob.receive("did:example:bob", &cancel.bytes).unwrap();
+        assert_eq!(got.outcome, ControlOutcome::ReplyToCancellation);
+        let named = got.control.unwrap().reply.unwrap();
+        let answer = bob
+            .answer_cancellation("did:example:bob", "did:example:alice", named)
+            .unwrap();
+        assert!(matches!(
+            alice.receive("did:example:alice", &answer.bytes),
+            Err(TspError::Discarded(_))
         ));
+
+        // Not while a relationship is held.
+        establish(&alice, &bob);
+        assert!(matches!(
+            bob.answer_cancellation("did:example:bob", "did:example:alice", named),
+            Err(TspError::Relationship(_))
+        ));
+    }
+
+    /// §7.2.5: a referral the introduced VID signed is reported and changes
+    /// nothing; one it did not sign is refused.
+    #[test]
+    fn a_referral_is_verified_and_not_applied() {
+        let (alice, bob) = two_strangers();
+        establish(&alice, &bob);
+        let new_vid = PrivateVid::generate("did:example:alice-2");
+        bob.add_verified_vid(new_vid.to_resolved());
+        let alice_private = alice.store.get_private_vid("did:example:alice").unwrap();
+        let bob_public = alice.resolver.resolve("did:example:bob").unwrap();
+
+        let control = ControlMessage::invite_referral("did:example:alice-2");
+        let signed = direct::pack_referral_invite(
+            &control,
+            "did:example:alice",
+            "did:example:bob",
+            &alice_private.signing_key,
+            &new_vid.signing_key,
+            &bob_public.encryption_key,
+        )
+        .unwrap();
+        let got = bob.receive("did:example:bob", &signed.bytes).unwrap();
+        assert_eq!(
+            got.control.unwrap().referral.unwrap().new_vid,
+            "did:example:alice-2"
+        );
+        assert_eq!(
+            bob.relationship_state("did:example:bob", "did:example:alice"),
+            RelationshipState::Bidirectional,
+            "the relationship it arrived on is not advanced"
+        );
+
+        // Signed by someone other than the introduced VID.
+        let impostor = PrivateVid::generate("did:example:alice-2");
+        let forged = direct::pack_referral_invite(
+            &control,
+            "did:example:alice",
+            "did:example:bob",
+            &alice_private.signing_key,
+            &impostor.signing_key,
+            &bob_public.encryption_key,
+        )
+        .unwrap();
+        assert!(matches!(
+            bob.receive("did:example:bob", &forged.bytes),
+            Err(TspError::Discarded(_))
+        ));
+    }
+
+    /// An accept that answers an invite this endpoint did not send is refused.
+    #[test]
+    fn an_accept_for_another_invite_is_refused() {
+        let (alice, bob) = two_strangers();
+        alice
+            .send_relationship_invite("did:example:alice", "did:example:bob")
+            .unwrap();
+        let stray = bob
+            .pack_control(
+                "did:example:bob",
+                "did:example:alice",
+                &ControlMessage::accept([7u8; 32]),
+            )
+            .unwrap();
+        assert!(matches!(
+            alice.receive("did:example:alice", &stray.bytes),
+            Err(TspError::Discarded(_))
+        ));
+        assert_eq!(
+            alice.relationship_state("did:example:alice", "did:example:bob"),
+            RelationshipState::Pending
+        );
+    }
+
+    // ── Receive policy: signed-only messages (#1168) ────────────────────────
+
+    fn signed_only(from: &TspAgent, payload: &[u8], kind: MessageType) -> Vec<u8> {
+        let key = from.store.get_private_vid("did:example:alice").unwrap();
+        pack_signed_only(
+            payload,
+            kind,
+            "did:example:alice",
+            "did:example:bob",
+            &key.signing_key,
+        )
+        .unwrap()
+        .bytes
+    }
+
+    /// The default accepts a signed-only message and reports it.
+    #[test]
+    fn by_default_a_signed_only_message_is_accepted() {
+        let (alice, bob) = two_strangers();
+        establish(&alice, &bob);
+        let wire = signed_only(&alice, b"public", MessageType::Direct);
+        let got = bob.receive("did:example:bob", &wire).unwrap();
+        assert!(!got.confidential);
+        assert_eq!(got.payload, b"public");
+    }
+
+    /// With the policy set, a signed-only application message is refused and
+    /// a sealed one is not.
+    #[test]
+    fn a_confidential_only_endpoint_refuses_signed_only_messages() {
+        let (alice, bob) = two_strangers();
+        let bob = bob.with_receive_policy(ReceivePolicy::require_confidential());
+        establish(&alice, &bob);
+        let wire = signed_only(&alice, b"public", MessageType::Direct);
+        assert!(matches!(
+            bob.receive("did:example:bob", &wire),
+            Err(TspError::Discarded(_))
+        ));
+        let sealed = alice
+            .send("did:example:alice", "did:example:bob", b"private")
+            .unwrap();
+        assert!(
+            bob.receive("did:example:bob", &sealed.bytes)
+                .unwrap()
+                .confidential
+        );
+    }
+
+    /// A signed-only control message is refused before it touches
+    /// relationship state.
+    #[test]
+    fn a_signed_only_control_message_changes_nothing_when_refused() {
+        let (alice, bob) = two_strangers();
+        let strict = bob.with_receive_policy(ReceivePolicy::require_confidential());
+        let invite = signed_only(
+            &alice,
+            &ControlMessage::invite().encode(),
+            MessageType::Control,
+        );
+        assert!(matches!(
+            strict.receive("did:example:bob", &invite),
+            Err(TspError::Discarded(_))
+        ));
+        assert_eq!(
+            strict.relationship_state("did:example:bob", "did:example:alice"),
+            RelationshipState::None,
+            "a refused invite records nothing"
+        );
+
+        // The same message is applied by an endpoint on the default policy.
+        let (alice, lenient) = two_strangers();
+        let invite = signed_only(
+            &alice,
+            &ControlMessage::invite().encode(),
+            MessageType::Control,
+        );
+        let got = lenient.receive("did:example:bob", &invite).unwrap();
+        assert!(!got.confidential);
+        assert_eq!(
+            lenient.relationship_state("did:example:bob", "did:example:alice"),
+            RelationshipState::InviteReceived
+        );
     }
 
     /// An endpoint that does not resolve key state itself takes no action of

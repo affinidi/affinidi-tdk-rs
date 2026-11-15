@@ -21,6 +21,12 @@
 //!   evidently missed the first receipt) and not handed to subscribers. A
 //!   message that reuses an id with *different* content is not a copy: it is
 //!   recorded and delivered as a message of its own, and the reuse is logged.
+//! - **A message some subscribers missed is re-offered only to them.** When a
+//!   subscriber's queue cannot take a message in time while others' did, the
+//!   subscribers that took it are recorded on the record
+//!   ([`InboxRecord::handed_to`], [`InboxStore::mark_handed_off`]); a later
+//!   copy, or [`redeliver_pending`](crate::MessagingService::redeliver_pending),
+//!   offers it only to live subscribers not listed there.
 //! - **A message buffered when the process stops is not lost.** A record stays
 //!   [`Pending`](InboxState::Pending) until a subscriber it was queued to has
 //!   taken it from its `subscribe()` stream and every other one has taken it
@@ -36,6 +42,17 @@
 //!
 //! - **a per-sender quota** on pending records and their payload bytes, so one
 //!   sender cannot starve the others ([`InboxRefusal::SenderQuota`]);
+//! - **an admission policy for unknown senders** ([`InboxAdmission`]): a
+//!   sender the service's [`SenderClassifier`] does not know — no established
+//!   relationship, not on an allow-list — gets a lower per-sender quota, and
+//!   all unknown senders together share a sub-cap of the total
+//!   ([`InboxRefusal::UnknownSenders`]). Identities are cheap (a `did:key`
+//!   costs nothing), so without it one actor spread across many senders could
+//!   fill the total bound and starve known senders until reaping freed space;
+//!   with it, unknown senders can take at most their sub-cap. A refusal leaves
+//!   the message at the mediator, so nothing is lost. Without a classifier
+//!   every sender is [`SenderClass::Known`] — the behaviour before the policy
+//!   existed;
 //! - **a total bound** ([`InboxRefusal::StoreFull`]), reached only by pending
 //!   records: a consumed record is only a dedup anchor, holds no payload
 //!   ([`InboxStore::mark_consumed`] drops it), and is evicted oldest-first to
@@ -52,7 +69,7 @@
 //! ([`MessagingService::with_inbox`](crate::MessagingService::with_inbox)),
 //! which must meet the same contract; [`conformance`] checks it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -135,6 +152,76 @@ pub enum InboxState {
     Consumed,
 }
 
+/// How the inbox admits a sender ([`InboxAdmission`]): known senders under the
+/// ordinary quotas, unknown ones under lower quotas and a shared sub-cap.
+///
+/// Decided by the service's [`SenderClassifier`] when a message is first
+/// recorded, and stored with the record so the store accounts for it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum SenderClass {
+    /// A sender this receiver knows — an established relationship, an
+    /// allow-list entry — or any sender when no classifier is installed.
+    #[default]
+    Known,
+    /// A sender this receiver has no relationship with.
+    Unknown,
+}
+
+/// Decides whether an authenticated sender is [`Known`](SenderClass::Known)
+/// to this receiver, for the inbox's admission policy
+/// ([`MessagingService::with_sender_classifier`](crate::MessagingService::with_sender_classifier)).
+///
+/// It runs on the inbound dispatcher before a new record is stored, bounded
+/// by [`CLASSIFY_TIMEOUT`]: a classifier that does not answer in time counts
+/// the sender as [`Unknown`](SenderClass::Unknown) (the stricter quota, not a
+/// refusal). Keep it to a local lookup.
+#[async_trait::async_trait]
+pub trait SenderClassifier: Send + Sync {
+    /// The class of `sender`, a transport-authenticated identifier.
+    async fn classify(&self, sender: &str) -> SenderClass;
+}
+
+/// How long the dispatcher waits for a [`SenderClassifier`] before counting the
+/// sender as [`Unknown`](SenderClass::Unknown).
+pub const CLASSIFY_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// A fixed set of known senders: each is [`Known`](SenderClass::Known), every
+/// other sender [`Unknown`](SenderClass::Unknown). Compared exactly.
+#[derive(Debug, Clone, Default)]
+pub struct AllowList {
+    senders: HashSet<String>,
+}
+
+impl AllowList {
+    /// An allow-list of `senders`.
+    pub fn new<I, S>(senders: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            senders: senders.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    /// Whether `sender` is on the list.
+    pub fn contains(&self, sender: &str) -> bool {
+        self.senders.contains(sender)
+    }
+}
+
+#[async_trait::async_trait]
+impl SenderClassifier for AllowList {
+    async fn classify(&self, sender: &str) -> SenderClass {
+        if self.contains(sender) {
+            SenderClass::Known
+        } else {
+            SenderClass::Unknown
+        }
+    }
+}
+
 /// One inbound message as the inbox records it — everything needed to hand it
 /// to a subscriber again after a restart, while it is pending.
 ///
@@ -172,7 +259,23 @@ pub struct InboxRecord {
     pub consumed_at_ms: Option<u64>,
     /// Where it is in its handoff.
     pub state: InboxState,
+    /// How the sender was admitted ([`InboxAdmission`]). Records from before
+    /// the policy existed deserialize as [`SenderClass::Known`].
+    #[serde(default)]
+    pub sender_class: SenderClass,
+    /// The subscribers (by the service's process-unique subscriber id) whose
+    /// queue took this pending record in a handoff that did not reach every
+    /// subscriber, so a re-offer skips them. At most [`MAX_HANDED_TO`] ids;
+    /// empty until a handoff is partial. An id names one `subscribe()` stream
+    /// of one process, so after a restart none matches and every subscriber
+    /// is offered the record again.
+    #[serde(default)]
+    pub handed_to: Vec<String>,
 }
+
+/// The most subscriber ids an [`InboxRecord::handed_to`] keeps. Past it the
+/// oldest is forgotten, and that subscriber may be offered the record again.
+pub const MAX_HANDED_TO: usize = 64;
 
 impl InboxRecord {
     /// A [`Pending`](InboxState::Pending), unacked record of `inbound` under
@@ -192,7 +295,15 @@ impl InboxRecord {
             acked: false,
             consumed_at_ms: None,
             state: InboxState::Pending,
+            sender_class: SenderClass::Known,
+            handed_to: Vec::new(),
         }
+    }
+
+    /// This record with its sender admitted as `class`.
+    pub fn with_sender_class(mut self, class: SenderClass) -> Self {
+        self.sender_class = class;
+        self
     }
 
     /// The [`Inbound`] a subscriber is handed for this (pending) record. Its
@@ -230,6 +341,10 @@ pub enum InboxRefusal {
     /// The store holds as many pending records, or pending payload bytes, as
     /// it may, and has no consumed record left to evict.
     StoreFull,
+    /// The sender is [`Unknown`](SenderClass::Unknown) and unknown senders
+    /// together hold as many pending records, or pending payload bytes, as
+    /// the [`InboxAdmission`] sub-cap admits. Known senders are not affected.
+    UnknownSenders,
 }
 
 /// What [`InboxStore::record`] found.
@@ -319,7 +434,10 @@ pub struct InboxReapReport {
 ///   [`Recorded::New`]` { id_reused: true }`.
 /// - **Bounded:** it refuses ([`Recorded::Refused`]) rather than grow without
 ///   limit — a per-sender quota on pending records and bytes, and a total
-///   bound, evicting the oldest consumed records before refusing.
+///   bound, evicting the oldest consumed records before refusing — and it
+///   applies a stricter quota and a shared sub-cap to records whose
+///   [`sender_class`](InboxRecord::sender_class) is
+///   [`Unknown`](SenderClass::Unknown) ([`InboxAdmission`]).
 /// - [`mark_consumed`](Self::mark_consumed) drops the stored payload.
 /// - [`reap`](Self::reap) applies [`InboxRetention`] and never removes a
 ///   pending, acked record before `acked_pending_max_age`.
@@ -343,6 +461,25 @@ pub trait InboxStore: Send + Sync {
 
     /// Every [`Pending`](InboxState::Pending) record, oldest first.
     async fn pending(&self) -> Result<Vec<InboxRecord>, InboxError>;
+
+    /// Add `subscribers` to the record's [`handed_to`](InboxRecord::handed_to)
+    /// — the subscribers whose queue took it in a handoff that missed others —
+    /// keeping at most [`MAX_HANDED_TO`] ids, the most recent. Returns whether
+    /// the store tracks it: `Ok(false)` when there is no such record, or when
+    /// the store does not track handoff.
+    ///
+    /// The default does not track it and returns `Ok(false)`: a re-offer then
+    /// goes to every subscriber that does not still hold the message in this
+    /// process, and one that already took it may get it again. Implement it
+    /// (and persist `handed_to`) to re-offer only to the subscribers that
+    /// missed it; [`conformance::check_handoff_tracking`] checks it.
+    async fn mark_handed_off(
+        &self,
+        _key: &InboxKey,
+        _subscribers: &[String],
+    ) -> Result<bool, InboxError> {
+        Ok(false)
+    }
 
     /// Apply `retention` at `now_ms` (Unix milliseconds).
     async fn reap(
@@ -381,6 +518,43 @@ impl Default for InboxLimits {
     }
 }
 
+/// The admission policy for [`Unknown`](SenderClass::Unknown) senders: a
+/// lower per-sender quota, and a sub-cap that all of them share, inside the
+/// store's [`InboxLimits`] (which still apply). Only records the service
+/// classified as unknown count against it — see
+/// [`MessagingService::with_sender_classifier`](crate::MessagingService::with_sender_classifier).
+///
+/// `#[non_exhaustive]`: start from [`InboxAdmission::default`] and set fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct InboxAdmission {
+    /// Pending records from one unknown sender
+    /// ([`InboxRefusal::SenderQuota`]).
+    pub unknown_max_pending_per_sender: usize,
+    /// Pending payload bytes from one unknown sender
+    /// ([`InboxRefusal::SenderQuota`]).
+    pub unknown_max_pending_bytes_per_sender: usize,
+    /// Pending records from all unknown senders together
+    /// ([`InboxRefusal::UnknownSenders`]).
+    pub unknown_max_pending: usize,
+    /// Pending payload bytes from all unknown senders together
+    /// ([`InboxRefusal::UnknownSenders`]).
+    pub unknown_max_pending_bytes: usize,
+}
+
+impl Default for InboxAdmission {
+    /// A tenth of the default [`InboxLimits`] for the shared sub-cap, and a
+    /// tenth of a known sender's quota per unknown sender.
+    fn default() -> Self {
+        Self {
+            unknown_max_pending_per_sender: 100,
+            unknown_max_pending_bytes_per_sender: 1024 * 1024,
+            unknown_max_pending: 10_000,
+            unknown_max_pending_bytes: 16 * 1024 * 1024,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct SenderUsage {
     pending: usize,
@@ -405,6 +579,9 @@ struct StoreState {
     /// Records per (sender, id), to notice an id reused for other content.
     ids: HashMap<(String, String), usize>,
     pending_bytes: usize,
+    /// Pending records, and their payload bytes, from unknown senders.
+    unknown_pending: usize,
+    unknown_pending_bytes: usize,
     next_seq: u64,
 }
 
@@ -424,6 +601,10 @@ impl StoreState {
                     usage.pending -= 1;
                     usage.pending_bytes -= record.payload.len();
                     self.pending_bytes -= record.payload.len();
+                    if record.sender_class == SenderClass::Unknown {
+                        self.unknown_pending -= 1;
+                        self.unknown_pending_bytes -= record.payload.len();
+                    }
                 }
                 InboxState::Consumed => {
                     if let Some(seq) = self.consumed_seq.remove(key) {
@@ -467,6 +648,7 @@ impl StoreState {
 #[derive(Debug)]
 pub struct InMemoryInboxStore {
     limits: InboxLimits,
+    admission: InboxAdmission,
     state: Mutex<StoreState>,
 }
 
@@ -486,8 +668,16 @@ impl InMemoryInboxStore {
     pub fn with_limits(limits: InboxLimits) -> Self {
         Self {
             limits,
+            admission: InboxAdmission::default(),
             state: Mutex::new(StoreState::default()),
         }
+    }
+
+    /// This store with `admission` for unknown senders in place of the
+    /// default [`InboxAdmission`].
+    pub fn with_admission(mut self, admission: InboxAdmission) -> Self {
+        self.admission = admission;
+        self
     }
 
     /// How many records it holds, of every state.
@@ -515,21 +705,46 @@ impl InMemoryInboxStore {
 impl InboxStore for InMemoryInboxStore {
     async fn record(&self, record: InboxRecord) -> Result<Recorded, InboxError> {
         let limits = self.limits;
+        let admission = self.admission;
         let mut state = self.lock()?;
         if let Some(existing) = state.records.get(&record.key) {
             return Ok(Recorded::Duplicate(existing.state));
         }
         let sender = record.key.sender.clone();
         let len = record.payload.len();
+        let unknown = record.sender_class == SenderClass::Unknown;
 
         // Pending work is bounded per sender first, so one sender cannot
-        // take the store's whole allowance from the others.
+        // take the store's whole allowance from the others — more tightly
+        // for a sender this receiver does not know.
+        let (max_pending, max_pending_bytes) = if unknown {
+            (
+                limits
+                    .max_pending_per_sender
+                    .min(admission.unknown_max_pending_per_sender),
+                limits
+                    .max_pending_bytes_per_sender
+                    .min(admission.unknown_max_pending_bytes_per_sender),
+            )
+        } else {
+            (
+                limits.max_pending_per_sender,
+                limits.max_pending_bytes_per_sender,
+            )
+        };
         let usage = state.senders.get(&sender);
         let (pending, pending_bytes) = usage.map_or((0, 0), |u| (u.pending, u.pending_bytes));
-        if pending >= limits.max_pending_per_sender
-            || pending_bytes + len > limits.max_pending_bytes_per_sender
-        {
+        if pending >= max_pending || pending_bytes.saturating_add(len) > max_pending_bytes {
             return Ok(Recorded::Refused(InboxRefusal::SenderQuota));
+        }
+        // Unknown senders together stay inside their sub-cap, so however many
+        // identities one actor uses, known senders keep the rest.
+        if unknown
+            && (state.unknown_pending >= admission.unknown_max_pending
+                || state.unknown_pending_bytes.saturating_add(len)
+                    > admission.unknown_max_pending_bytes)
+        {
+            return Ok(Recorded::Refused(InboxRefusal::UnknownSenders));
         }
         if state.pending_bytes + len > limits.max_pending_bytes {
             return Ok(Recorded::Refused(InboxRefusal::StoreFull));
@@ -556,6 +771,10 @@ impl InboxStore for InMemoryInboxStore {
         usage.pending += 1;
         usage.pending_bytes += len;
         state.pending_bytes += len;
+        if unknown {
+            state.unknown_pending += 1;
+            state.unknown_pending_bytes += len;
+        }
         let mut record = record;
         record.state = InboxState::Pending;
         state.records.insert(record.key.clone(), record);
@@ -586,10 +805,15 @@ impl InboxStore for InMemoryInboxStore {
             return Ok(true);
         }
         let len = record.payload.len();
+        let unknown = record.sender_class == SenderClass::Unknown;
         record.state = InboxState::Consumed;
         record.consumed_at_ms = Some(now_ms);
         record.payload = Vec::new();
         state.pending_bytes -= len;
+        if unknown {
+            state.unknown_pending -= 1;
+            state.unknown_pending_bytes -= len;
+        }
         let seq = state.next_seq;
         state.next_seq += 1;
         state.consumed_order.insert(seq, key.clone());
@@ -598,6 +822,27 @@ impl InboxStore for InMemoryInboxStore {
             usage.pending -= 1;
             usage.pending_bytes -= len;
             usage.consumed.insert(seq, key.clone());
+        }
+        Ok(true)
+    }
+
+    async fn mark_handed_off(
+        &self,
+        key: &InboxKey,
+        subscribers: &[String],
+    ) -> Result<bool, InboxError> {
+        let mut state = self.lock()?;
+        let Some(record) = state.records.get_mut(key) else {
+            return Ok(false);
+        };
+        for id in subscribers {
+            if !record.handed_to.contains(id) {
+                record.handed_to.push(id.clone());
+            }
+        }
+        if record.handed_to.len() > MAX_HANDED_TO {
+            let excess = record.handed_to.len() - MAX_HANDED_TO;
+            record.handed_to.drain(..excess);
         }
         Ok(true)
     }
@@ -837,6 +1082,123 @@ pub mod conformance {
         assert!(store.get(&acked.key).await.unwrap().is_none());
     }
 
+    /// `mark_handed_off` adds to a record's `handed_to` without duplicates,
+    /// keeps at most [`MAX_HANDED_TO`] (the most recent), survives in
+    /// `pending`, and finds no absent record. Not part of
+    /// [`check_inbox_store`]: a store may leave handoff untracked (the
+    /// default method).
+    pub async fn check_handoff_tracking(store: &dyn InboxStore) {
+        let r = record("did:example:h", "handed", 40);
+        store.record(r.clone()).await.unwrap();
+        assert!(
+            store
+                .mark_handed_off(&r.key, &["s1".into(), "s2".into()])
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .mark_handed_off(&r.key, &["s2".into(), "s3".into()])
+                .await
+                .unwrap()
+        );
+        let got = store.get(&r.key).await.unwrap().unwrap();
+        assert_eq!(got.handed_to, ["s1", "s2", "s3"]);
+        let pending = store.pending().await.unwrap();
+        let listed = pending.iter().find(|p| p.key == r.key).unwrap();
+        assert_eq!(listed.handed_to, ["s1", "s2", "s3"], "kept with the record");
+
+        let many: Vec<String> = (0..MAX_HANDED_TO + 5).map(|i| format!("m{i}")).collect();
+        store.mark_handed_off(&r.key, &many).await.unwrap();
+        let got = store.get(&r.key).await.unwrap().unwrap();
+        assert_eq!(got.handed_to.len(), MAX_HANDED_TO, "bounded");
+        assert_eq!(
+            got.handed_to.last(),
+            many.last(),
+            "the most recent are kept"
+        );
+
+        assert!(
+            !store
+                .mark_handed_off(
+                    &InboxKey::new("did:example:h", "absent", [0; 32]),
+                    &["s".into()]
+                )
+                .await
+                .unwrap()
+        );
+    }
+
+    /// On a store whose admission policy gives an unknown sender a pending
+    /// quota of `per_sender` records and all unknown senders together a
+    /// sub-cap of `sub_cap` records (`per_sender < sub_cap`, both well below
+    /// the store's own limits): an unknown sender is refused past its quota;
+    /// unknown senders together are refused past the sub-cap; a known sender
+    /// is still admitted; and consuming an unknown sender's record frees its
+    /// place.
+    pub async fn check_unknown_sender_admission(
+        store: &dyn InboxStore,
+        per_sender: usize,
+        sub_cap: usize,
+    ) {
+        let unknown =
+            |sender: &str, id: &str| record(sender, id, 0).with_sender_class(SenderClass::Unknown);
+        for i in 0..per_sender {
+            assert!(matches!(
+                store
+                    .record(unknown("did:key:z1", &format!("a{i}")))
+                    .await
+                    .unwrap(),
+                Recorded::New { .. }
+            ));
+        }
+        assert_eq!(
+            store.record(unknown("did:key:z1", "over")).await.unwrap(),
+            Recorded::Refused(InboxRefusal::SenderQuota),
+            "an unknown sender is held to the lower quota"
+        );
+        // Spread across many cheap identities, unknown senders fill only the
+        // sub-cap.
+        let mut admitted = per_sender;
+        let mut sender = 2;
+        let mut first_of_another = None;
+        while admitted < sub_cap {
+            let who = format!("did:key:z{sender}");
+            let r = unknown(&who, "x");
+            first_of_another.get_or_insert_with(|| r.key.clone());
+            assert!(matches!(
+                store.record(r).await.unwrap(),
+                Recorded::New { .. }
+            ));
+            admitted += 1;
+            sender += 1;
+        }
+        assert_eq!(
+            store.record(unknown("did:key:zfresh", "x")).await.unwrap(),
+            Recorded::Refused(InboxRefusal::UnknownSenders),
+            "unknown senders together are held to the sub-cap"
+        );
+        assert!(
+            matches!(
+                store
+                    .record(record("did:example:known", "k", 0))
+                    .await
+                    .unwrap(),
+                Recorded::New { .. }
+            ),
+            "a known sender is not starved by unknown ones"
+        );
+        let freed = first_of_another.expect("a second unknown sender was admitted");
+        assert!(store.mark_consumed(&freed, 1).await.unwrap());
+        assert!(
+            matches!(
+                store.record(unknown("did:key:zfresh", "x")).await.unwrap(),
+                Recorded::New { .. }
+            ),
+            "consuming an unknown sender's record frees its place"
+        );
+    }
+
     /// On a store built with a per-sender pending quota of `quota` records:
     /// one sender is refused past it, and another sender is not affected.
     pub async fn check_sender_quota(store: &dyn InboxStore, quota: usize) {
@@ -866,8 +1228,81 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn in_memory_store_applies_the_unknown_sender_admission() {
+        let admission = InboxAdmission {
+            unknown_max_pending_per_sender: 3,
+            unknown_max_pending: 10,
+            ..InboxAdmission::default()
+        };
+        let store = InMemoryInboxStore::new().with_admission(admission);
+        conformance::check_unknown_sender_admission(&store, 3, 10).await;
+    }
+
+    /// The bytes sub-cap holds too, and reaping an unknown record releases
+    /// it.
+    #[tokio::test]
+    async fn unknown_sender_bytes_are_capped_and_released() {
+        let admission = InboxAdmission {
+            unknown_max_pending_bytes: 10,
+            ..InboxAdmission::default()
+        };
+        let store = InMemoryInboxStore::new().with_admission(admission);
+        let a = conformance::record_of("did:key:za", "a", &[0; 8], 0)
+            .with_sender_class(SenderClass::Unknown);
+        assert!(matches!(
+            store.record(a.clone()).await.unwrap(),
+            Recorded::New { .. }
+        ));
+        let b = conformance::record_of("did:key:zb", "b", &[0; 8], 0)
+            .with_sender_class(SenderClass::Unknown);
+        assert_eq!(
+            store.record(b.clone()).await.unwrap(),
+            Recorded::Refused(InboxRefusal::UnknownSenders)
+        );
+        let retention = InboxRetention {
+            pending_max_age: Duration::from_millis(1),
+            ..InboxRetention::default()
+        };
+        assert_eq!(
+            store
+                .reap(1_000, &retention)
+                .await
+                .unwrap()
+                .unacked_pending_removed,
+            1
+        );
+        assert!(matches!(
+            store.record(b).await.unwrap(),
+            Recorded::New { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_allow_list_classifies_exactly() {
+        let list = AllowList::new(["did:example:friend"]);
+        assert_eq!(
+            list.classify("did:example:friend").await,
+            SenderClass::Known
+        );
+        assert_eq!(
+            list.classify("did:example:friend2").await,
+            SenderClass::Unknown
+        );
+    }
+
+    #[test]
+    fn a_record_from_before_the_policy_is_known() {
+        let r = conformance::record_of("did:example:a", "x", b"p", 1);
+        let mut json = serde_json::to_value(&r).unwrap();
+        json.as_object_mut().unwrap().remove("sender_class");
+        let back: InboxRecord = serde_json::from_value(json).unwrap();
+        assert_eq!(back.sender_class, SenderClass::Known);
+    }
+
+    #[tokio::test]
     async fn in_memory_store_conforms() {
         conformance::check_inbox_store(&InMemoryInboxStore::new()).await;
+        conformance::check_handoff_tracking(&InMemoryInboxStore::new()).await;
         let limits = InboxLimits {
             max_pending_per_sender: 5,
             ..InboxLimits::default()

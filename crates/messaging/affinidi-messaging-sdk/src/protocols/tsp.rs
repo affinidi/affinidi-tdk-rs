@@ -138,75 +138,14 @@ pub struct PeerCapability {
     pub mediator: Option<String>,
 }
 
-/// Pluggable backing store for TSP relationship state (and learned per-peer
-/// capability).
-///
-/// The relationship state machine (invite → accept → bidirectional, plus
-/// cancel) is keyed on the `(our_vid, their_vid)` DID pair. The SDK drives the
-/// pure FSM in [`affinidi_tsp::relationship::RelationshipState`] and persists
-/// each new state through this trait, so where the state lives (memory, a
-/// database, …) is up to the consumer.
-///
-/// The same store also caches each peer's learned TSP [`capability`](PeerCapability)
-/// (used by [`crate::ATM::send_to`]); the capability methods have default no-op
-/// implementations so existing stores keep compiling, and durable stores can
-/// override them to persist capability alongside relationship state.
-///
 /// The two digests that identify a relationship, one per uni-directional half
-/// (spec Rev 3 §7.2.1).
-///
-/// "Conceptually, this exchange creates two uni-directional relationships, one
-/// (from the requester) can be identified by the Digest, and the other (from
-/// the replier) can be identified by the Reply_Digest."
-///
-/// An endpoint needs both: a cancellation may name either half, and the invite
-/// race is broken by comparing our own outstanding invite's digest against the
-/// one that arrived.
-///
-/// `Serialize`/`Deserialize` so a durable [`RelationshipStore`] (e.g.
-/// [`PersistentRelationshipStore`]) can persist it — losing the digests across a
-/// restart forfeits the §7.2.3 invite-race tiebreak and §7.2.1 cancel matching.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ThreadDigests {
-    /// The digest of the invite this endpoint sent or received — the thread id
-    /// of the exchange that opened the relationship.
-    pub invite: Option<[u8; 32]>,
-    /// The digest of the accept that answered it, identifying the other half.
-    pub accept: Option<[u8; 32]>,
-}
-
-impl ThreadDigests {
-    /// Does `digest` name either half of this relationship?
-    ///
-    /// True when nothing is recorded: an endpoint that has not kept the digests
-    /// cannot contradict one, and refusing every cancellation would be worse
-    /// than accepting one it cannot check.
-    pub fn recognizes(&self, digest: &[u8; 32]) -> bool {
-        match (self.invite, self.accept) {
-            (None, None) => true,
-            (a, b) => [a, b].into_iter().flatten().any(|d| &d == digest),
-        }
-    }
-}
-
-/// Is an inbound accept a repeat for a relationship we already hold?
-///
-/// Only from `Bidirectional`, and only when the accept belongs to this
-/// relationship: it echoes the invite we recorded (`reply`, the accept's
-/// `Digest`) or is the accept we recorded (`digest`, its own SAID). A store
-/// with no digests recognises any, as [`ThreadDigests::recognizes`] does.
-fn is_duplicate_accept(
-    prior: RelationshipState,
-    digests: &ThreadDigests,
-    reply: Option<[u8; 32]>,
-    digest: Option<[u8; 32]>,
-) -> bool {
-    prior == RelationshipState::Bidirectional
-        && [reply, digest]
-            .into_iter()
-            .flatten()
-            .any(|d| digests.recognizes(&d))
-}
+/// (spec Rev 3 §7.2.1). Defined in `affinidi-tsp`, whose control core
+/// ([`affinidi_tsp::inbound_control`]) reads and writes it through the
+/// [`RelationshipStore`]; re-exported here unchanged.
+pub use affinidi_tsp::inbound_control::ThreadDigests;
+#[cfg(test)]
+use affinidi_tsp::inbound_control::is_duplicate_accept;
+use affinidi_tsp::inbound_control::{ControlContext, ControlStore, HistoryOp, apply_control};
 
 /// How many received invites a store remembers per `(our_vid, their_vid)`
 /// pair (see [`RelationshipStore::record_seen_invite`]).
@@ -234,70 +173,20 @@ fn remember_invite(seen: &mut InviteHistory, digest: [u8; 32]) {
     seen.push(digest);
 }
 
-/// Is an inbound invite one this endpoint has already acted on?
+/// Pluggable backing store for TSP relationship state (and learned per-peer
+/// capability).
 ///
-/// A signed invite verifies for as long as the sender's key does, so a second
-/// copy of one — re-delivered by a relay, or re-sent by anyone holding the
-/// bytes — is not a reason to reopen a relationship. Every invite carries a
-/// fresh nonce, so a peer re-forming the relationship sends one with a new
-/// digest.
+/// The relationship state machine (invite → accept → bidirectional, plus
+/// cancel) is keyed on the `(our_vid, their_vid)` DID pair. The SDK drives the
+/// pure FSM in [`affinidi_tsp::relationship::RelationshipState`] and persists
+/// each new state through this trait, so where the state lives (memory, a
+/// database, …) is up to the consumer.
 ///
-/// Two sources answer it. The invite the relationship currently records
-/// ([`ThreadDigests::invite`]) needs nothing from the store beyond what it
-/// already keeps; it counts once the relationship is `Bidirectional`. (A copy
-/// of the invite still being decided on, in `InviteReceived`, is handled by
-/// the caller before this is asked.) Earlier invites — from before a
-/// re-formation or a cancellation, or the losing side of a §7.2.3 race — come
-/// from the store's history ([`RelationshipStore::has_seen_invite`]).
+/// The same store also caches each peer's learned TSP [`capability`](PeerCapability)
+/// (used by [`crate::ATM::send_to`]); the capability methods have default no-op
+/// implementations so existing stores keep compiling, and durable stores can
+/// override them to persist capability alongside relationship state.
 ///
-/// A store that cannot answer is logged and the invite treated as new: the
-/// worst that does is ask the application about an invite again, where
-/// refusing would drop a genuine one.
-async fn is_repeated_invite(
-    store: &Arc<dyn RelationshipStore>,
-    our_vid: &str,
-    their_vid: &str,
-    prior: RelationshipState,
-    digests: &ThreadDigests,
-    digest: &[u8; 32],
-) -> bool {
-    if digests.invite.as_ref() == Some(digest) {
-        return prior == RelationshipState::Bidirectional;
-    }
-    match store.has_seen_invite(our_vid, their_vid, digest).await {
-        Ok(seen) => seen,
-        Err(e) => {
-            tracing::warn!(
-                peer = %their_vid,
-                error = %e,
-                "could not read the history of TSP invites already received; treating this \
-                 invite as new",
-            );
-            false
-        }
-    }
-}
-
-/// Add an invite to the store's history, logging rather than returning a
-/// failure. By the time this runs the invite has been acted on (or refused),
-/// so failing the receive over it would only lose the message; the cost of
-/// the missing entry is that a later copy of this invite is not refused.
-async fn record_seen_invite_logged(
-    store: &Arc<dyn RelationshipStore>,
-    our_vid: &str,
-    their_vid: &str,
-    digest: [u8; 32],
-) {
-    if let Err(e) = store.record_seen_invite(our_vid, their_vid, digest).await {
-        tracing::warn!(
-            peer = %their_vid,
-            error = %e,
-            "could not record a received TSP invite in the store's history; a later copy of it \
-             will not be recognised",
-        );
-    }
-}
-
 /// The default implementation is [`InMemoryRelationshipStore`]; supply a
 /// durable one via
 /// [`crate::config::ATMConfigBuilder::with_relationship_store`].
@@ -1208,13 +1097,12 @@ async fn next_state(
 
 /// Apply a relationship `event` to the state currently held for the
 /// `(our_vid, their_vid)` pair in `store`, persist the new state, and return
-/// it. Used by [`TspOps::record_incoming_control`] for inbound (`Receive*`)
-/// events, where there is no outbound send to gate the persist on.
+/// it.
 ///
-/// Unit-tested directly (see this module's tests) against an
-/// [`InMemoryRelationshipStore`]; the wire `send_control` path the outbound
-/// public methods add on top requires a live mediator and is covered by the
-/// end-to-end test in `affinidi-messaging-test-mediator`.
+/// Inbound control messages are applied by the shared control core
+/// ([`affinidi_tsp::inbound_control::apply_control`]); this remains for the
+/// store-contract tests in this module.
+#[cfg(test)]
 async fn advance_state(
     store: &Arc<dyn RelationshipStore>,
     our_vid: &str,
@@ -2778,237 +2666,49 @@ impl TspOps<'_> {
         control: &ControlMessage,
     ) -> Result<IncomingControl, ATMError> {
         let (our_did, _) = profile.dids()?;
-        let event = match control.control_type {
-            ControlType::RelationshipFormingInvite => RelationshipEvent::ReceiveInvite,
-            ControlType::RelationshipFormingAccept => RelationshipEvent::ReceiveAccept,
-            ControlType::RelationshipCancel => RelationshipEvent::ReceiveCancel,
-        };
-
-        // §7.2.5: an invite may introduce a new VID, carrying that VID's own
-        // signature. Check it before anything else. Unverified, the referral is
-        // only a claim that the sender *wishes* to introduce the VID — it says
-        // nothing about whether that VID's controller agreed — and acting on
-        // one is how an endpoint gets talked into a relationship with an
-        // identifier nobody vouched for.
-        //
-        // The check needs the introduced VID's key, which means resolving it;
-        // that is why `affinidi-tsp` cannot do this itself and leaves it here.
-        if let Some(referral) = control.referral.as_ref() {
-            let introduced = self.resolve_vid(&referral.new_vid).await.map_err(|e| {
-                ATMError::MsgReceiveError(format!(
-                    "TSP referral from {peer_did} discarded: could not resolve the introduced \
-                     VID {}: {e}",
-                    referral.new_vid
-                ))
-            })?;
-            affinidi_tsp::message::direct::verify_referral(
-                // The SDK packs referrals under HPKE-Base, so that is the
-                // digest algorithm the signature covers.
-                affinidi_tsp::message::direct::PkaeScheme::HpkeBase,
-                control,
-                peer_did,
-                &introduced.signing_key,
-            )
-            .map_err(|e| {
-                ATMError::MsgReceiveError(format!(
-                    "TSP referral from {peer_did} discarded: {} did not sign the introduction: {e}",
-                    referral.new_vid
-                ))
-            })?;
-        }
-
         let store = self.relationship_store();
-        let prior = store.get(our_did, peer_did).await?;
-
-        // A referral invite advances nothing here, and cannot.
-        //
-        // §7.2.5 has it arrive on one relationship while proposing another: the
-        // pair it forms is our *new* VID and the introduced one, and we have not
-        // chosen our new VID yet at this point — that is the decision the
-        // introduction asks us to make. Advancing the relationship it arrived on
-        // would be wrong twice over: that relationship is not the one being
-        // formed, and it is already established, so there is no invite for it to
-        // receive.
-        //
-        // So the introduction is recorded when it is acted on, by
-        // `accept_parallel_relationship`, which is the first moment both
-        // identities exist. Here it is only verified and reported.
-        if control.referral.is_some() {
-            return Ok(IncomingControl {
-                state: prior,
-                reply_expected: false,
-                reply_path: control.route.clone(),
-            });
-        }
-
-        let mut digests = store.thread_digests(our_did, peer_did).await?;
-
-        if control.control_type == ControlType::RelationshipFormingInvite
-            && let Some(digest) = control.digest
-        {
-            // A copy of the invite we are still deciding on. Nothing to apply:
-            // report the state we read and leave the state machine alone. Not
-            // driving `ReceiveInvite` matters — an accept of this invite may
-            // land between our read and a transition, and the transition would
-            // then read `Bidirectional` and reopen what the accept just
-            // formed. Re-recording the reply path and the history completes a
-            // first copy that was interrupted part way.
-            if prior == RelationshipState::InviteReceived && digests.invite == Some(digest) {
-                store
-                    .set_reply_path(our_did, peer_did, control.route.clone())
-                    .await?;
-                record_seen_invite_logged(store, our_did, peer_did, digest).await;
-                return Ok(IncomingControl {
-                    state: prior,
-                    reply_expected: false,
-                    reply_path: control.route.clone(),
-                });
+        // The rules — §7.2.5 referral verification, repeated invites, the
+        // §7.2.3 race, §7.3 cancellations, duplicate accepts, §7.2.4 reply
+        // paths and the crash-safe write order — are the control core shared
+        // with `affinidi_tsp::TspAgent`. What is left here is what only the
+        // SDK can do: learn the peer's mediator and capability, and send the
+        // §7.3 answer.
+        let sources = ControlSources {
+            ops: self,
+            store,
+            failure: std::sync::Mutex::new(None),
+        };
+        let ctx = ControlContext {
+            resolver: &sources,
+            store: &sources,
+            key_state: &self.atm.inner.tsp_key_state,
+            now_ms: self.atm.inner.config.clock().unix_millis() as u64,
+        };
+        let applied = match apply_control(&ctx, our_did, peer_did, control).await {
+            Ok(applied) => applied,
+            // A store failure is reported as the SDK error it was.
+            Err(e) => {
+                return Err(sources
+                    .take_failure()
+                    .unwrap_or_else(|| control_error(peer_did, e)));
             }
-
-            // A copy of an invite already acted on for this pair. It verifies
-            // as well as the first time, but a peer re-forming the relationship
-            // sends a new invite with a new nonce and so a new digest; the
-            // same digest again is the same message again and is no reason to
-            // reopen the relationship. Refused, and nothing changes.
-            if is_repeated_invite(store, our_did, peer_did, prior, &digests, &digest).await {
+        };
+        if !applied.transitioned {
+            if applied.state == applied.prior
+                && control.control_type == ControlType::RelationshipFormingAccept
+            {
                 tracing::debug!(
                     peer = %peer_did,
-                    state = ?prior,
-                    "repeated TSP invite for an invite already acted on; discarded",
+                    "duplicate TSP accept for a relationship already held; ignored",
                 );
-                return Err(ATMError::MsgReceiveError(format!(
-                    "TSP invite from {peer_did} discarded: it was already received, and a \
-                     repeated copy does not reopen the relationship"
-                )));
             }
-        }
-
-        // Rev 3 §7.2.3, the invite race. Both endpoints may invite each other
-        // for the same VID pair at once. Both keep the invite whose digest is
-        // lexicographically lower and discard the other, so the two sides
-        // converge on one exchange and one thread id instead of each believing
-        // it opened the relationship.
-        if control.control_type == ControlType::RelationshipFormingInvite
-            && prior == RelationshipState::Pending
-            && let (Some(ours), Some(theirs)) = (digests.invite, control.digest)
-        {
-            if ours.as_slice() < theirs.as_slice() {
-                // The losing invite is settled too: a copy of it arriving once
-                // the race is over must not reopen the relationship ours forms.
-                record_seen_invite_logged(store, our_did, peer_did, theirs).await;
-                return Err(ATMError::MsgReceiveError(format!(
-                    "TSP invite from {peer_did} discarded: our own invite has the lower digest"
-                )));
-            }
-            // Theirs wins: adopt it in place of the invite we sent.
-            store
-                .set(our_did, peer_did, RelationshipState::InviteReceived)
-                .await?;
-            store
-                .set_thread_digests(
-                    our_did,
-                    peer_did,
-                    ThreadDigests {
-                        invite: Some(theirs),
-                        accept: None,
-                    },
-                )
-                .await?;
-            store
-                .set_reply_path(our_did, peer_did, control.route.clone())
-                .await?;
-            record_seen_invite_logged(store, our_did, peer_did, theirs).await;
             return Ok(IncomingControl {
-                state: RelationshipState::InviteReceived,
+                state: applied.state,
                 reply_expected: false,
-                reply_path: control.route.clone(),
+                reply_path: applied.reply_path,
             });
         }
 
-        // Rev 3 §7.3 gives a cancellation three cases, distinguished by what we
-        // hold. One naming a relationship we do not hold at all — or naming a
-        // digest that is not either half of the one we do hold — is ignored
-        // rather than answered, so it cannot be used to probe which
-        // relationships exist. The other two — forget it, or answer and forget
-        // it — are handled below.
-        if control.control_type == ControlType::RelationshipCancel {
-            if prior == RelationshipState::None {
-                return Err(ATMError::MsgReceiveError(format!(
-                    "TSP cancellation from {peer_did} discarded: no relationship with {our_did}"
-                )));
-            }
-            if let Some(named) = control.reply.as_ref()
-                && !digests.recognizes(named)
-            {
-                return Err(ATMError::MsgReceiveError(format!(
-                    "TSP cancellation from {peer_did} discarded: names an unrecognised relationship"
-                )));
-            }
-        }
-
-        // A second accept for a relationship already complete: the peer re-sent
-        // it, or a relay delivered it twice. Idempotent, as a re-sent invite is
-        // in `InviteReceived`. It changes nothing, so report the state as it
-        // stands and keep the first accept's digest. An accept that answers
-        // some other invite still falls through and is refused.
-        if control.control_type == ControlType::RelationshipFormingAccept
-            && is_duplicate_accept(prior, &digests, control.reply, control.digest)
-        {
-            tracing::debug!(
-                peer = %peer_did,
-                "duplicate TSP accept for a relationship already held; ignored",
-            );
-            return Ok(IncomingControl {
-                state: prior,
-                reply_expected: false,
-                reply_path: Vec::new(),
-            });
-        }
-
-        // What the relationship was known by, for the §7.3 answer below — the
-        // record is cleared before it is sent.
-        let cancelled_digest = digests.invite.or(digests.accept);
-        let new_state = advance_state(store, our_did, peer_did, event).await?;
-        // The shared receive path measures silence only inside a relationship,
-        // so a control message that just formed one starts the measurement
-        // here (as `TspAgent::receive` does).
-        if !prior.admits_application_message() && new_state.admits_application_message() {
-            self.atm
-                .inner
-                .tsp_key_state
-                .record_seen(peer_did, self.atm.inner.config.clock().unix_millis() as u64);
-        }
-
-        // Record the digests as the handshake produces them: the invite's
-        // identifies this direction, the accept's the other (§7.2.1).
-        match control.control_type {
-            ControlType::RelationshipFormingInvite => {
-                digests.invite = control.digest;
-                store.set_thread_digests(our_did, peer_did, digests).await?;
-                // §7.2.4: the accept MUST travel back over the path the invite
-                // supplied, so it is kept rather than left to the caller to
-                // notice — a responder that forgets it silently goes direct.
-                store
-                    .set_reply_path(our_did, peer_did, control.route.clone())
-                    .await?;
-                // Last, once the invite is fully recorded: if the process stops
-                // before this, a redelivered copy finds the invite as the one
-                // being decided on and is recorded again, not refused.
-                if let Some(digest) = control.digest {
-                    record_seen_invite_logged(store, our_did, peer_did, digest).await;
-                }
-            }
-            ControlType::RelationshipFormingAccept => {
-                digests.accept = control.digest;
-                store.set_thread_digests(our_did, peer_did, digests).await?;
-            }
-            ControlType::RelationshipCancel => {
-                store
-                    .set_thread_digests(our_did, peer_did, ThreadDigests::default())
-                    .await?;
-                store.set_reply_path(our_did, peer_did, Vec::new()).await?;
-            }
-        }
         // If the peer advertised its mediator in the control's route (a routed
         // invite/accept), cache it so `send_to` can route to this peer on a
         // different mediator. Learned once during the handshake; no-op under
@@ -3021,7 +2721,7 @@ impl TspOps<'_> {
         }
         // The initiator reaches Bidirectional here (on receiving the accept) —
         // confirm the peer's TSP capability.
-        if new_state == RelationshipState::Bidirectional {
+        if applied.state == RelationshipState::Bidirectional {
             self.learn_tsp_supported(our_did, peer_did, CapabilitySource::Relationship)
                 .await?;
         }
@@ -3034,45 +2734,26 @@ impl TspOps<'_> {
         // `None`). Every consumer that was left to answer it got that error and
         // the peer was never answered (Keyring VTI-38).
         //
-        // It names the relationship the peer's cancellation named, so both
-        // sides agree which one was torn down. A send that fails does not undo
-        // the recording — the relationship is gone either way — and is reported
-        // through `reply_expected` so the caller can retry.
+        // A send that fails does not undo the recording — the relationship is
+        // gone either way — and is reported through `reply_expected` so the
+        // caller can retry.
         let mut reply_expected = false;
-        if control.control_type == ControlType::RelationshipCancel
-            && prior == RelationshipState::Bidirectional
+        if let Some(named) = applied.cancellation_answer
+            && let Err(e) = self.answer_cancellation(profile, peer_did, named).await
         {
-            let named = control.reply.or(cancelled_digest);
-            match named {
-                Some(named) => {
-                    if let Err(e) = self.answer_cancellation(profile, peer_did, named).await {
-                        tracing::warn!(
-                            peer = %peer_did,
-                            error = %e,
-                            "could not send the TSP §7.3 answer to a cancellation; the \
-                             relationship is forgotten regardless",
-                        );
-                        reply_expected = true;
-                    }
-                }
-                // Unreachable for a decoded cancellation — `reply` is its one
-                // required field — but a relationship with no digest on either
-                // side leaves nothing to name, so there is nothing to answer.
-                None => tracing::warn!(
-                    peer = %peer_did,
-                    "TSP cancellation named no relationship and none was recorded; no §7.3 \
-                     answer sent",
-                ),
-            }
+            tracing::warn!(
+                peer = %peer_did,
+                error = %e,
+                "could not send the TSP §7.3 answer to a cancellation; the relationship is \
+                 forgotten regardless",
+            );
+            reply_expected = true;
         }
 
         Ok(IncomingControl {
-            state: new_state,
+            state: applied.state,
             reply_expected,
-            reply_path: match control.control_type {
-                ControlType::RelationshipFormingInvite => control.route.clone(),
-                _ => Vec::new(),
-            },
+            reply_path: applied.reply_path,
         })
     }
 
@@ -3793,6 +3474,12 @@ impl TspOps<'_> {
     /// until the sender's key state is confirmed by a refresh that succeeded;
     /// the per-peer rate limit bounds how often that is attempted, and a
     /// failed refresh backs the next one off.
+    ///
+    /// A message the configured receive policy refuses
+    /// ([`with_tsp_receive_policy`](crate::config::ATMConfigBuilder::with_tsp_receive_policy):
+    /// a signed-only message, under
+    /// [`ReceivePolicy::require_confidential`](affinidi_tsp::ReceivePolicy::require_confidential))
+    /// is refused here, before any control message in it is applied.
     pub(crate) async fn receive_verified(
         &self,
         profile_did: &str,
@@ -3800,6 +3487,7 @@ impl TspOps<'_> {
     ) -> Result<affinidi_tsp::receive::Verified, ATMError> {
         let (_signing_key, decryption_key) = self.profile_tsp_keys(profile_did).await?;
         let policy = self.atm.inner.config.tsp_key_state_policy();
+        let receive_policy = self.atm.inner.config.tsp_receive_policy();
         let sources = ReceiveSources {
             ops: self,
             failure: std::sync::Mutex::new(None),
@@ -3811,7 +3499,15 @@ impl TspOps<'_> {
             policy: &policy,
             now_ms: self.atm.inner.config.clock().unix_millis() as u64,
         };
-        match affinidi_tsp::receive::receive(&ctx, profile_did, &decryption_key, qb2).await {
+        match affinidi_tsp::receive::receive_with_policy(
+            &ctx,
+            &receive_policy,
+            profile_did,
+            &decryption_key,
+            qb2,
+        )
+        .await
+        {
             Ok(verified) => Ok(verified),
             // A resolver or store failure is reported as the SDK error it was,
             // not as an unpack failure.
@@ -3962,6 +3658,182 @@ impl affinidi_tsp::receive::RelationshipLookup for ReceiveSources<'_, '_> {
             .get(our_vid, their_vid)
             .await
             .map_err(|e| self.keep(e))
+    }
+}
+
+/// The [`ATMError`] for a control message the shared control core refused.
+///
+/// A protocol refusal ([`TspError::Discarded`](affinidi_tsp::TspError::Discarded))
+/// is a [`ATMError::MsgReceiveError`] naming the rule, as before; an invalid
+/// state transition is the [`ATMError::ConfigError`] the SDK always reported.
+fn control_error(peer_did: &str, e: affinidi_tsp::TspError) -> ATMError {
+    match e {
+        affinidi_tsp::TspError::Discarded(reason) => {
+            ATMError::MsgReceiveError(format!("TSP {reason}"))
+        }
+        affinidi_tsp::TspError::Relationship(reason) => ATMError::ConfigError(reason),
+        other => ATMError::MsgReceiveError(format!(
+            "TSP control message from {peer_did} refused: {other}"
+        )),
+    }
+}
+
+/// The SDK's resolver and relationship store, as the shared control core
+/// ([`affinidi_tsp::inbound_control`]) reads and writes them.
+///
+/// A store failure is kept as the [`ATMError`] it was and reported as that.
+/// A resolution failure (of a §7.2.5 referral's introduced VID) is not: the
+/// core turns it into the refusal of the referral.
+struct ControlSources<'a, 'b> {
+    ops: &'a TspOps<'b>,
+    store: &'a Arc<dyn RelationshipStore>,
+    failure: std::sync::Mutex<Option<ATMError>>,
+}
+
+impl ControlSources<'_, '_> {
+    fn keep(&self, e: ATMError) -> affinidi_tsp::TspError {
+        let message = e.to_string();
+        let mut failure = self
+            .failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if failure.is_none() {
+            *failure = Some(e);
+        }
+        affinidi_tsp::TspError::Store(message)
+    }
+
+    fn take_failure(&self) -> Option<ATMError> {
+        self.failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+}
+
+impl affinidi_tsp::receive::AsyncVidResolver for ControlSources<'_, '_> {
+    async fn resolve(
+        &self,
+        vid: &str,
+    ) -> Result<affinidi_tsp::ResolvedVid, affinidi_tsp::TspError> {
+        self.ops
+            .resolve_vid(vid)
+            .await
+            .map_err(|e| affinidi_tsp::TspError::DidResolution(e.to_string()))
+    }
+
+    async fn refresh(
+        &self,
+        vid: &str,
+    ) -> Result<affinidi_tsp::ResolvedVid, affinidi_tsp::TspError> {
+        self.ops
+            .refresh_vid(vid)
+            .await
+            .map_err(|e| affinidi_tsp::TspError::DidResolution(e.to_string()))
+    }
+}
+
+impl ControlStore for ControlSources<'_, '_> {
+    async fn state(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+    ) -> Result<RelationshipState, affinidi_tsp::TspError> {
+        self.store
+            .get(our_vid, their_vid)
+            .await
+            .map_err(|e| self.keep(e))
+    }
+
+    async fn set_state(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        state: RelationshipState,
+    ) -> Result<(), affinidi_tsp::TspError> {
+        self.store
+            .set(our_vid, their_vid, state)
+            .await
+            .map_err(|e| self.keep(e))
+    }
+
+    async fn thread_digests(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+    ) -> Result<ThreadDigests, affinidi_tsp::TspError> {
+        self.store
+            .thread_digests(our_vid, their_vid)
+            .await
+            .map_err(|e| self.keep(e))
+    }
+
+    async fn set_thread_digests(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        digests: ThreadDigests,
+    ) -> Result<(), affinidi_tsp::TspError> {
+        self.store
+            .set_thread_digests(our_vid, their_vid, digests)
+            .await
+            .map_err(|e| self.keep(e))
+    }
+
+    async fn set_reply_path(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        path: Vec<String>,
+    ) -> Result<(), affinidi_tsp::TspError> {
+        self.store
+            .set_reply_path(our_vid, their_vid, path)
+            .await
+            .map_err(|e| self.keep(e))
+    }
+
+    // The history is best-effort: the core reports its failures through
+    // `history_unavailable` and carries on, so they are not kept as the
+    // receive's error.
+    async fn has_seen_invite(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        digest: &[u8; 32],
+    ) -> Result<bool, affinidi_tsp::TspError> {
+        self.store
+            .has_seen_invite(our_vid, their_vid, digest)
+            .await
+            .map_err(|e| affinidi_tsp::TspError::Store(e.to_string()))
+    }
+
+    async fn record_seen_invite(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+        digest: [u8; 32],
+    ) -> Result<(), affinidi_tsp::TspError> {
+        self.store
+            .record_seen_invite(our_vid, their_vid, digest)
+            .await
+            .map_err(|e| affinidi_tsp::TspError::Store(e.to_string()))
+    }
+
+    fn history_unavailable(&self, their_vid: &str, op: HistoryOp, error: &affinidi_tsp::TspError) {
+        match op {
+            HistoryOp::Read => tracing::warn!(
+                peer = %their_vid,
+                error = %error,
+                "could not read the history of TSP invites already received; treating this \
+                 invite as new",
+            ),
+            _ => tracing::warn!(
+                peer = %their_vid,
+                error = %error,
+                "could not record a received TSP invite in the store's history; a later copy of \
+                 it will not be recognised",
+            ),
+        }
     }
 }
 
@@ -5824,6 +5696,53 @@ mod repeated_invite_tests {
 
     fn is_discarded(result: &Result<RelationshipState, ATMError>) -> bool {
         matches!(result, Err(ATMError::MsgReceiveError(msg)) if msg.contains("already received"))
+    }
+
+    /// The control core shared with `TspAgent` (#1168): an accept that
+    /// answers an invite this endpoint did not send is refused.
+    #[tokio::test]
+    async fn an_accept_for_an_invite_we_did_not_send_is_refused() {
+        let bob = Endpoint::in_memory().await;
+        bob.store
+            .set(BOB, ALICE, RelationshipState::Pending)
+            .await
+            .unwrap();
+        bob.store
+            .set_thread_digests(
+                BOB,
+                ALICE,
+                ThreadDigests {
+                    invite: Some([1; 32]),
+                    accept: None,
+                },
+            )
+            .await
+            .unwrap();
+        let stray = bob.receive(&accept([9; 32], [2; 32])).await;
+        assert!(
+            matches!(&stray, Err(ATMError::MsgReceiveError(msg)) if msg.contains("did not send")),
+            "{stray:?}"
+        );
+        assert_eq!(bob.state().await, RelationshipState::Pending);
+
+        // The accept that answers our invite forms it, and a copy of it is a
+        // no-op.
+        let formed = bob.receive(&accept([9; 32], [1; 32])).await.unwrap();
+        assert_eq!(formed, RelationshipState::Bidirectional);
+        assert_eq!(bob.digests().await.accept, Some([9; 32]));
+        let again = bob.receive(&accept([9; 32], [1; 32])).await.unwrap();
+        assert_eq!(again, RelationshipState::Bidirectional);
+    }
+
+    /// An invalid transition is still the `ConfigError` the SDK reported.
+    #[tokio::test]
+    async fn an_accept_with_no_invite_outstanding_is_an_invalid_transition() {
+        let bob = Endpoint::in_memory().await;
+        let result = bob.receive(&accept([9; 32], [1; 32])).await;
+        assert!(
+            matches!(&result, Err(ATMError::ConfigError(msg)) if msg.contains("invalid relationship transition")),
+            "{result:?}"
+        );
     }
 
     #[tokio::test]

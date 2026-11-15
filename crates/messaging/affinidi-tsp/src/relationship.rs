@@ -21,9 +21,11 @@
 //! the peer's half. A re-sent RFI while `InviteReceived` is idempotent.
 //!
 //! The FSM sees events, not messages, so it cannot tell a new invite from a
-//! copy of one already handled. [`TspAgent`](crate::TspAgent) does: it applies
-//! `ReceiveInvite` only for an invite whose thread digest it has not already
-//! acted on for that pair. A caller driving the FSM directly must make the same
+//! copy of one already handled. The control core
+//! ([`inbound_control::apply_control`](crate::inbound_control::apply_control),
+//! which [`TspAgent`](crate::TspAgent) and the messaging SDK run) does: it
+//! applies `ReceiveInvite` only for an invite whose thread digest it has not
+//! already acted on for that pair. A caller driving the FSM directly must make the same
 //! check, or a repeated copy of an old invite takes an established relationship
 //! back to `InviteReceived`.
 
@@ -112,9 +114,9 @@ impl RelationshipState {
             }
             // A re-sent invite while we are still deciding. Idempotent: the peer
             // retransmitted its RFI (a lost accept, a slow link), so we stay
-            // awaiting our decision. `handle_control` overwrites the recorded
-            // thread digest to the latest invite, so the accept we eventually
-            // send answers the invite the peer still remembers.
+            // awaiting our decision. `inbound_control::apply_control` treats a
+            // copy of the invite being decided on as a no-op and never drives
+            // this edge for it.
             (RelationshipState::InviteReceived, RelationshipEvent::ReceiveInvite) => {
                 Ok(RelationshipState::InviteReceived)
             }
@@ -151,7 +153,7 @@ impl RelationshipState {
             // well. This transition is for a *fresh* invite only — one whose
             // thread digest has not been acted on for this pair — and telling
             // the two apart is the caller's job, since the FSM never sees the
-            // message (`TspAgent::handle_control` does it). Rate-limiting fresh
+            // message (`inbound_control::apply_control` does it). Rate-limiting fresh
             // invites is likewise a layer up, not the FSM's job.
             (RelationshipState::Bidirectional, RelationshipEvent::ReceiveInvite) => {
                 Ok(RelationshipState::InviteReceived)
