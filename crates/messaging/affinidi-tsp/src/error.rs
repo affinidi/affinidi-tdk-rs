@@ -93,4 +93,29 @@ pub enum TspError {
 
     #[error("DID resolution error: {0}")]
     DidResolution(String),
+
+    /// The sender's key state could not be confirmed, for a reason that may
+    /// clear: a refresh of it failed, is in flight, or is rate-limited after
+    /// one failed (Rev 3 §7.4.2). Not a property of the message — the same
+    /// bytes may verify once a refresh succeeds — so a receiver that can
+    /// leave the message queued should, rather than discard it.
+    ///
+    /// `verification` is the verification failure that prompted the refresh,
+    /// when there was one (a message that did not verify against the cached
+    /// key state, inside a relationship). Only [`crate::receive::receive`]
+    /// returns this; [`crate::TspAgent::receive`] reports it as before
+    /// ([`TspError::Discarded`], or the verification failure).
+    #[error("key state not confirmed: {reason}")]
+    KeyStateUnconfirmed {
+        reason: String,
+        verification: Option<Box<TspError>>,
+    },
+}
+
+impl TspError {
+    /// Is this a failure that may clear if the same message is received again
+    /// later ([`TspError::KeyStateUnconfirmed`])?
+    pub fn is_transient(&self) -> bool {
+        matches!(self, TspError::KeyStateUnconfirmed { .. })
+    }
 }

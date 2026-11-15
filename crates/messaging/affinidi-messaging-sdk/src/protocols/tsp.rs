@@ -3815,9 +3815,7 @@ impl TspOps<'_> {
             Ok(verified) => Ok(verified),
             // A resolver or store failure is reported as the SDK error it was,
             // not as an unpack failure.
-            Err(e) => Err(sources.take_failure().unwrap_or_else(|| {
-                ATMError::MsgReceiveError(format!("couldn't unpack TSP message: {e}"))
-            })),
+            Err(e) => Err(sources.take_failure().unwrap_or_else(|| receive_error(e))),
         }
     }
 
@@ -3877,6 +3875,26 @@ impl TspOps<'_> {
             }
         }
         None
+    }
+}
+
+/// The [`ATMError`] for a failure of the shared TSP receive path that was not
+/// a resolver or store failure.
+///
+/// Key state that is not confirmed (Rev 3 §7.4.2: a refresh failed, or is in
+/// progress) may clear once a refresh succeeds, so it is an
+/// [`ATMError::DIDError`], which
+/// [`is_transient_unpack_failure`](ATMError::is_transient_unpack_failure)
+/// treats as "leave the message queued", never as "delete it". Anything else
+/// is a property of the bytes.
+fn receive_error(e: affinidi_tsp::TspError) -> ATMError {
+    if e.is_transient() {
+        ATMError::DIDError(format!(
+            "TSP message not accepted yet: the sender's key state is not confirmed; it may be \
+             accepted on a later attempt: {e}"
+        ))
+    } else {
+        ATMError::MsgReceiveError(format!("couldn't unpack TSP message: {e}"))
     }
 }
 
@@ -4111,6 +4129,32 @@ mod tests {
     use affinidi_tsp::message::direct;
     use affinidi_tsp::{MessageType, PrivateVid};
     use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+
+    /// Key state the receive path could not confirm because a refresh failed
+    /// is a failure that may clear: every inbound path treats it as "leave the
+    /// frame queued". A verification failure against confirmed key state is
+    /// not, and is released.
+    #[test]
+    fn unconfirmed_key_state_is_a_transient_unpack_failure() {
+        let unconfirmed = super::receive_error(affinidi_tsp::TspError::KeyStateUnconfirmed {
+            reason: "the refresh failed: resolver unreachable".into(),
+            verification: None,
+        });
+        assert!(unconfirmed.is_transient_unpack_failure(), "{unconfirmed}");
+
+        let after_failed_refresh =
+            super::receive_error(affinidi_tsp::TspError::KeyStateUnconfirmed {
+                reason: "did not verify and the refresh failed".into(),
+                verification: Some(Box::new(affinidi_tsp::TspError::Verification(
+                    "bad signature".into(),
+                ))),
+            });
+        assert!(after_failed_refresh.is_transient_unpack_failure());
+
+        let definitive =
+            super::receive_error(affinidi_tsp::TspError::Verification("bad signature".into()));
+        assert!(!definitive.is_transient_unpack_failure(), "{definitive}");
+    }
 
     /// Our own mediator wins when the document lists it (no hop to add);
     /// otherwise the first one listed; nothing listed is nothing to route by.

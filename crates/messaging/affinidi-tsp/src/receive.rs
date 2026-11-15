@@ -168,9 +168,15 @@ impl Verified {
 ///   consistent, so a message signed with a compromised key verifies and gives
 ///   no warning. Confirmed means a refresh succeeded (now or, inside the rate
 ///   limit, the latest one), or the resolver re-resolved the VID itself since
-///   one failed; otherwise the message is [`TspError::Discarded`];
+///   one failed; otherwise the receive fails with
+///   [`TspError::KeyStateUnconfirmed`], which may clear: leave the message
+///   queued and receive it again later;
 /// * a verification failure is retried once after a refresh, since the failure
-///   may be a rotation not yet observed.
+///   may be a rotation not yet observed. A failure against freshly resolved
+///   (or recently and successfully refreshed) key state is definitive and is
+///   returned as is; one where the refresh failed, or the last one failed or
+///   has not finished, is [`TspError::KeyStateUnconfirmed`], carrying the
+///   verification failure.
 ///
 /// Outside a relationship neither applies and a failure is returned at once,
 /// or anyone could make this endpoint resolve by sending it noise. A sender
@@ -222,11 +228,41 @@ where
                 return Err(first_error);
             }
             match refresh_key_state(ctx, &sender).await {
+                // Verified against freshly resolved key state, so a failure now
+                // is definitive.
                 Ok(KeyStateRefresh::Fresh(fresh)) => {
                     direct::unpack(wire, our_decryption_key, &fresh.signing_key)?
                 }
-                // No refresh was possible, so the original failure stands.
-                Ok(KeyStateRefresh::RateLimited) | Err(_) => return Err(first_error),
+                Ok(KeyStateRefresh::RateLimited) => match ctx.key_state.refresh_status(&sender) {
+                    // The latest refresh succeeded: the key state we verified
+                    // against is current, so the failure stands.
+                    RefreshStatus::Succeeded | RefreshStatus::NeverAttempted => {
+                        return Err(first_error);
+                    }
+                    // The latest refresh failed or has not finished: the key
+                    // state is not known to be current, so the message may yet
+                    // verify.
+                    RefreshStatus::InFlight | RefreshStatus::Failed { .. } => {
+                        return Err(TspError::KeyStateUnconfirmed {
+                            reason: format!(
+                                "message from {sender} did not verify and its key state could \
+                                 not be refreshed (the last refresh failed or is in progress)"
+                            ),
+                            verification: Some(Box::new(first_error)),
+                        });
+                    }
+                },
+                // A refresh that failed shows nothing about the key: the
+                // message may verify against the state it would have returned.
+                Err(e) => {
+                    return Err(TspError::KeyStateUnconfirmed {
+                        reason: format!(
+                            "message from {sender} did not verify and refreshing its key state \
+                             failed: {e}"
+                        ),
+                        verification: Some(Box::new(first_error)),
+                    });
+                }
             }
         }
     };
@@ -242,6 +278,13 @@ where
     })
 }
 
+fn unconfirmed(reason: String) -> TspError {
+    TspError::KeyStateUnconfirmed {
+        reason,
+        verification: None,
+    }
+}
+
 /// What [`refresh_key_state`] did.
 enum KeyStateRefresh {
     /// The VID was resolved again and this is its current key state.
@@ -251,7 +294,7 @@ enum KeyStateRefresh {
 }
 
 /// The key state to verify a message from `vid` against, after a silence
-/// longer than the re-verification threshold, or a `Discarded` error when it
+/// longer than the re-verification threshold, or a `KeyStateUnconfirmed` error when it
 /// cannot be confirmed.
 ///
 /// Inside the rate limit: after a refresh that succeeded, the state the
@@ -285,20 +328,20 @@ where
                 .saturating_sub(ctx.now_ms);
             match ctx.key_state.refresh_status(vid) {
                 RefreshStatus::Succeeded => ctx.resolver.resolve(vid).await,
-                RefreshStatus::InFlight => Err(TspError::Discarded(format!(
+                RefreshStatus::InFlight => Err(unconfirmed(format!(
                     "key state for {vid} is not confirmed after a silence: a refresh is in \
                      progress; send again once it completes"
                 ))),
-                RefreshStatus::Failed { consecutive } => Err(TspError::Discarded(format!(
+                RefreshStatus::Failed { consecutive } => Err(unconfirmed(format!(
                     "key state for {vid} is not confirmed after a silence: the last refresh \
                      failed ({consecutive} in a row); next refresh allowed in {next_in_ms} ms"
                 ))),
-                RefreshStatus::NeverAttempted => Err(TspError::Discarded(format!(
+                RefreshStatus::NeverAttempted => Err(unconfirmed(format!(
                     "key state for {vid} is not confirmed after a silence"
                 ))),
             }
         }
-        Err(e) => Err(TspError::Discarded(format!(
+        Err(e) => Err(unconfirmed(format!(
             "key state for {vid} could not be confirmed after a silence: the refresh failed: {e}"
         ))),
     }
@@ -433,6 +476,138 @@ mod tests {
             .expect("ready in one poll")
             .unwrap();
         assert_eq!(verified.unpacked.sender, "did:example:alice");
+    }
+
+    /// A resolver whose refresh fails while `down` is set, as one does during
+    /// an outage.
+    struct Flaky {
+        vid: ResolvedVid,
+        down: std::sync::atomic::AtomicBool,
+    }
+
+    impl AsyncVidResolver for Flaky {
+        async fn resolve(&self, _vid: &str) -> Result<ResolvedVid, TspError> {
+            Ok(self.vid.clone())
+        }
+        async fn refresh(&self, _vid: &str) -> Result<ResolvedVid, TspError> {
+            if self.down.load(std::sync::atomic::Ordering::SeqCst) {
+                Err(TspError::DidResolution("resolver unreachable".into()))
+            } else {
+                Ok(self.vid.clone())
+            }
+        }
+    }
+
+    /// After a silence, a refresh that fails transiently leaves the message
+    /// unconfirmed — a failure that may clear, not a verdict on the message —
+    /// and the same bytes are accepted once a later refresh succeeds.
+    #[tokio::test]
+    async fn a_transient_refresh_failure_after_a_silence_is_retryable() {
+        let alice = TspAgent::new();
+        let alice_vid = PrivateVid::generate("did:example:alice");
+        let alice_public = alice_vid.to_resolved();
+        let bob = PrivateVid::generate("did:example:bob");
+        alice.add_private_vid(alice_vid);
+        alice.add_verified_vid(bob.to_resolved());
+        alice.store.set_relationship_state(
+            "did:example:alice",
+            "did:example:bob",
+            RelationshipState::Bidirectional,
+        );
+        let wire = alice
+            .send("did:example:alice", "did:example:bob", b"hello")
+            .unwrap()
+            .bytes;
+
+        let store = TspStore::new();
+        store.set_relationship_state(
+            "did:example:bob",
+            "did:example:alice",
+            RelationshipState::Bidirectional,
+        );
+        let key_state = KeyStateTracker::new();
+        key_state.record_seen("did:example:alice", 0);
+        let policy = KeyStatePolicy::default();
+        let resolver = Flaky {
+            vid: alice_public,
+            down: std::sync::atomic::AtomicBool::new(true),
+        };
+        let after_silence = policy.reverification_threshold.as_millis() as u64 + 1;
+
+        let ctx = ReceiveContext {
+            resolver: &resolver,
+            relationships: &store,
+            key_state: &key_state,
+            policy: &policy,
+            now_ms: after_silence,
+        };
+        let err = receive(&ctx, "did:example:bob", &bob.decryption_key, &wire)
+            .await
+            .unwrap_err();
+        assert!(err.is_transient(), "{err}");
+        assert!(matches!(
+            err,
+            TspError::KeyStateUnconfirmed {
+                verification: None,
+                ..
+            }
+        ));
+
+        // Inside the backed-off rate limit it stays retryable.
+        let ctx = ReceiveContext {
+            now_ms: after_silence + 1_000,
+            ..ctx
+        };
+        let err = receive(&ctx, "did:example:bob", &bob.decryption_key, &wire)
+            .await
+            .unwrap_err();
+        assert!(err.is_transient(), "{err}");
+
+        // The resolver recovers; a later attempt refreshes and accepts.
+        resolver
+            .down
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let ctx = ReceiveContext {
+            now_ms: after_silence + 60 * 60 * 1_000,
+            ..ctx
+        };
+        let verified = receive(&ctx, "did:example:bob", &bob.decryption_key, &wire)
+            .await
+            .unwrap();
+        assert_eq!(verified.unpacked.payload, b"hello");
+    }
+
+    /// A message that does not verify against freshly refreshed key state is
+    /// refused for good: the refresh shows the key it was signed with is not
+    /// the sender's.
+    #[tokio::test]
+    async fn a_failure_against_fresh_key_state_is_permanent() {
+        let (wire, bob, _alice) = invite();
+        // The resolver hands out someone else's key for Alice: a rotation.
+        let rotated = PrivateVid::generate("did:example:alice").to_resolved();
+        let resolver = Flaky {
+            vid: rotated,
+            down: std::sync::atomic::AtomicBool::new(false),
+        };
+        let store = TspStore::new();
+        store.set_relationship_state(
+            "did:example:bob",
+            "did:example:alice",
+            RelationshipState::Bidirectional,
+        );
+        let key_state = KeyStateTracker::new();
+        let policy = KeyStatePolicy::default();
+        let ctx = ReceiveContext {
+            resolver: &resolver,
+            relationships: &store,
+            key_state: &key_state,
+            policy: &policy,
+            now_ms: 0,
+        };
+        let err = receive(&ctx, "did:example:bob", &bob.decryption_key, &wire)
+            .await
+            .unwrap_err();
+        assert!(!err.is_transient(), "{err}");
     }
 
     #[test]

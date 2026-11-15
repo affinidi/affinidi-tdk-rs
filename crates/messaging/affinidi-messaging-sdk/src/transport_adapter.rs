@@ -36,8 +36,10 @@ const INBOUND_POLL_WAIT: Duration = Duration::from_secs(10);
 /// stream doesn't spin.
 const INBOUND_ERROR_BACKOFF: Duration = Duration::from_millis(500);
 
-/// Attempts (including the first) at unpacking one inbound TSP frame before it
-/// is treated as undeliverable.
+/// Attempts (including the first) at unpacking one inbound TSP frame in
+/// process. A frame still failing transiently after them is left queued at the
+/// mediator for a later reconnect or sync; one failing deterministically is
+/// deleted as undeliverable.
 ///
 /// Deliberately small: the inbound stream is **sequential**, so every retry here
 /// stalls all other inbound traffic for this profile. Matches the trust
@@ -454,8 +456,24 @@ async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> O
                 backoff = (backoff * 2).min(TSP_UNPACK_MAX_BACKOFF);
                 attempt += 1;
             }
+            Err(e) if is_transient_unpack_error(&e) => {
+                // Out of in-process attempts on a failure that may still clear
+                // — a resolver outage, or a sender whose key state is not yet
+                // confirmed after a silence (Rev 3 §7.4.2). Deleting it would
+                // lose a message that may well be valid, so it is left at the
+                // mediator (this stream polls with `auto_delete = false`) and
+                // offered again on the next reconnect or offline sync.
+                tracing::warn!(
+                    error = %e,
+                    attempts = attempt,
+                    frame = %ack,
+                    "cannot unpack an inbound TSP frame yet — leaving it queued at the mediator \
+                     for a later retry",
+                );
+                return None;
+            }
             Err(e) => {
-                // Out of attempts, or bytes that can never unpack.
+                // Bytes that can never unpack.
                 //
                 // Delete the frame. This stream polls with `auto_delete = false`,
                 // so the mediator still holds it, and a frame that never becomes
@@ -466,11 +484,11 @@ async fn tsp_to_inbound(atm: &ATM, profile: &Arc<ATMProfile>, packed: &str) -> O
                 // a single unresolvable sender turns into a permanent boot-time
                 // error on the receiving node.
                 //
-                // The tradeoff is deliberate and it is not free: a resolver
-                // outage lasting longer than the retry budget will discard a
+                // Only a deterministic failure gets here: a transient one (a
+                // resolver outage, unconfirmed key state) is left queued above,
+                // so an outage longer than the retry budget does not discard a
                 // frame that would have been valid. Logged at error level, with
-                // the sender the envelope claims and the frame id, so the loss is
-                // auditable rather than silent.
+                // the frame id, so the deletion is auditable.
                 tracing::error!(
                     error = %e,
                     attempts = attempt,

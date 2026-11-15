@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.36.1] - 2026-11-15
+
+A TSP frame that fails to unpack for a reason that may clear is left queued, not acked (#1141)
+
+**Behaviour (R3.6):** when unpacking an inbound TSP frame fails transiently —
+the sender's (or our own) DID did not resolve, or the sender's key state is
+not confirmed after a silence because a refresh failed or is in progress
+(Rev 3 §7.4.2, `affinidi-messaging-sdk` 0.49.3) — the frame is no longer acked
+on either path. On the live stream its claim is released unacked, and the
+offline drain does not ack it either, so it stays at the mediator and a later
+sync offers it again. A frame that fails for good (malformed, wrong
+recipient, a signature that does not verify against confirmed key state, the
+§7.2.2 relationship gate) is still acked, as before. Uses
+`ATMError::is_transient_unpack_failure`, public from SDK 0.49.3, which this
+release requires.
+
 ## [0.36.0] - 2026-11-15
 
 TSP-multiplexed live path: ack after the handler, TSP frames in the in-flight record

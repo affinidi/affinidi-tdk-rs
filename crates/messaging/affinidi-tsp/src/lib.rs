@@ -302,7 +302,18 @@ impl TspAgent {
         ))
         .ok_or_else(|| {
             TspError::InvalidMessage("synchronous receive path unexpectedly pending".into())
-        })??;
+        })?
+        // This agent has no queue to leave a message in, so key state that is
+        // not yet confirmed is reported as it always was: the verification
+        // failure that prompted the refresh, or a discard.
+        .map_err(|e| match e {
+            TspError::KeyStateUnconfirmed {
+                verification: Some(verification),
+                ..
+            } => *verification,
+            TspError::KeyStateUnconfirmed { reason, .. } => TspError::Discarded(reason),
+            other => other,
+        })?;
         let established = verified.admits_application_message();
         let now_ms = ctx.now_ms;
         let unpacked = verified.unpacked;

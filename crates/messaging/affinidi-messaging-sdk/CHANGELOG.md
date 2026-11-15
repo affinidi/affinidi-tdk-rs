@@ -27,9 +27,24 @@ rule `affinidi-tsp` already applied:**
   grew with every verified sender before); a control message that forms a
   relationship (`record_incoming_control`) starts the measurement.
 
-Error types are unchanged: a resolution or relationship-store failure is still
-returned as the `ATMError` it was, everything else as
-`MsgReceiveError("couldn't unpack TSP message: …")`.
+**Unconfirmed key state is a transient failure, never a deletion.** Key state
+that cannot be confirmed (a refresh failed or is in progress, including a
+message that failed verification inside a relationship whose refresh then
+failed) is returned as `ATMError::DIDError`, which
+`ATMError::is_transient_unpack_failure` — now **public** — classifies as
+transient. A message that does not verify against freshly refreshed, or
+recently and successfully refreshed, key state is a permanent
+`MsgReceiveError`. Other errors are unchanged: a resolution or
+relationship-store failure is returned as the `ATMError` it was, everything
+else as `MsgReceiveError("couldn't unpack TSP message: …")`.
+
+**Behaviour (R3.6) — `TransportAdapter` (MessagingService over ATM) no longer
+deletes a TSP frame that is still failing transiently** after its in-process
+retries (a resolver outage, unconfirmed key state). It is left at the mediator
+(the stream polls with `auto_delete = false`) and offered again on the next
+reconnect or offline sync. Before, it was deleted once the three attempts were
+spent, losing a message that may have been valid. A frame failing
+deterministically is still deleted.
 
 ## [0.49.2] - 2026-11-15
 

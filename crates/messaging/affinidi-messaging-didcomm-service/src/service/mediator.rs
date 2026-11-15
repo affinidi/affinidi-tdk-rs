@@ -318,7 +318,7 @@ impl OfflineSync {
                             // TSP frames are handled in order, one at a time: a
                             // peer's invite must be recorded before its payload.
                             let _permit = self.acquire().await?;
-                            Listener::dispatch_tsp(
+                            let ack = Listener::dispatch_tsp(
                                 &self.listener_id,
                                 &self.atm,
                                 &self.profile,
@@ -326,7 +326,14 @@ impl OfflineSync {
                                 *packed,
                             )
                             .await;
-                            handled.push(claim);
+                            if ack {
+                                handled.push(claim);
+                            } else {
+                                // A failure that may clear (an unresolvable
+                                // sender, unconfirmed key state): released
+                                // unacked, so a later sync offers it again.
+                                drop(claim);
+                            }
                         }
                         (_, false) => {
                             debug!(profile = %alias, "Offline TSP frame on a listener with TSP disabled; dropped (acked)");

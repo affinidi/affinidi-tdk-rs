@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-didcomm-service"
-version = "0.36.0"
+version = "0.36.1"
 description = "Shared DIDComm service framework for always-online DIDComm client. Manages mediator connection, message lifecycle, and handler dispatch."
 edition.workspace = true
 authors.workspace = true
@@ -29,7 +29,7 @@ affinidi-tdk-common = { version = "0.7.2", path = "../../tdk/affinidi-tdk-common
 # rather than the workspace one — which is how a third `trust-tasks-rs` node
 # survived the 0.12 move and produced `expected MediatorAcl, found a different
 # MediatorAcl` from inside this workspace.
-affinidi-messaging-sdk = { version = "0.49.2", path = "../affinidi-messaging-sdk" }
+affinidi-messaging-sdk = { version = "0.49.3", path = "../affinidi-messaging-sdk" }
 # `ConnState`, the transport connection state `ATMProfile::connection_state`
 # publishes (followed by the listener, R6.2).
 affinidi-messaging-core = { version = "0.1.13", path = "../affinidi-messaging-core" }

@@ -502,6 +502,7 @@ impl Listener {
                         None,
                     )
                     .await;
+                    true
                 });
             }
             InboundFrame::Tsp(packed) => {
@@ -570,15 +571,8 @@ impl Listener {
                              unpacked out of order"
                         );
                     }
-                    Self::dispatch_tsp_bytes(
-                        &listener_id,
-                        &atm,
-                        &profile,
-                        &tsp_handler,
-                        &qb2,
-                        done,
-                    )
-                    .await;
+                    Self::dispatch_tsp_bytes(&listener_id, &atm, &profile, &tsp_handler, &qb2, done)
+                        .await
                 });
             }
             // `InboundFrame` is `#[non_exhaustive]`; tolerate a future frame
@@ -596,8 +590,10 @@ impl Listener {
     }
 
     /// Run `work` — one frame's handler — on its own task holding `permit`,
-    /// then ack the claimed message: only once `work` has returned (R1.6), and
-    /// only when `ack_on` names the connection to ack on (`auto_delete`). The
+    /// then ack the claimed message: only once `work` has returned (R1.6), only
+    /// when `work` returned `true` (`false`: a failure that may clear, so the
+    /// message stays queued for a later sync), and only when `ack_on` names
+    /// the connection to ack on (`auto_delete`). The
     /// claim is released either way, recording the ack so a copy the offline
     /// drain fetched before it landed is skipped. A task aborted before then
     /// (teardown past the drain timeout) drops its claim unacked: the message
@@ -610,14 +606,14 @@ impl Listener {
         ack_on: Option<(ATM, Arc<ATMProfile>)>,
         work: F,
     ) where
-        F: std::future::Future<Output = ()> + Send + 'static,
+        F: std::future::Future<Output = bool> + Send + 'static,
     {
         tasks.spawn(async move {
             let _permit = permit;
-            work.await;
+            let ack = work.await;
             let acked = match ack_on {
-                Some((atm, profile)) => Self::ack(&atm, &profile, claim.id()).await,
-                None => false,
+                Some((atm, profile)) if ack => Self::ack(&atm, &profile, claim.id()).await,
+                _ => false,
             };
             claim.finish(acked);
         });
@@ -652,7 +648,7 @@ impl Listener {
         profile: &Arc<ATMProfile>,
         handler: &Arc<dyn TspHandler>,
         packed: String,
-    ) {
+    ) -> bool {
         // The pickup socket surfaces the frame as the **qb64** stored string
         // (`base64url(qb2)`, i.e. `-E…` text) — NOT raw qb2. Use `unpack`, which
         // decodes the base64url first; `unpack_bytes(packed.as_bytes())` would
@@ -667,13 +663,19 @@ impl Listener {
             Ok(bytes) => bytes,
             Err(e) => {
                 warn!(profile = %profile.inner.alias, error = %e, "Failed to decode TSP frame");
-                return;
+                return true;
             }
         };
-        Self::dispatch_tsp_bytes(listener_id, atm, profile, handler, &qb2, None).await;
+        Self::dispatch_tsp_bytes(listener_id, atm, profile, handler, &qb2, None).await
     }
 
     /// [`dispatch_tsp`](Self::dispatch_tsp) on an already-decoded frame.
+    ///
+    /// Returns whether the frame may be acked (deleted at the mediator): `true`
+    /// once it was handled or refused for good, `false` when unpacking failed
+    /// for a reason that may clear
+    /// ([`ATMError::is_transient_unpack_failure`](affinidi_messaging_sdk::errors::ATMError::is_transient_unpack_failure)),
+    /// so it stays queued for a later sync.
     ///
     /// `order` is this frame's place in its sender's queue (see
     /// [`SenderOrder`]). It is released — dropped — as soon as the frame is
@@ -688,9 +690,22 @@ impl Listener {
         handler: &Arc<dyn TspHandler>,
         qb2: &[u8],
         order: Option<OrderSlot>,
-    ) {
+    ) -> bool {
         let inbound = match atm.tsp().unpack_message(profile, qb2).await {
             Ok(v) => v,
+            // A failure that may clear — the sender's DID did not resolve, or
+            // its key state is not confirmed after a silence (Rev 3 §7.4.2)
+            // because a refresh failed. The frame may well be valid, so it is
+            // not acked: it stays queued at the mediator and the next offline
+            // sync offers it again.
+            Err(e) if e.is_transient_unpack_failure() => {
+                warn!(
+                    profile = %profile.inner.alias,
+                    error = %e,
+                    "Could not unpack an inbound TSP frame yet; left queued for a later retry"
+                );
+                return false;
+            }
             Err(e) => {
                 // Includes an application message the relationship gate
                 // discarded (§7.2.2) — the one case where a peer's data is lost.
@@ -699,7 +714,7 @@ impl Listener {
                     error = %e,
                     "Dropped an inbound TSP frame: it could not be unpacked"
                 );
-                return;
+                return true;
             }
         };
 
@@ -717,7 +732,7 @@ impl Listener {
                     from = %sender,
                     "Discarded a TSP padding message"
                 );
-                return;
+                return true;
             }
             // Carried like an application message but labelled as control for
             // the layer above. This service has no upper layer of its own to
@@ -733,7 +748,7 @@ impl Listener {
                     "Ignored an upper-layer TSP control message (XCTL); this service has no \
                      upper layer to route it to"
                 );
-                return;
+                return true;
             }
             affinidi_messaging_sdk::protocols::tsp::InboundTsp::Control {
                 control,
@@ -798,7 +813,7 @@ impl Listener {
                         );
                     }
                 }
-                return;
+                return true;
             }
             // `InboundTsp` is `#[non_exhaustive]`: a kind added later must not
             // fall through to the application-message path, which is what an
@@ -811,7 +826,7 @@ impl Listener {
                     kind = ?std::mem::discriminant(&other),
                     "Dropped a TSP message of a kind this service does not handle"
                 );
-                return;
+                return true;
             }
         };
 
@@ -843,6 +858,7 @@ impl Listener {
                 warn!(profile = %profile_alias, error = %e, "Unhandled TSP handler error");
             }
         }
+        true
     }
 
     /// Seal a [`TspHandler`] reply to the authenticated sender and route it back
@@ -1540,6 +1556,7 @@ mod multiplexed_path_tests {
         let r = release.clone();
         Listener::spawn_then_ack(&mut tasks, permit, claim, ack_on, async move {
             r.notified().await;
+            true
         });
         tokio::task::yield_now().await;
 
@@ -1549,6 +1566,37 @@ mod multiplexed_path_tests {
         release.notify_one();
         join(&mut tasks).await;
         assert!(!l.in_flight.is_active(&id));
+        assert!(l.in_flight.is_recent(&id), "acked once handled");
+    }
+
+    /// A TSP frame whose unpack failed for a reason that may clear (the
+    /// sender's key state could not be refreshed) is not acked on the live
+    /// path: its claim is released unacked, so the offline drain's copy is
+    /// dispatched later, and that attempt — now unpacking — is acked.
+    #[tokio::test]
+    async fn a_transiently_failing_tsp_frame_is_not_acked_and_is_retried() {
+        let l = listener(Arc::new(Gate::default()), Duration::from_secs(5)).await;
+        let frame = InboundFrame::Tsp(Box::new(tsp_frame(&l, 6)));
+        let id = frame.ack_id();
+        let ack_on = || Some((l.atm.clone().unwrap(), l.profile.clone().unwrap()));
+
+        // Live attempt: the work reports a transient failure.
+        let mut tasks = JoinSet::new();
+        let claim = l.in_flight.claim(&id).unwrap();
+        let permit = l.acquire_permit().await.unwrap();
+        Listener::spawn_then_ack(&mut tasks, permit, claim, ack_on(), async { false });
+        join(&mut tasks).await;
+        assert!(!l.in_flight.is_recent(&id), "not acked: it stays queued");
+        assert!(!l.in_flight.is_active(&id), "claim released");
+
+        // A later attempt (the offline drain's copy) succeeds and is acked.
+        let claim = l
+            .in_flight
+            .claim(&id)
+            .expect("the retried copy can be claimed");
+        let permit = l.acquire_permit().await.unwrap();
+        Listener::spawn_then_ack(&mut tasks, permit, claim, ack_on(), async { true });
+        join(&mut tasks).await;
         assert!(l.in_flight.is_recent(&id), "acked once handled");
     }
 
@@ -1678,7 +1726,13 @@ mod multiplexed_path_tests {
         let claim = l.in_flight.claim(&tsp_id).unwrap();
         let permit = l.acquire_permit().await.unwrap();
         let ack_on = Some((handle.atm.clone(), handle.profile.clone()));
-        Listener::spawn_then_ack(&mut tasks, permit, claim, ack_on, std::future::pending());
+        Listener::spawn_then_ack(
+            &mut tasks,
+            permit,
+            claim,
+            ack_on,
+            std::future::pending::<bool>(),
+        );
 
         // The socket drops.
         state_tx.send(ConnState::Disconnected).unwrap();

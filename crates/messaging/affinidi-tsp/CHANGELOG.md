@@ -19,6 +19,17 @@ One receive path for `TspAgent` and the messaging SDK (#1141)
   `MetaEnvelope::sha256`) and the BLAKE2s-256 the `messaging-core` adapter
   reports as `ReceivedMessage::id` — computed together, so one can be found
   from the other. Neither id changes. `receive::Verified` carries both.
+- **New `TspError::KeyStateUnconfirmed { reason, verification }`** and
+  `TspError::is_transient()`. `receive::receive` returns it when the sender's
+  key state cannot be confirmed for a reason that may clear — a refresh after
+  a silence failed, is in flight, or is rate-limited after one failed; or a
+  message that did not verify inside a relationship and whose refresh failed
+  (`verification` carries that failure). A receiver that can leave the message
+  queued should, rather than discard it. A failure against freshly or
+  recently-successfully refreshed key state is returned as is (definitive).
+  `TspError` is `#[non_exhaustive]`, so the variant is additive.
+  `TspAgent::receive` maps it back to what it returned before (`Discarded`,
+  or the verification failure).
 - `keystate::Clock` documents why it is not the mediator types' `Clock`
   (monotonic interval clock vs. wall-clock Unix time).
 - No behaviour change for `TspAgent`: the shared path is the agent's own
