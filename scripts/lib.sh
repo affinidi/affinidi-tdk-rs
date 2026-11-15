@@ -25,8 +25,9 @@
 # path comparison silently misses. See the guard in guard_load_crates.
 # BASH_SOURCE[0] is this file, so `..` is the repo root for every caller.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-cd "$ROOT"
+cd "$ROOT" || exit 2
 
+# shellcheck disable=SC2034 # the colours are used by the sourcing guard
 if [ -t 1 ]; then
   RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; CYAN=$'\033[0;36m'; NC=$'\033[0m'
 else
