@@ -1,5 +1,18 @@
 # Affinidi Data Integrity Changelog
 
+## [0.8.11] - 2026-11-15
+
+verify through affinidi-crypto 0.3.4's uniform verify results (#1143)
+
+- `ecdsa-jcs-2019` verifies with `affinidi_crypto::p256::verify_signature`
+  instead of the deprecated `p256::verify`; results are unchanged.
+- **Behaviour change (R3.6):** ML-DSA and SLH-DSA suites now tell a malformed
+  signature or key (`SignatureFailure::Malformed`) from one that does not
+  verify (`SignatureFailure::Invalid`); every failure used to be `Invalid`.
+  The error is still `DataIntegrityError::InvalidSignature` for the same
+  inputs.
+- Requires affinidi-crypto 0.3.4.
+
 ## [0.8.10] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

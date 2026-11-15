@@ -41,4 +41,10 @@ pub enum CesrError {
     /// between the code and the raw bytes are not zero.
     #[error("non-canonical encoding: {0}")]
     NonCanonical(String),
+
+    /// The soft part of a special fixed-size code (a tag, `GramHead`) is
+    /// missing, the wrong length, not Base64, or has a pre-pad other than
+    /// `_`; or a soft value was given for a code that takes none.
+    #[error("invalid soft value: {0}")]
+    InvalidSoft(String),
 }

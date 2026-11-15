@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-cesr"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "base64ct",
  "hex",
@@ -101,7 +101,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-crypto"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "aes 0.9.3",
  "aes-gcm",
@@ -129,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-data-integrity"
-version = "0.8.10"
+version = "0.8.11"
 dependencies = [
  "affinidi-bbs",
  "affinidi-crypto",
@@ -432,7 +432,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-mdoc"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "aes-gcm",
  "ciborium",
@@ -810,17 +810,15 @@ dependencies = [
 
 [[package]]
 name = "affinidi-secrets-resolver"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "affinidi-crypto",
  "affinidi-encoding",
  "ahash",
- "base58",
  "base64 0.23.1",
  "clap",
  "getrandom 0.3.4",
  "getrandom 0.4.3",
- "multibase",
  "rand 0.10.3",
  "serde",
  "serde_json",
@@ -6696,7 +6694,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.6",
  "windows-sys 0.61.2",

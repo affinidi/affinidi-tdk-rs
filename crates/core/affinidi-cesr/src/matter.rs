@@ -2,7 +2,7 @@
 
 use crate::codec;
 use crate::error::CesrError;
-use crate::tables::{Sizage, hardage, matter_sizage};
+use crate::tables::{Sizage, hardage, matter_sizage, matter_xtra_size};
 
 /// A CESR primitive: a typed code with raw bytes payload.
 ///
@@ -13,6 +13,10 @@ use crate::tables::{Sizage, hardage, matter_sizage};
 pub struct Matter {
     /// The CESR type code (e.g., "B" for Ed25519 non-transferable prefix)
     code: String,
+    /// The special soft value of a fixed-size code with soft characters (a
+    /// tag, `GramHead`'s proto/version/ilk), without its `_` pre-pad. Empty
+    /// for every other code.
+    soft: String,
     /// The raw bytes payload
     raw: Vec<u8>,
     /// Cached sizage for this code
@@ -36,25 +40,76 @@ impl Matter {
             let code = variable_code_for(code, &sizage, raw.len())?;
             let sizage =
                 matter_sizage(&code).ok_or_else(|| CesrError::UnknownCode(code.clone()))?;
-            return Ok(Self { code, raw, sizage });
+            return Ok(Self {
+                code,
+                soft: String::new(),
+                raw,
+                sizage,
+            });
         }
 
-        // Validate raw size for fixed-length codes
-        if sizage.fs > 0 {
-            let expected_raw = Self::raw_size_from_sizage(&sizage);
-            if raw.len() != expected_raw {
-                return Err(CesrError::InvalidRawSize {
-                    expected: expected_raw,
-                    got: raw.len(),
-                });
-            }
+        if sizage.ss > 0 {
+            return Err(CesrError::InvalidSoft(format!(
+                "code {code} carries a special soft value: use Matter::with_soft"
+            )));
         }
 
+        Self::check_raw_size(&sizage, &raw)?;
         Ok(Self {
             code: code.to_string(),
+            soft: String::new(),
             raw,
             sizage,
         })
+    }
+
+    /// Create a Matter for a fixed-size *special* code, one whose soft
+    /// characters carry a value of their own: the tags `X`, `Y`, `Z`
+    /// (Tag3/7/11), `0J`–`0O` (Tag1/2/5/6/9/10), `1AAF` (Tag4), `1AAN` (Tag8),
+    /// and `b` (GramHead).
+    ///
+    /// `soft` is the value without its pre-pad: `ss - xs` Base64 characters
+    /// (see [`matter_xtra_size`]), so
+    /// `Matter::with_soft("0J", "z", vec![])` encodes as `0J_z`. `raw` must be
+    /// the code's raw size, which is zero for every tag.
+    pub fn with_soft(code: &str, soft: &str, raw: Vec<u8>) -> Result<Self, CesrError> {
+        let sizage = matter_sizage(code).ok_or_else(|| CesrError::UnknownCode(code.to_string()))?;
+        if sizage.fs == 0 || sizage.ss == 0 {
+            return Err(CesrError::InvalidSoft(format!(
+                "code {code} has no special soft value"
+            )));
+        }
+        let xs = matter_xtra_size(code).unwrap_or(0);
+        if soft.len() != sizage.ss - xs {
+            return Err(CesrError::InvalidSoft(format!(
+                "code {code} takes {} soft characters, got {}",
+                sizage.ss - xs,
+                soft.len()
+            )));
+        }
+        if !soft.bytes().all(codec::is_b64_char) {
+            return Err(CesrError::InvalidSoft(format!(
+                "soft value {soft:?} of code {code} is not Base64"
+            )));
+        }
+        Self::check_raw_size(&sizage, &raw)?;
+        Ok(Self {
+            code: code.to_string(),
+            soft: soft.to_string(),
+            raw,
+            sizage,
+        })
+    }
+
+    fn check_raw_size(sizage: &Sizage, raw: &[u8]) -> Result<(), CesrError> {
+        let expected = Self::raw_size_from_sizage(sizage);
+        if raw.len() != expected {
+            return Err(CesrError::InvalidRawSize {
+                expected,
+                got: raw.len(),
+            });
+        }
+        Ok(())
     }
 
     /// Parse a Matter from a qb64 (text domain) string.
@@ -80,9 +135,10 @@ impl Matter {
             if qb64.len() < sizage.fs {
                 return Err(CesrError::UnexpectedEnd);
             }
-            let raw = Self::extract_raw(qb64, &sizage, sizage.fs)?;
+            let (soft, raw) = Self::extract_fixed(qb64, code, &sizage)?;
             Ok(Self {
                 code: code.to_string(),
+                soft,
                 raw,
                 sizage,
             })
@@ -107,6 +163,7 @@ impl Matter {
 
             Ok(Self {
                 code: code.to_string(),
+                soft: String::new(),
                 raw,
                 sizage,
             })
@@ -150,10 +207,11 @@ impl Matter {
 
             // Convert the full binary to text and extract raw
             let qb64 = codec::b64_encode(&qb2[..bs]);
-            let raw = Self::extract_raw(&qb64, &sizage, sizage.fs)?;
+            let (soft, raw) = Self::extract_fixed(&qb64, code, &sizage)?;
 
             Ok(Self {
                 code: code.to_string(),
+                soft,
                 raw,
                 sizage,
             })
@@ -188,6 +246,7 @@ impl Matter {
 
             Ok(Self {
                 code: code.to_string(),
+                soft: String::new(),
                 raw,
                 sizage,
             })
@@ -197,32 +256,31 @@ impl Matter {
     /// Encode this Matter to qb64 (text domain).
     pub fn qb64(&self) -> Result<String, CesrError> {
         if self.sizage.fs > 0 {
-            // Fixed-length encoding
-            let fs = self.sizage.fs;
-            let hs = self.sizage.hs;
-            let cs = fs - hs; // chars for raw portion
+            // Fixed-length encoding (keripy `Matter._infil`): the code and
+            // soft part (`cs = hs + ss` characters) leave `ps = cs % 4` pad
+            // characters in their last quadlet. Prepending `ps + ls` zero
+            // bytes to the raw value and dropping the first `ps` characters
+            // of its encoding fills them with zero bits.
+            let Sizage { hs, ss, fs, ls } = self.sizage;
+            let cs = hs + ss;
+            let ps = cs % 4;
+            let xs = matter_xtra_size(&self.code).unwrap_or(0);
 
-            // Compute lead bytes
-            let ls = self.compute_lead();
-
-            // Prepend lead zero bytes
-            let mut padded = vec![0u8; ls];
+            let mut padded = vec![0u8; ps + ls];
             padded.extend_from_slice(&self.raw);
-
             let encoded = codec::b64_encode(&padded);
-
-            // Take the last `cs` characters
-            if encoded.len() < cs {
-                return Err(CesrError::InvalidRawSize {
-                    expected: cs,
-                    got: encoded.len(),
-                });
-            }
-            let raw_b64 = &encoded[encoded.len() - cs..];
 
             let mut result = String::with_capacity(fs);
             result.push_str(&self.code);
-            result.push_str(raw_b64);
+            result.extend(std::iter::repeat_n('_', xs));
+            result.push_str(&self.soft);
+            result.push_str(encoded.get(ps..).unwrap_or_default());
+            if result.len() != fs {
+                return Err(CesrError::InvalidCodeSize {
+                    expected: fs,
+                    got: result.len(),
+                });
+            }
             Ok(result)
         } else {
             // Variable-length encoding: code (hs chars) + count (ss chars) + data (count * 4 chars)
@@ -269,6 +327,12 @@ impl Matter {
         &self.code
     }
 
+    /// The special soft value of a fixed-size code with soft characters,
+    /// without its `_` pre-pad (`"z"` for `0J_z`). Empty for every other code.
+    pub fn soft(&self) -> &str {
+        &self.soft
+    }
+
     /// The raw bytes payload.
     pub fn raw(&self) -> &[u8] {
         &self.raw
@@ -304,76 +368,71 @@ impl Matter {
         codec::lead_bytes(self.raw.len())
     }
 
-    /// Compute the expected raw byte size from a sizage.
+    /// The raw byte size of a fixed-size code (keripy `Matter._rawSize`):
+    /// the characters after the code and soft part, as bytes, less the lead.
+    /// Zero for a variable-size code.
     fn raw_size_from_sizage(sizage: &Sizage) -> usize {
         if sizage.fs == 0 {
             return 0;
         }
-        // Total encoded bytes = fs * 3 / 4
-        // Code bytes = hs * 3 / 4 (approximately, but codes are always aligned)
-        // Raw bytes = total - lead
-        let total_bytes = sizage.fs * 3 / 4;
-        // For 1-char codes, the lead is absorbed differently
-        // The raw size = (fs - hs) * 3/4 - lead_adjustment
-        // Simpler: total_bytes - hs (since hs chars encode the code)
-        // Actually in CESR: raw_size = (fs * 3 / 4) - lead_bytes
-        // where lead depends on the code
-
-        // For common cases:
-        match sizage.hs {
-            1 => {
-                // 1-char code: code takes 6 bits from first triplet
-                // fs=44 -> 33 bytes total, raw = 32 (1 lead byte used for code alignment)
-                total_bytes - 1
-            }
-            2 => {
-                // 2-char code: code takes 12 bits from first triplet
-                // fs=88 -> 66 bytes total, raw = 64 (2 lead bytes for code alignment)
-                total_bytes - 2
-            }
-            4 => {
-                // 4-char code: code takes 24 bits = 3 bytes (perfectly aligned)
-                // fs=48 -> 36 bytes total, code = 3 bytes, raw = 33
-                total_bytes - 3
-            }
-            _ => total_bytes,
-        }
+        ((sizage.fs - sizage.hs - sizage.ss) * 3 / 4).saturating_sub(sizage.ls)
     }
 
-    /// Extract raw bytes from a qb64 string given sizage and full size.
+    /// Extract the soft value and raw bytes of a fixed-size primitive from
+    /// qb64 text at least `fs` characters long (keripy `Matter._exfil`).
     ///
-    /// The code characters are decoded as zeros (`A`), as keripy does, so the
-    /// bytes in front of the raw material hold only the pad bits. CESR
-    /// requires those to be zero; anything else is a second spelling of the
-    /// same primitive and is refused with [`CesrError::NonCanonical`].
-    fn extract_raw(qb64: &str, sizage: &Sizage, fs: usize) -> Result<Vec<u8>, CesrError> {
-        let mut zeroed = "A".repeat(sizage.hs);
-        zeroed.push_str(&qb64[sizage.hs..fs]);
-        let all_bytes = codec::b64_decode(&zeroed)?;
+    /// The `cs % 4` pad characters in front of the raw material are decoded
+    /// as zeros (`A`), so the bytes in front of the raw value hold only the
+    /// pad bits and the code's lead bytes. CESR requires those to be zero;
+    /// anything else is a second spelling of the same primitive and is
+    /// refused with [`CesrError::NonCanonical`].
+    fn extract_fixed(
+        qb64: &str,
+        code: &str,
+        sizage: &Sizage,
+    ) -> Result<(String, Vec<u8>), CesrError> {
+        let Sizage { hs, ss, fs, ls } = *sizage;
+        let cs = hs + ss;
+        let xs = matter_xtra_size(code).unwrap_or(0);
 
-        // Extract based on code size
-        let lead = match sizage.hs {
-            1 => 1usize,
-            2 => 2,
-            4 => 3,
-            _ => 0,
-        };
-
-        if all_bytes.len() <= lead {
-            return Err(CesrError::InvalidRawSize {
-                expected: lead + 1,
-                got: all_bytes.len(),
+        let soft = &qb64[hs..cs];
+        if let Some(position) = soft.bytes().position(|c| !codec::is_b64_char(c)) {
+            return Err(CesrError::InvalidCharacter {
+                position: hs + position,
+                ch: soft.as_bytes()[position] as char,
             });
         }
-
-        let (pad, raw) = all_bytes.split_at(lead);
-        if pad.iter().any(|&byte| byte != 0) {
-            return Err(CesrError::NonCanonical(format!(
-                "pad bits after code {} are not zero",
-                &qb64[..sizage.hs]
+        let (xtra, soft) = soft.split_at(xs);
+        if xtra.bytes().any(|c| c != b'_') {
+            return Err(CesrError::InvalidSoft(format!(
+                "pre-pad {xtra:?} of code {code} is not `_`"
             )));
         }
-        Ok(raw.to_vec())
+
+        let ps = cs % 4;
+        let mut base = "A".repeat(ps);
+        base.push_str(&qb64[cs..fs]);
+        let paw = codec::b64_decode(&base)?;
+        if paw.len() < ps + ls {
+            return Err(CesrError::InvalidRawSize {
+                expected: ps + ls,
+                got: paw.len(),
+            });
+        }
+        let (pad, raw) = paw.split_at(ps + ls);
+        if pad.iter().any(|&byte| byte != 0) {
+            return Err(CesrError::NonCanonical(format!(
+                "pad bits after code {code} are not zero"
+            )));
+        }
+        let expected = Self::raw_size_from_sizage(sizage);
+        if raw.len() != expected {
+            return Err(CesrError::InvalidRawSize {
+                expected,
+                got: raw.len(),
+            });
+        }
+        Ok((soft.to_string(), raw.to_vec()))
     }
 }
 
@@ -491,11 +550,12 @@ mod tests {
         let _ = Matter::from_qb64(&"B".repeat(44));
     }
 
-    /// Every fixed-size code in the table.
+    /// Every fixed-size code in the table without a special soft value.
     const FIXED_CODES: &[&str] = &[
-        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "0A", "0B", "0C", "0D", "0E",
-        "0F", "0G", "0I", "1AAA", "1AAB", "1AAC", "1AAD", "1AAE", "1AAF", "1AAG", "1AAH", "1AAI",
-        "1AAJ", "1AAK", "1AAL", "1AAM",
+        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R",
+        "S", "T", "U", "V", "W", "a", "0A", "0B", "0C", "0D", "0E", "0F", "0G", "0H", "0I", "1AAA",
+        "1AAB", "1AAC", "1AAD", "1AAE", "1AAG", "1AAH", "1AAI", "1AAJ", "1AAK", "1AAL", "1AAM",
+        "1AAO", "1AAP",
     ];
 
     /// Set `bits` in the 6-bit value of the Base64 character at `position`.
@@ -839,5 +899,231 @@ mod tests {
         let m = Matter::new("4A", vec![0x41u8; 4095 * 3 + 1]).unwrap();
         assert_eq!(m.code(), "9AAA");
         assert_eq!(Matter::from_qb64(&m.qb64().unwrap()).unwrap(), m);
+    }
+
+    /// keripy `Matter.Sizes` (src/keri/core/coring.py at
+    /// 1625fafc2cb9e7782326fe08e3f939a59cfdb6bd) as `(code, hs, ss, xs, fs,
+    /// ls)`, with `fs` 0 for a variable size and the test-only `TBD*` codes
+    /// left out. Generated from that file.
+    const KERIPY_SIZES: &[(&str, usize, usize, usize, usize, usize)] = &[
+        ("A", 1, 0, 0, 44, 0),
+        ("B", 1, 0, 0, 44, 0),
+        ("C", 1, 0, 0, 44, 0),
+        ("D", 1, 0, 0, 44, 0),
+        ("E", 1, 0, 0, 44, 0),
+        ("F", 1, 0, 0, 44, 0),
+        ("G", 1, 0, 0, 44, 0),
+        ("H", 1, 0, 0, 44, 0),
+        ("I", 1, 0, 0, 44, 0),
+        ("J", 1, 0, 0, 44, 0),
+        ("K", 1, 0, 0, 76, 0),
+        ("L", 1, 0, 0, 76, 0),
+        ("M", 1, 0, 0, 4, 0),
+        ("N", 1, 0, 0, 12, 0),
+        ("O", 1, 0, 0, 44, 0),
+        ("P", 1, 0, 0, 124, 0),
+        ("Q", 1, 0, 0, 44, 0),
+        ("R", 1, 0, 0, 8, 0),
+        ("S", 1, 0, 0, 16, 0),
+        ("T", 1, 0, 0, 20, 0),
+        ("U", 1, 0, 0, 24, 0),
+        ("V", 1, 0, 0, 4, 1),
+        ("W", 1, 0, 0, 4, 0),
+        ("X", 1, 3, 0, 4, 0),
+        ("Y", 1, 7, 0, 8, 0),
+        ("Z", 1, 11, 0, 12, 0),
+        ("a", 1, 0, 0, 44, 0),
+        ("b", 1, 3, 0, 8, 0),
+        ("0A", 2, 0, 0, 24, 0),
+        ("0B", 2, 0, 0, 88, 0),
+        ("0C", 2, 0, 0, 88, 0),
+        ("0D", 2, 0, 0, 88, 0),
+        ("0E", 2, 0, 0, 88, 0),
+        ("0F", 2, 0, 0, 88, 0),
+        ("0G", 2, 0, 0, 88, 0),
+        ("0H", 2, 0, 0, 8, 0),
+        ("0I", 2, 0, 0, 88, 0),
+        ("0J", 2, 2, 1, 4, 0),
+        ("0K", 2, 2, 0, 4, 0),
+        ("0L", 2, 6, 1, 8, 0),
+        ("0M", 2, 6, 0, 8, 0),
+        ("0N", 2, 10, 1, 12, 0),
+        ("0O", 2, 10, 0, 12, 0),
+        ("1AAA", 4, 0, 0, 48, 0),
+        ("1AAB", 4, 0, 0, 48, 0),
+        ("1AAC", 4, 0, 0, 80, 0),
+        ("1AAD", 4, 0, 0, 80, 0),
+        ("1AAE", 4, 0, 0, 156, 0),
+        ("1AAF", 4, 4, 0, 8, 0),
+        ("1AAG", 4, 0, 0, 36, 0),
+        ("1AAH", 4, 0, 0, 100, 0),
+        ("1AAI", 4, 0, 0, 48, 0),
+        ("1AAJ", 4, 0, 0, 48, 0),
+        ("1AAK", 4, 0, 0, 4, 0),
+        ("1AAL", 4, 0, 0, 4, 0),
+        ("1AAM", 4, 0, 0, 4, 0),
+        ("1AAN", 4, 8, 0, 12, 0),
+        ("1AAO", 4, 0, 0, 4, 0),
+        ("1AAP", 4, 0, 0, 4, 0),
+        ("4A", 2, 2, 0, 0, 0),
+        ("5A", 2, 2, 0, 0, 1),
+        ("6A", 2, 2, 0, 0, 2),
+        ("7AAA", 4, 4, 0, 0, 0),
+        ("8AAA", 4, 4, 0, 0, 1),
+        ("9AAA", 4, 4, 0, 0, 2),
+        ("4B", 2, 2, 0, 0, 0),
+        ("5B", 2, 2, 0, 0, 1),
+        ("6B", 2, 2, 0, 0, 2),
+        ("7AAB", 4, 4, 0, 0, 0),
+        ("8AAB", 4, 4, 0, 0, 1),
+        ("9AAB", 4, 4, 0, 0, 2),
+        ("4C", 2, 2, 0, 0, 0),
+        ("5C", 2, 2, 0, 0, 1),
+        ("6C", 2, 2, 0, 0, 2),
+        ("7AAC", 4, 4, 0, 0, 0),
+        ("8AAC", 4, 4, 0, 0, 1),
+        ("9AAC", 4, 4, 0, 0, 2),
+        ("4D", 2, 2, 0, 0, 0),
+        ("5D", 2, 2, 0, 0, 1),
+        ("6D", 2, 2, 0, 0, 2),
+        ("7AAD", 4, 4, 0, 0, 0),
+        ("8AAD", 4, 4, 0, 0, 1),
+        ("9AAD", 4, 4, 0, 0, 2),
+        ("4E", 2, 2, 0, 0, 0),
+        ("5E", 2, 2, 0, 0, 1),
+        ("6E", 2, 2, 0, 0, 2),
+        ("7AAE", 4, 4, 0, 0, 0),
+        ("8AAE", 4, 4, 0, 0, 1),
+        ("9AAE", 4, 4, 0, 0, 2),
+        ("4F", 2, 2, 0, 0, 0),
+        ("5F", 2, 2, 0, 0, 1),
+        ("6F", 2, 2, 0, 0, 2),
+        ("7AAF", 4, 4, 0, 0, 0),
+        ("8AAF", 4, 4, 0, 0, 1),
+        ("9AAF", 4, 4, 0, 0, 2),
+        ("4H", 2, 2, 0, 0, 0),
+        ("5H", 2, 2, 0, 0, 1),
+        ("6H", 2, 2, 0, 0, 2),
+        ("7AAH", 4, 4, 0, 0, 0),
+        ("8AAH", 4, 4, 0, 0, 1),
+        ("9AAH", 4, 4, 0, 0, 2),
+    ];
+
+    #[test]
+    fn matter_table_matches_keripy() {
+        for &(code, hs, ss, xs, fs, ls) in KERIPY_SIZES {
+            assert_eq!(
+                matter_sizage(code),
+                Some(Sizage { hs, ss, fs, ls }),
+                "{code}"
+            );
+            assert_eq!(matter_xtra_size(code), Some(xs), "{code}");
+        }
+    }
+
+    /// Vectors asserted in keripy `tests/core/test_coring.py`
+    /// (`test_matter`, `test_matter_special`, `test_tagger`, `test_ilker`,
+    /// `test_traitor`, `test_verser`) at the same commit.
+    #[test]
+    fn keripy_fixed_size_and_special_vectors() {
+        // (code, soft, raw, qb64)
+        let vectors: &[(&str, &str, &[u8], &str)] = &[
+            ("M", "", &[0xf7, 0x7f], "MPd_"),                  // Short
+            ("0H", "", &[0xf7, 0xf3, 0x3f, 0x7f], "0HD38z9_"), // Long
+            ("V", "", b"*", "VAAq"),                           // Label1 (lead size 1)
+            ("W", "", b"@&", "WEAm"),                          // Label2
+            ("1AAO", "", b"", "1AAO"),                         // Escape
+            ("X", "icp", b"", "Xicp"),                         // Tag3
+            ("X", "rot", b"", "Xrot"),
+            ("0J", "v", b"", "0J_v"),                  // Tag1
+            ("0K", "EO", b"", "0KEO"),                 // Tag2
+            ("Y", "KERICAA", b"", "YKERICAA"),         // Tag7
+            ("0O", "ACDCCAACAA", b"", "0OACDCCAACAA"), // Tag10
+            ("b", "mBD", &[0, 0, 37], "bmBDAAAl"),     // GramHead
+            // test_tagger's table: one tag code per length.
+            ("0J", "a", b"", "0J_a"),
+            ("0K", "ab", b"", "0Kab"),
+            ("X", "abc", b"", "Xabc"),
+            ("1AAF", "abcd", b"", "1AAFabcd"),
+            ("0L", "abcde", b"", "0L_abcde"),
+            ("0M", "abcdef", b"", "0Mabcdef"),
+            ("Y", "abcdefg", b"", "Yabcdefg"),
+            ("1AAN", "abcdefgh", b"", "1AANabcdefgh"),
+            ("0N", "abcdefghi", b"", "0N_abcdefghi"),
+            ("0O", "abcdefghij", b"", "0Oabcdefghij"),
+            ("Z", "abcdefghijk", b"", "Zabcdefghijk"),
+        ];
+        for &(code, soft, raw, qb64) in vectors {
+            let built = if soft.is_empty() {
+                Matter::new(code, raw.to_vec()).unwrap()
+            } else {
+                Matter::with_soft(code, soft, raw.to_vec()).unwrap()
+            };
+            assert_eq!(built.qb64().unwrap(), qb64, "{code}");
+            let parsed = Matter::from_qb64(qb64).unwrap();
+            assert_eq!(parsed, built, "{qb64}");
+            assert_eq!(parsed.code(), code);
+            assert_eq!(parsed.soft(), soft);
+            assert_eq!(parsed.raw(), raw);
+            let qb2 = built.qb2().unwrap();
+            assert_eq!(Matter::from_qb2(&qb2).unwrap(), built, "{qb64}");
+        }
+        // Two qb2 vectors keripy spells out.
+        assert_eq!(Matter::from_qb64("Xicp").unwrap().qb2().unwrap(), b"^')");
+        assert_eq!(
+            Matter::from_qb64("1AAO").unwrap().qb2().unwrap(),
+            [0xd4, 0x00, 0x0e]
+        );
+    }
+
+    #[test]
+    fn special_codes_need_a_well_formed_soft_value() {
+        assert!(matches!(
+            Matter::new("X", vec![]),
+            Err(CesrError::InvalidSoft(_))
+        ));
+        assert!(matches!(
+            Matter::with_soft("X", "ab", vec![]),
+            Err(CesrError::InvalidSoft(_))
+        ));
+        assert!(matches!(
+            Matter::with_soft("X", "a+c", vec![]),
+            Err(CesrError::InvalidSoft(_))
+        ));
+        assert!(matches!(
+            Matter::with_soft("B", "abc", vec![0; 32]),
+            Err(CesrError::InvalidSoft(_))
+        ));
+        assert!(matches!(
+            Matter::with_soft("b", "mBD", vec![0; 2]),
+            Err(CesrError::InvalidRawSize {
+                expected: 3,
+                got: 2
+            })
+        ));
+        // The pre-pad of an odd-length tag must be `_`.
+        assert!(matches!(
+            Matter::from_qb64("0JAv"),
+            Err(CesrError::InvalidSoft(_))
+        ));
+    }
+
+    /// The codes whose sizes were corrected to keripy's (#1142).
+    #[test]
+    fn corrected_codes_have_keripy_raw_sizes() {
+        for (code, raw_size) in [
+            ("J", 32),    // ECDSA_256k1_Seed
+            ("K", 56),    // Ed448_Seed
+            ("L", 56),    // X448
+            ("1AAH", 72), // X25519_Cipher_Salt
+            ("1AAK", 0),  // Null
+            ("1AAL", 0),  // No
+            ("1AAM", 0),  // Yes
+        ] {
+            let m = Matter::new(code, vec![0x5a; raw_size]).unwrap();
+            assert_eq!(Matter::from_qb64(&m.qb64().unwrap()).unwrap(), m, "{code}");
+        }
+        assert_eq!(Matter::new("1AAK", vec![]).unwrap().qb64().unwrap(), "1AAK");
+        assert_eq!(Matter::from_qb64("1AAM").unwrap().raw(), b"");
     }
 }

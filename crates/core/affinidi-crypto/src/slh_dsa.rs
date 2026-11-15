@@ -48,7 +48,7 @@ pub fn verify_slh_dsa_sha2_128s(public_key: &[u8], data: &[u8], signature: &[u8]
     let sig = Signature::<Sha2_128s>::try_from(signature)
         .map_err(|e| CryptoError::KeyError(format!("Invalid SLH-DSA signature: {e}")))?;
     vk.verify(data, &sig)
-        .map_err(|e| CryptoError::KeyError(format!("SLH-DSA verification failed: {e}")))
+        .map_err(|e| CryptoError::Verification(format!("SLH-DSA verification failed: {e}")))
 }
 
 #[cfg(test)]
@@ -116,7 +116,8 @@ mod tests {
         let kp = generate_slh_dsa_sha2_128s();
         let mut sig = sign_slh_dsa_sha2_128s(&kp.private_bytes, b"x").unwrap();
         sig[42] ^= 0x01;
-        assert!(verify_slh_dsa_sha2_128s(&kp.public_bytes, b"x", &sig).is_err());
+        let err = verify_slh_dsa_sha2_128s(&kp.public_bytes, b"x", &sig).unwrap_err();
+        assert!(matches!(err, CryptoError::Verification(_)), "got {err:?}");
     }
 
     /// NIST ACVP SLH-DSA-keyGen-FIPS205 tcId=1 (SLH-DSA-SHA2-128s).

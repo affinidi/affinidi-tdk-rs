@@ -1,5 +1,22 @@
 # Affinidi Secrets Manager
 
+## [0.5.21] - 2026-11-15
+
+multikeys decode through affinidi-encoding (#1143)
+
+- The `base58` and `multibase` dependencies are gone: encoding and decoding
+  go through `affinidi-encoding`, the workspace's one multibase
+  implementation. Encoded output is byte-for-byte unchanged.
+- **Behaviour changes (R3.6):** `Secret::decode_multikey`,
+  `Secret::decode_multikey_zeroizing` and `Secret::from_multibase`
+  - accept only base58btc multibase (`z` prefix), the encoding every
+    multikey uses; other multibase prefixes (`f`, `u`, ...) used to be decoded
+    and are now refused;
+  - check the key length for every codec with a known length (the
+    `affinidi_encoding::decode_multikey_checked` rule), so a truncated or
+    padded key is refused here instead of failing later. Decoded private key
+    material is still held in wiped buffers.
+
 ## [0.5.20] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

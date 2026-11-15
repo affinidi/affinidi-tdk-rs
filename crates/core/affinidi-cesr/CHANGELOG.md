@@ -1,5 +1,43 @@
 # Affinidi CESR
 
+## [0.1.8] - 2026-11-15
+
+matter table matches keripy; number, tag and special codes (#1142)
+
+**Wire-format change (R3.6).** Released as a patch: no signature changes,
+nothing removed, and no caller in this workspace or affinidi-keri-rs uses a
+corrected code. A 0.2 would also split the build: `affinidi-keri-core` on
+crates.io requires affinidi-cesr 0.1 and exposes `CesrError` in its API.
+
+- **Fixed:** fixed-size entries now match keripy `Matter.Sizes`
+  (`src/keri/core/coring.py`, keripy `main` at `1625faf`):
+  `J` is ECDSA_256k1_Seed (fs 44, was 24), `K` Ed448_Seed (fs 76, was 44),
+  `L` X448 (fs 76, was 24), `1AAF` Tag4 (ss 4, was 0), `1AAH`
+  X25519_Cipher_Salt (fs 100, was 92), and `1AAK`/`1AAL`/`1AAM` are
+  Null/No/Yes (fs 4, no raw bytes; were 512-bit digests at fs 92). Text in
+  the old sizes for these codes no longer parses, and keripy's now does.
+- **Added:** the codes the table lacked: numbers `M` Short, `N` Big, `R`
+  Tall, `S` Large, `T` Great, `U` Vast, `0H` Long; `O` X25519_Private, `P`
+  X25519_Cipher_Seed, `Q` ECDSA_256r1_Seed, `a` Salt_256; labels `V` Label1
+  (lead size 1) and `W` Label2; tags `X`/`Y`/`Z` (Tag3/7/11), `0J`–`0O`
+  (Tag1/2/5/6/9/10), `1AAF` Tag4, `1AAN` Tag8; `b` GramHead; `1AAO` Escape,
+  `1AAP` Empty; and the variable-size families `4C`–`9AAC`
+  (X25519_Cipher), `4D`–`9AAD` (X25519_Cipher_QB64), `4E`–`9AAE`
+  (X25519_Cipher_QB2), `4F`–`9AAF` (HPKEBase_Cipher) and `4H`–`9AAH`
+  (Decimal). The table is checked against keripy's in a test.
+- **Added: special soft values.** `Matter::with_soft(code, soft, raw)`
+  builds a fixed-size code whose soft characters carry a value (the tags and
+  GramHead), `Matter::soft()` returns it, and `from_qb64`/`from_qb2` read
+  it, checking the `_` pre-pad of the odd-length tags.
+  `tables::matter_xtra_size` gives that pre-pad size (keripy `xs`), and
+  `CesrError::InvalidSoft` reports a missing or malformed soft value;
+  `Matter::new` refuses a special code with it.
+- **Fixed:** fixed-size encode and decode follow keripy's `_infil`/`_exfil`
+  (pad `cs % 4` and the code's lead size), so codes with no raw bytes
+  (`1AAK`, tags) and with a lead size (`V`) round-trip; the raw size is
+  `(fs - hs - ss) * 3 / 4 - ls`. Encodings of the existing codes are
+  unchanged. Tests use the vectors keripy's `test_coring.py` asserts.
+
 ## [0.1.7] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

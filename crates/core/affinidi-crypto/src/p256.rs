@@ -117,6 +117,11 @@ pub fn sign(private_key_bytes: &[u8], data: &[u8]) -> Result<Vec<u8>> {
 /// Returns `Ok(false)` when the signature does not verify,
 /// `CryptoError::KeyError` for an invalid public key and
 /// `CryptoError::Decoding` for a malformed signature.
+#[deprecated(
+    since = "0.3.4",
+    note = "use `p256::verify_signature`, which reports a signature that does not verify as \
+            `CryptoError::Verification` like every other verify function in this crate"
+)]
 pub fn verify(public_key_bytes: &[u8], data: &[u8], signature_bytes: &[u8]) -> Result<bool> {
     use p256::ecdsa::{Signature, signature::Verifier};
 
@@ -132,6 +137,33 @@ pub fn verify(public_key_bytes: &[u8], data: &[u8], signature_bytes: &[u8]) -> R
     }
 }
 
+/// Verify an ES256 signature with a P-256 public key.
+///
+/// `public_key_bytes` should be the uncompressed or compressed SEC1 encoding.
+/// `signature_bytes` should be 64 bytes (r || s).
+///
+/// Returns `Ok(())` when the signature verifies and
+/// `CryptoError::Verification` when it does not, the shape every verify
+/// function in this crate shares (#1143). An invalid public key is still
+/// `CryptoError::KeyError` and a malformed signature `CryptoError::Decoding`.
+pub fn verify_signature(
+    public_key_bytes: &[u8],
+    data: &[u8],
+    signature_bytes: &[u8],
+) -> Result<()> {
+    use p256::ecdsa::{Signature, signature::Verifier};
+
+    let verifying_key = VerifyingKey::from_sec1_bytes(public_key_bytes)
+        .map_err(|e| CryptoError::KeyError(format!("invalid P-256 public key: {e}")))?;
+
+    let signature = Signature::from_slice(signature_bytes)
+        .map_err(|e| CryptoError::Decoding(format!("invalid P-256 signature: {e}")))?;
+
+    verifying_key
+        .verify(data, &signature)
+        .map_err(|e| CryptoError::Verification(format!("P-256 signature verification failed: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,7 +171,7 @@ mod tests {
     #[test]
     fn malformed_signature_is_a_decoding_error() {
         let key_pair = generate(None).unwrap();
-        let err = verify(&key_pair.public_bytes, b"data", &[0u8; 10]).unwrap_err();
+        let err = verify_signature(&key_pair.public_bytes, b"data", &[0u8; 10]).unwrap_err();
         assert!(matches!(err, CryptoError::Decoding(_)), "got {err:?}");
     }
 
@@ -235,8 +267,16 @@ mod tests {
         let signature = sign(&keypair.private_bytes, data).unwrap();
         assert_eq!(signature.len(), 64); // r || s
 
-        let valid = verify(&keypair.public_bytes, data, &signature).unwrap();
-        assert!(valid);
+        verify_signature(&keypair.public_bytes, data, &signature).unwrap();
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_verify_keeps_its_bool_result() {
+        let keypair = generate(None).unwrap();
+        let signature = sign(&keypair.private_bytes, b"data").unwrap();
+        assert!(verify(&keypair.public_bytes, b"data", &signature).unwrap());
+        assert!(!verify(&keypair.public_bytes, b"other", &signature).unwrap());
     }
 
     #[test]
@@ -244,8 +284,8 @@ mod tests {
         let keypair = generate(None).unwrap();
         let signature = sign(&keypair.private_bytes, b"correct").unwrap();
 
-        let valid = verify(&keypair.public_bytes, b"wrong", &signature).unwrap();
-        assert!(!valid);
+        let err = verify_signature(&keypair.public_bytes, b"wrong", &signature).unwrap_err();
+        assert!(matches!(err, CryptoError::Verification(_)), "got {err:?}");
     }
 
     #[test]
@@ -255,7 +295,7 @@ mod tests {
         let data = b"test data";
 
         let signature = sign(&keypair1.private_bytes, data).unwrap();
-        let valid = verify(&keypair2.public_bytes, data, &signature).unwrap();
-        assert!(!valid);
+        let err = verify_signature(&keypair2.public_bytes, data, &signature).unwrap_err();
+        assert!(matches!(err, CryptoError::Verification(_)), "got {err:?}");
     }
 }

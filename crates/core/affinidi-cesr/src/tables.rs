@@ -3,7 +3,8 @@
 /// Sizage: describes the structure of a CESR code.
 ///
 /// - `hs`: hard size (number of code characters)
-/// - `ss`: soft size (number of variable/index characters)
+/// - `ss`: soft size (count or index characters, or the special value of a
+///   fixed-size tag code; see [`matter_xtra_size`] for its `_` pre-pad)
 /// - `fs`: full size (total qb64 characters, 0 means variable-length)
 /// - `ls`: lead byte count (zero-padding prepended to raw)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,268 +48,117 @@ const fn var(hs: usize, ls: usize) -> Sizage {
     }
 }
 
+/// Sizage of a fixed-size code.
+const fn fixed(hs: usize, ss: usize, fs: usize, ls: usize) -> Sizage {
+    Sizage { hs, ss, fs, ls }
+}
+
 /// Matter code table: maps code string to Sizage.
 ///
-/// Based on the CESR specification for primitive types.
+/// Mirrors keripy `Matter.Sizes` (`src/keri/core/coring.py`, `MatterCodex`
+/// names in the comments), checked against keripy `main` at
+/// `1625fafc2cb9e7782326fe08e3f939a59cfdb6bd`. keripy's test-only `TBD*`
+/// codes are left out.
+///
+/// A fixed-size code with `ss > 0` is a *special* code: its soft characters
+/// carry a value of their own (a tag, or `GramHead`'s proto/version/ilk), and
+/// the first [`matter_xtra_size`] of them are `_` pre-pad. Raw size is
+/// `(fs - hs - ss) * 3 / 4 - ls` bytes, so a tag carries no raw bytes at all.
 pub fn matter_sizage(code: &str) -> Option<Sizage> {
-    // 1-character codes
     let sizage = match code {
-        // Ed25519 non-transferable prefix (1 lead byte, 32 raw bytes -> 44 chars)
-        "B" => Sizage {
-            hs: 1,
-            ss: 0,
-            fs: 44,
-            ls: 0,
-        },
-        // Ed25519 public verification key (transferable)
-        "D" => Sizage {
-            hs: 1,
-            ss: 0,
-            fs: 44,
-            ls: 0,
-        },
-        // Blake3-256 digest
-        "E" => Sizage {
-            hs: 1,
-            ss: 0,
-            fs: 44,
-            ls: 0,
-        },
-        // Blake2b-256 digest
-        "F" => Sizage {
-            hs: 1,
-            ss: 0,
-            fs: 44,
-            ls: 0,
-        },
-        // Blake2s-256 digest
-        "G" => Sizage {
-            hs: 1,
-            ss: 0,
-            fs: 44,
-            ls: 0,
-        },
-        // SHA3-256 digest
-        "H" => Sizage {
-            hs: 1,
-            ss: 0,
-            fs: 44,
-            ls: 0,
-        },
-        // SHA2-256 digest
-        "I" => Sizage {
-            hs: 1,
-            ss: 0,
-            fs: 44,
-            ls: 0,
-        },
-        // Seed 128 bit random
-        "J" => Sizage {
-            hs: 1,
-            ss: 0,
-            fs: 24,
-            ls: 0,
-        },
-        // Seed 256 bit random
-        "K" => Sizage {
-            hs: 1,
-            ss: 0,
-            fs: 44,
-            ls: 0,
-        },
-        // Salt 128 bit random
-        "L" => Sizage {
-            hs: 1,
-            ss: 0,
-            fs: 24,
-            ls: 0,
-        },
-        // X25519 public encryption key
-        "C" => Sizage {
-            hs: 1,
-            ss: 0,
-            fs: 44,
-            ls: 0,
-        },
-        // Ed25519 non-transferable prefix (basic)
-        "A" => Sizage {
-            hs: 1,
-            ss: 0,
-            fs: 44,
-            ls: 0,
-        },
-        // ECDSA secp256k1 non-transferable prefix
-        "1AAA" => Sizage {
-            hs: 4,
-            ss: 0,
-            fs: 48,
-            ls: 0,
-        },
-        // ECDSA secp256k1 public key (transferable)
-        "1AAB" => Sizage {
-            hs: 4,
-            ss: 0,
-            fs: 48,
-            ls: 0,
-        },
-        // Ed448 non-transferable prefix
-        "1AAC" => Sizage {
-            hs: 4,
-            ss: 0,
-            fs: 80,
-            ls: 0,
-        },
-        // Ed448 public key (transferable)
-        "1AAD" => Sizage {
-            hs: 4,
-            ss: 0,
-            fs: 80,
-            ls: 0,
-        },
-        // Ed448 signature
-        "1AAE" => Sizage {
-            hs: 4,
-            ss: 0,
-            fs: 156,
-            ls: 0,
-        },
-        // Tag1 (1 byte tag)
-        "1AAF" => Sizage {
-            hs: 4,
-            ss: 0,
-            fs: 8,
-            ls: 0,
-        },
-        // DateTime (32 bytes)
-        "1AAG" => Sizage {
-            hs: 4,
-            ss: 0,
-            fs: 36,
-            ls: 0,
-        },
-        // ECDSA secp256r1 non-transferable prefix
-        "1AAI" => Sizage {
-            hs: 4,
-            ss: 0,
-            fs: 48,
-            ls: 0,
-        },
-        // ECDSA secp256r1 public key (transferable)
-        "1AAJ" => Sizage {
-            hs: 4,
-            ss: 0,
-            fs: 48,
-            ls: 0,
-        },
-        // Blake3-512 digest
-        "1AAH" => Sizage {
-            hs: 4,
-            ss: 0,
-            fs: 92,
-            ls: 0,
-        },
-        // SHA3-512 digest
-        "1AAK" => Sizage {
-            hs: 4,
-            ss: 0,
-            fs: 92,
-            ls: 0,
-        },
-        // Blake2b-512 digest
-        "1AAL" => Sizage {
-            hs: 4,
-            ss: 0,
-            fs: 92,
-            ls: 0,
-        },
-        // SHA2-512 digest
-        "1AAM" => Sizage {
-            hs: 4,
-            ss: 0,
-            fs: 92,
-            ls: 0,
-        },
+        // ── one-character codes ─────────────────────────────────────────
+        "A" => fixed(1, 0, 44, 0),  // Ed25519_Seed
+        "B" => fixed(1, 0, 44, 0),  // Ed25519N: non-transferable verification key
+        "C" => fixed(1, 0, 44, 0),  // X25519 public encryption key
+        "D" => fixed(1, 0, 44, 0),  // Ed25519 verification key
+        "E" => fixed(1, 0, 44, 0),  // Blake3_256 digest
+        "F" => fixed(1, 0, 44, 0),  // Blake2b_256 digest
+        "G" => fixed(1, 0, 44, 0),  // Blake2s_256 digest
+        "H" => fixed(1, 0, 44, 0),  // SHA3_256 digest
+        "I" => fixed(1, 0, 44, 0),  // SHA2_256 digest
+        "J" => fixed(1, 0, 44, 0),  // ECDSA_256k1_Seed
+        "K" => fixed(1, 0, 76, 0),  // Ed448_Seed
+        "L" => fixed(1, 0, 76, 0),  // X448 public encryption key
+        "M" => fixed(1, 0, 4, 0),   // Short: 2-byte number
+        "N" => fixed(1, 0, 12, 0),  // Big: 8-byte number
+        "O" => fixed(1, 0, 44, 0),  // X25519_Private decryption key
+        "P" => fixed(1, 0, 124, 0), // X25519_Cipher_Seed: sealed box of a qb64 seed
+        "Q" => fixed(1, 0, 44, 0),  // ECDSA_256r1_Seed
+        "R" => fixed(1, 0, 8, 0),   // Tall: 5-byte number
+        "S" => fixed(1, 0, 16, 0),  // Large: 11-byte number
+        "T" => fixed(1, 0, 20, 0),  // Great: 14-byte number
+        "U" => fixed(1, 0, 24, 0),  // Vast: 17-byte number
+        "V" => fixed(1, 0, 4, 1),   // Label1: 1-byte label, lead size 1
+        "W" => fixed(1, 0, 4, 0),   // Label2: 2-byte label
+        "X" => fixed(1, 3, 4, 0),   // Tag3: 3 Base64 characters in the soft part
+        "Y" => fixed(1, 7, 8, 0),   // Tag7
+        "Z" => fixed(1, 11, 12, 0), // Tag11
+        "a" => fixed(1, 0, 44, 0),  // Salt_256
+        "b" => fixed(1, 3, 8, 0),   // GramHead: 3 soft (proto/version/ilk) + 3 raw bytes
 
-        // 2-character codes starting with 0
-        // Random salt (128-bit / 16 bytes)
-        "0A" => Sizage {
-            hs: 2,
-            ss: 0,
-            fs: 24,
-            ls: 0,
-        },
-        // Ed25519 signature (64 bytes)
-        "0B" => Sizage {
-            hs: 2,
-            ss: 0,
-            fs: 88,
-            ls: 0,
-        },
-        // ECDSA secp256k1 signature (64 bytes)
-        "0C" => Sizage {
-            hs: 2,
-            ss: 0,
-            fs: 88,
-            ls: 0,
-        },
-        // Blake3-512 digest (old code)
-        "0D" => Sizage {
-            hs: 2,
-            ss: 0,
-            fs: 88,
-            ls: 0,
-        },
-        // Blake2b-512 digest (old code)
-        "0E" => Sizage {
-            hs: 2,
-            ss: 0,
-            fs: 88,
-            ls: 0,
-        },
-        // SHA3-512 digest
-        "0F" => Sizage {
-            hs: 2,
-            ss: 0,
-            fs: 88,
-            ls: 0,
-        },
-        // SHA2-512 digest
-        "0G" => Sizage {
-            hs: 2,
-            ss: 0,
-            fs: 88,
-            ls: 0,
-        },
-        // ECDSA secp256r1 signature
-        "0I" => Sizage {
-            hs: 2,
-            ss: 0,
-            fs: 88,
-            ls: 0,
-        },
+        // ── two-character codes ─────────────────────────────────────────
+        "0A" => fixed(2, 0, 24, 0),  // Salt_128
+        "0B" => fixed(2, 0, 88, 0),  // Ed25519_Sig
+        "0C" => fixed(2, 0, 88, 0),  // ECDSA_256k1_Sig
+        "0D" => fixed(2, 0, 88, 0),  // Blake3_512 digest
+        "0E" => fixed(2, 0, 88, 0),  // Blake2b_512 digest
+        "0F" => fixed(2, 0, 88, 0),  // SHA3_512 digest
+        "0G" => fixed(2, 0, 88, 0),  // SHA2_512 digest
+        "0H" => fixed(2, 0, 8, 0),   // Long: 4-byte number
+        "0I" => fixed(2, 0, 88, 0),  // ECDSA_256r1_Sig
+        "0J" => fixed(2, 2, 4, 0),   // Tag1: 1 character, pre-padded with `_`
+        "0K" => fixed(2, 2, 4, 0),   // Tag2
+        "0L" => fixed(2, 6, 8, 0),   // Tag5: 5 characters, pre-padded with `_`
+        "0M" => fixed(2, 6, 8, 0),   // Tag6
+        "0N" => fixed(2, 10, 12, 0), // Tag9: 9 characters, pre-padded with `_`
+        "0O" => fixed(2, 10, 12, 0), // Tag10
+
+        // ── four-character codes ────────────────────────────────────────
+        "1AAA" => fixed(4, 0, 48, 0), // ECDSA_256k1N: non-transferable key
+        "1AAB" => fixed(4, 0, 48, 0), // ECDSA_256k1 verification key
+        "1AAC" => fixed(4, 0, 80, 0), // Ed448N: non-transferable key
+        "1AAD" => fixed(4, 0, 80, 0), // Ed448 verification key
+        "1AAE" => fixed(4, 0, 156, 0), // Ed448_Sig
+        "1AAF" => fixed(4, 4, 8, 0),  // Tag4
+        "1AAG" => fixed(4, 0, 36, 0), // DateTime: Base64-custom ISO-8601
+        "1AAH" => fixed(4, 0, 100, 0), // X25519_Cipher_Salt: sealed box of a qb64 salt
+        "1AAI" => fixed(4, 0, 48, 0), // ECDSA_256r1N: non-transferable key
+        "1AAJ" => fixed(4, 0, 48, 0), // ECDSA_256r1 verification key
+        "1AAK" => fixed(4, 0, 4, 0),  // Null
+        "1AAL" => fixed(4, 0, 4, 0),  // No (false)
+        "1AAM" => fixed(4, 0, 4, 0),  // Yes (true)
+        "1AAN" => fixed(4, 8, 12, 0), // Tag8
+        "1AAO" => fixed(4, 0, 4, 0),  // Escape
+        "1AAP" => fixed(4, 0, 4, 0),  // Empty
 
         // Variable-length codes. The lead size `ls` is part of the code: the
         // number of zero bytes prepended to the raw value to make it a whole
         // number of triplets. `4x`/`7AAx` have none, `5x`/`8AAx` one and
-        // `6x`/`9AAx` two (keripy `StrB64_L0/L1/L2`, `Bytes_L0/L1/L2` and their
-        // `_Big_` forms). Small forms count quadlets in 2 characters, big forms
-        // in 4.
-        "4A" => var(2, 0),   // StrB64_L0: Base64 string, lead size 0
-        "5A" => var(2, 1),   // StrB64_L1: Base64 string, lead size 1
-        "6A" => var(2, 2),   // StrB64_L2: Base64 string, lead size 2
-        "4B" => var(2, 0),   // Bytes_L0: bytes, lead size 0
-        "5B" => var(2, 1),   // Bytes_L1: bytes, lead size 1
-        "6B" => var(2, 2),   // Bytes_L2: bytes, lead size 2
-        "7AAA" => var(4, 0), // StrB64_Big_L0
-        "8AAA" => var(4, 1), // StrB64_Big_L1
-        "9AAA" => var(4, 2), // StrB64_Big_L2
-        "7AAB" => var(4, 0), // Bytes_Big_L0
-        "8AAB" => var(4, 1), // Bytes_Big_L1
-        "9AAB" => var(4, 2), // Bytes_Big_L2
+        // `6x`/`9AAx` two. Small forms count quadlets in 2 characters, big
+        // forms in 4.
+        //   A StrB64, B Bytes, C X25519_Cipher, D X25519_Cipher_QB64,
+        //   E X25519_Cipher_QB2, F HPKEBase_Cipher, H Decimal
+        "4A" | "4B" | "4C" | "4D" | "4E" | "4F" | "4H" => var(2, 0),
+        "5A" | "5B" | "5C" | "5D" | "5E" | "5F" | "5H" => var(2, 1),
+        "6A" | "6B" | "6C" | "6D" | "6E" | "6F" | "6H" => var(2, 2),
+        "7AAA" | "7AAB" | "7AAC" | "7AAD" | "7AAE" | "7AAF" | "7AAH" => var(4, 0),
+        "8AAA" | "8AAB" | "8AAC" | "8AAD" | "8AAE" | "8AAF" | "8AAH" => var(4, 1),
+        "9AAA" | "9AAB" | "9AAC" | "9AAD" | "9AAE" | "9AAF" | "9AAH" => var(4, 2),
 
         _ => return None,
     };
     Some(sizage)
+}
+
+/// The extra size (keripy `xs`) of a matter code: how many of its soft
+/// characters are `_` pre-pad in front of the special value. Non-zero only
+/// for the odd-length tags `0J` (Tag1), `0L` (Tag5) and `0N` (Tag9); zero for
+/// every other known code, `None` for an unknown one.
+pub fn matter_xtra_size(code: &str) -> Option<usize> {
+    match code {
+        "0J" | "0L" | "0N" => Some(1),
+        _ => matter_sizage(code).map(|_| 0),
+    }
 }
 
 /// Counter code table: maps counter code string to Sizage.

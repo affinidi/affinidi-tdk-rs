@@ -1,5 +1,14 @@
 # Affinidi mdoc Changelog
 
+## [0.6.2] - 2026-11-15
+
+strict Ed25519 verification (#1143)
+
+- **Behaviour change (R3.6):** `EdDsaCoseVerifier` verifies with
+  `ed25519-dalek`'s `verify_strict`, the one Ed25519 policy across the
+  workspace. It refuses small-order public keys and `R` points that plain
+  `verify` accepted; signatures from any RFC 8032 signer verify as before.
+
 ## [0.6.1] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

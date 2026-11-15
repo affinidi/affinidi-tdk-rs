@@ -16,7 +16,7 @@
  * - **Hash**: SHA-512 (internal to Ed25519)
  */
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
 use crate::cose::{CoseSigner, CoseVerifier};
 use crate::error::{MdocError, Result};
@@ -121,7 +121,10 @@ impl CoseVerifier for EdDsaCoseVerifier {
         let sig = Signature::from_slice(signature)
             .map_err(|e| MdocError::Cose(format!("invalid EdDSA signature: {e}")))?;
 
-        match self.verifying_key.verify(data, &sig) {
+        // `verify_strict`, the workspace's one Ed25519 policy (#1143): it
+        // refuses small-order keys and `R` points, which plain `verify` lets
+        // through. Signatures from any RFC 8032 signer pass both.
+        match self.verifying_key.verify_strict(data, &sig) {
             Ok(()) => Ok(true),
             Err(_) => Ok(false),
         }
