@@ -194,7 +194,7 @@ Secure, private messaging built on
 | [`affinidi-messaging-mediator-types`](./crates/messaging/affinidi-messaging-mediator-types/) | Protocol types shared by the mediator and its clients |
 | [`affinidi-messaging-sdk`](./crates/messaging/affinidi-messaging-sdk/) | SDK for integrating Affinidi Messaging into your application |
 | [`affinidi-messaging-text-client`](./crates/messaging/affinidi-messaging-text-client/) | Terminal-based DIDComm chat client — *not published* |
-| [`affinidi-tsp`](./crates/messaging/affinidi-tsp/) | Trust Spanning Protocol (TSP) with HPKE-Auth encryption |
+| [`affinidi-tsp`](./crates/messaging/affinidi-tsp/) | Trust Spanning Protocol (TSP) implementation (HPKE-Base, CESR) |
 
 ### [Trust](./crates/trust/)
 

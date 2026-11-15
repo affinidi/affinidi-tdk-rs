@@ -7,18 +7,24 @@
 > `CHANGELOG.md` — a directory-level file cannot say which crate a change
 > shipped in, and every crate here versions independently. Start with:
 >
-> - [`affinidi-messaging-mediator`](https://github.com/affinidi/affinidi-messaging-mediator/blob/main/crates/affinidi-messaging-mediator/CHANGELOG.md) (now in its own repository)
 > - [`affinidi-messaging-sdk`](affinidi-messaging-sdk/CHANGELOG.md)
 > - [`affinidi-messaging-didcomm`](affinidi-messaging-didcomm/CHANGELOG.md)
+> - [`affinidi-messaging-didcomm-v1`](affinidi-messaging-didcomm-v1/CHANGELOG.md)
 > - [`affinidi-messaging-didcomm-service`](affinidi-messaging-didcomm-service/CHANGELOG.md)
+> - [`affinidi-messaging-core`](affinidi-messaging-core/CHANGELOG.md)
 > - [`affinidi-messaging-delivery`](affinidi-messaging-delivery/CHANGELOG.md)
-> - [`affinidi-messaging-test-mediator`](https://github.com/affinidi/affinidi-messaging-mediator/blob/main/crates/affinidi-messaging-test-mediator/CHANGELOG.md) (now in its own repository)
+> - [`affinidi-messaging-mediator-types`](affinidi-messaging-mediator-types/CHANGELOG.md)
+> - [`affinidi-messaging-text-client`](affinidi-messaging-text-client/CHANGELOG.md)
 > - [`affinidi-tsp`](affinidi-tsp/CHANGELOG.md)
+> - [`affinidi-messaging-mediator`](https://github.com/affinidi/affinidi-messaging-mediator/blob/main/crates/affinidi-messaging-mediator/CHANGELOG.md) (now in its own repository)
+> - [`affinidi-messaging-test-mediator`](https://github.com/affinidi/affinidi-messaging-mediator/blob/main/crates/affinidi-messaging-test-mediator/CHANGELOG.md) (now in its own repository)
 >
 > The history below is kept for the record and stops at Mediator 0.15.5
 > (24th May 2026). Anything after that is in the per-crate files — this file
 > being both stale and plausible is how a recent change got written to it by
-> mistake.
+> mistake. (That entry — SDK 0.18.64 / Test Mediator 0.2.42, 24th July 2026 —
+> has been removed from here; it is recorded as `[0.18.64]` in the SDK's
+> changelog.)
 
 
 Why are there skipped version numbers? Sometimes when deploying via CI/CD Pipeline
@@ -26,23 +32,6 @@ we find little issues that only affect deployment.
 
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
-
-## 24th July 2026
-
-### SDK (0.18.64) / Test Mediator (0.2.42)
-
-- **FIX: a slow consumer silently lost packed (TSP) frames** (#647). The
-  packed-frame queue added in #646 sat outside the socket-read
-  backpressure guard, so the only way to honour its bound was to discard
-  the oldest frame — and a discarded packed frame is unrecoverable,
-  because under delete-on-send the mediator dropped its copy the moment
-  it wrote it. A consumer that stopped polling for long enough therefore
-  lost messages outright, with only a `warn!` to show for it. Both
-  inbound caches now share one policy: when either is full the select
-  loop stops reading the socket, and nothing is discarded. A consumer
-  that stalls stalls its own connection instead. The queue is bounded by
-  the same count *and* byte limits as the DIDComm cache
-  (`fetch_cache_limit_count` / `fetch_cache_limit_bytes`).
 
 ## 24th May 2026
 

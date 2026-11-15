@@ -33,12 +33,14 @@ mediator routes and stores messages but **cannot** read their content.
 |---|---|
 | [`affinidi-messaging-sdk`](./affinidi-messaging-sdk/) | SDK for integrating messaging into your application |
 | [`affinidi-messaging-didcomm`](./affinidi-messaging-didcomm/) | DIDComm v2.1 protocol implementation |
-| [`affinidi-messaging-core`](./affinidi-messaging-core/) | Protocol-agnostic messaging traits |
-| [`affinidi-messaging-didcomm-service`](./affinidi-messaging-didcomm-service/) | Framework for building always-online DIDComm services with mediator connectivity, message routing, middleware, and handler dispatch |
-| [`affinidi-messaging-helpers`](./affinidi-messaging-helpers/) | Setup tools, environment config, and example runners |
+| [`affinidi-messaging-didcomm-v1`](./affinidi-messaging-didcomm-v1/) | DIDComm v1 (Aries RFC 0019) messaging implementation |
 | [`affinidi-tsp`](./affinidi-tsp/) | Trust Spanning Protocol implementation (HPKE-Base, CESR) |
-| [`affinidi-messaging-text-client`](./affinidi-messaging-text-client/) | Terminal-based DIDComm chat client |
+| [`affinidi-messaging-core`](./affinidi-messaging-core/) | Protocol-agnostic messaging traits |
+| [`affinidi-messaging-delivery`](./affinidi-messaging-delivery/) | Reliable delivery layer: durable outbox and drain over the `MessageTransport` trait |
+| [`affinidi-messaging-didcomm-service`](./affinidi-messaging-didcomm-service/) | Framework for always-online services (`AffinidiMessageService`): mediator connectivity, message lifecycle, middleware and handler dispatch for DIDComm, with TSP multiplexed on the same connection behind the `tsp` feature |
 | [`affinidi-messaging-mediator-types`](./affinidi-messaging-mediator-types/) | Protocol types shared by the mediator and its clients (ACLs, problem reports, pickup envelopes) |
+| [`affinidi-messaging-helpers`](./affinidi-messaging-helpers/) | Example runners and the `mediator_administration` tool; environment files are hand-written (schema in its README). Not published |
+| [`affinidi-messaging-text-client`](./affinidi-messaging-text-client/) | Terminal-based DIDComm chat client. Not published |
 
 The mediator itself — `affinidi-messaging-mediator`, `-mediator-common`, the
 `affinidi-messaging-test-mediator` fixture, and the `mediator-console`
@@ -46,7 +48,7 @@ The mediator itself — `affinidi-messaging-mediator`, `-mediator-common`, the
 [affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator).
 
 **Dependencies:**
-[affinidi-did-resolver](../identity/affinidi-did-resolver-cache-sdk/) for DID Document resolution.
+[affinidi-did-resolver-cache-sdk](../identity/affinidi-did-resolver-cache-sdk/) for DID Document resolution.
 
 ## Getting Started
 
@@ -72,7 +74,7 @@ mediator in [affinidi/affinidi-messaging-mediator](https://github.com/affinidi/a
 
 ## Related Crates
 
-- [`affinidi-did-resolver`](../identity/affinidi-did-resolver-cache-sdk/) — DID resolution and caching
+- [`affinidi-did-resolver-cache-sdk`](../identity/affinidi-did-resolver-cache-sdk/) — DID resolution and caching
 - [`affinidi-tdk`](../tdk/affinidi-tdk/) — Unified TDK entry point
 - [`affinidi-meeting-place`](../applications/affinidi-meeting-place/) — Secure discovery and connection
 - [`affinidi-cesr`](../core/affinidi-cesr/) — CESR codec used by TSP
