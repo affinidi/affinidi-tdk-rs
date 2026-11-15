@@ -1,5 +1,53 @@
 # Affinidi Status List Changelog
 
+## Unreleased (0.2.0) — issuer allocation state split out; multibase `encodedList`; all W3C status purposes
+
+Breaking (R3.6): API and wire changes. Coordinate with every service that
+publishes or fetches Bitstring Status List credentials.
+
+- **Wire change — `encodedList` (#1059):** `BitstringStatusList::encode` now
+  emits the multibase form W3C Bitstring Status List v1.0 requires: `u` +
+  base64url (no padding) of the GZIP stream (`uH4sI...`). `decode` accepts
+  that form and, for lists written by earlier versions, bare base64url (a
+  GZIP stream's base64url always starts with `H`, so the two cannot be
+  confused); any other multibase prefix is refused with a clear `Encoding`
+  error. **Consumer note:** a verifier still on 0.1.x cannot decode a list
+  issued by 0.2 (its decoder sees the extra `u`). Upgrade verifiers before,
+  or together with, issuers.
+- **`StatusPurpose` (#1059):** gains `Refresh`, `Message` and `Other(String)`
+  and is `#[non_exhaustive]`, so a `BitstringStatusListEntry` with
+  `statusPurpose: "refresh"`, `"message"` or an unknown value now parses
+  instead of failing. It is no longer `Copy` (it is `Clone`), and has
+  `as_str`, `From<&str>`, `From<String>` and `FromStr`. Wire values are
+  unchanged for `revocation` / `suspension`.
+- **Issuer allocation state (#1058):** new `StatusListAllocator` holds which
+  indices have been handed out (a bitset plus a free count) and is
+  `Serialize`/`Deserialize` (`{ "size", "assigned": <base64url bitset> }`,
+  validated on load). **Persist it next to the list:** a `0` bit is the same
+  for "free" and "issued to a valid credential", so an issuer that reloads
+  only the encoded list can hand an index out twice, and revoking either
+  credential then revokes both. `StatusListAllocator::from_list` recovers what
+  a list alone can tell (set bits are reserved).
+  - `allocate_index` moved from `BitstringStatusList` to the allocator. It is
+    rejection sampling while at least a quarter of the list is free, falling
+    back to a uniform pick by scanning the bitset — no per-call allocation (it
+    used to build a ~1 MB `Vec` of free indices on every call at the default
+    size) and still uniformly random.
+  - `add_decoys` moved to `StatusListAllocator::add_decoys(&mut list, count)
+    -> Result<usize>`: capped at the free count (returns how many were added)
+    instead of looping forever when `count` exceeded the free slots, no panic
+    on a size-0 list, and an error if the list is a different size.
+  - `reserve(index)` records an index chosen by hand; `BitstringStatusList::set`
+    no longer touches assignment state.
+- **`BitstringStatusList`** is now the list only (bits, size, purpose), and
+  `decode` no longer allocates a per-entry `Vec<bool>` (8x the list) for
+  verifier-side use. It derives `PartialEq`/`Eq`.
+- **Added (#1057):** `oid4vc` feature —
+  `VerifiedStatusListToken::verify_with_jws_verifier` checks a Status List
+  Token's signature with `affinidi-oid4vc-core`'s raw-bytes `JwtVerifier`
+  (`Es256Verifier`, `EdDsaVerifier`, ...) under an algorithm allowlist, the
+  same trait the OID4VC crates use. The closure-based `verify` is unchanged.
+
 ## Unreleased (0.1.7) — IETF Token Status List
 
 Additive: a new `token` module and three new `StatusListError` variants

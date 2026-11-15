@@ -1,5 +1,17 @@
 # Affinidi SD-JWT Changelog
 
+## Unreleased (0.2.1) — one compact-JWS header decoder
+
+- **Changed:** the KB-JWT `typ` check reuses the crate's compact-JWS part
+  decoder instead of its own copy. Same results; the error for an
+  undecodable KB-JWT header is still `SdJwtError::KeyBinding` (its message now
+  carries the underlying decode error).
+- **Docs (#1057):** `JwtVerifier` points at
+  `affinidi_oid4vc_core::sd_jwt::{AllowlistVerifier, SdJwtSigner,
+  holder_key_verifier}` (`sd-jwt` feature of `affinidi-oid4vc-core` 0.1.12),
+  which plug ES256 / EdDSA / custom raw-bytes signers and verifiers, with an
+  algorithm allowlist, into this crate's traits. No API change here.
+
 ## Unreleased (0.2.0) — key binding checked under `cnf.jwk`, with `aud`, `nonce` and `iat` required
 
 Breaking (R3.6): `verify` changes signature and a requested key binding check

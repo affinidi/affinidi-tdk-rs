@@ -34,7 +34,7 @@ name the crate is re-exported as (e.g. `affinidi_tdk::vc`).
 | **`credentials`** | No | group ↓ | — | All credential formats + status + proofs |
 | `vc` | No | `affinidi-vc` | `vc` | W3C Verifiable Credentials |
 | `sd-jwt` | No | `affinidi-sd-jwt` | `sd_jwt` | SD-JWT |
-| `sd-jwt-vc` | No | `affinidi-sd-jwt-vc` | `sd_jwt_vc` | SD-JWT VC |
+| `sd-jwt-vc` | No | `affinidi-vc` (implies `vc`) | `sd_jwt_vc` | SD-JWT VC (re-exports `affinidi_vc::sd_jwt_vc`) |
 | `mdoc` | No | `affinidi-mdoc` | `mdoc` | ISO mdoc / mDL |
 | `status-list` | No | `affinidi-status-list` | `status_list` | Bitstring status lists |
 | **`protocols`** | No | group ↓ | — | OID4VC protocol family |

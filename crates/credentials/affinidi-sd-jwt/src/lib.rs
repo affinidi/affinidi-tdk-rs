@@ -155,7 +155,7 @@ impl SdJwt {
     }
 
     /// Decode a specific part (0=header, 1=payload) from a compact JWS.
-    fn decode_jwt_part(jws: &str, part_index: usize) -> Result<Value, SdJwtError> {
+    pub(crate) fn decode_jwt_part(jws: &str, part_index: usize) -> Result<Value, SdJwtError> {
         let parts: Vec<&str> = jws.splitn(3, '.').collect();
         if parts.len() != 3 {
             return Err(SdJwtError::InvalidFormat("invalid JWS format".into()));

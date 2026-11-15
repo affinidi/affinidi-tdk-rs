@@ -16,16 +16,19 @@ Credential status and revocation management implementing:
 
 ```toml
 [dependencies]
-affinidi-status-list = "0.1"
+affinidi-status-list = "0.2"
 ```
 
 ## Features
 
 - **Status List**: Compressed bitstring with O(1) lookup by index
 - **Revocation List**: Set of revoked credential identifiers
-- **Privacy**: Random index assignment, decoy entries, herd privacy
-- **Multiple purposes**: Revocation, suspension (separate lists per purpose)
-- **Compression**: GZIP compression per W3C Bitstring Status List spec
+- **Privacy**: Random index assignment and decoy entries via `StatusListAllocator`
+  (issuer state — persist it with the list), herd privacy
+- **Multiple purposes**: revocation, suspension, refresh, message (separate lists per purpose)
+- **Encoding**: `encodedList` is multibase base64url (`u` prefix) of the GZIP
+  bitstring, per W3C Bitstring Status List v1.0; bare base64url from older
+  versions still decodes
 - **Token Status List**: 1/2/4/8-bit entries (VALID / INVALID / SUSPENDED),
   ZLIB-compressed; `VerifiedStatusListToken::verify` checks a `statuslist+jwt`
   — signature first (caller-supplied), then `typ`, `sub` = the referenced

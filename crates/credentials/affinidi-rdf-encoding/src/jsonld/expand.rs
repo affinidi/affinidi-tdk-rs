@@ -1,3 +1,7 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use serde_json::{Map, Value, json};
 
 use super::context::{ContainerType, Context};
@@ -49,12 +53,11 @@ pub fn expand_document_safe(document: &Value) -> Result<Value> {
 }
 
 fn expand_document_inner(document: &Value, safe: bool) -> Result<Value> {
-    let mut context = Context::default();
-
     // Process top-level @context
-    if let Some(ctx_val) = document.get("@context") {
-        process_context(&mut context, ctx_val, safe, false)?;
-    }
+    let context = match document.get("@context") {
+        Some(ctx_val) => top_level_context(ctx_val, safe)?,
+        None => Context::default(),
+    };
 
     let result = expand_element(document, &context, safe)?;
 
@@ -64,6 +67,126 @@ fn expand_document_inner(document: &Value, safe: bool) -> Result<Value> {
         Value::Null => Ok(json!([])),
         _ => Ok(json!([result])),
     }
+}
+
+// ── Context caches ──────────────────────────────────────────────────────────
+//
+// Processing a context is deterministic, and the same few are processed over
+// and over: every VC names the bundled `credentials/v2` context, and its
+// type- and property-scoped contexts are applied at every typed node. Both
+// caches below are per thread (`Context` shares its term map through `Rc`)
+// and only ever return a clone of what processing the same input would
+// produce, so expansion output is unchanged. Errors are never cached.
+
+/// Most top-level `@context` URL lists cached per thread.
+const MAX_CACHED_TOP_LEVEL_CONTEXTS: usize = 32;
+/// Most scoped-context applications cached per thread; the cache is cleared
+/// when it fills.
+const MAX_CACHED_SCOPED_CONTEXTS: usize = 512;
+
+/// A scoped-context application: the base context (by term-map identity plus
+/// its scalar settings) and the scoped `@context` value (by address).
+#[derive(PartialEq, Eq, Hash)]
+struct ScopedKey {
+    base_terms: usize,
+    vocab: Option<String>,
+    base_iri: Option<String>,
+    language: Option<String>,
+    scoped: usize,
+    safe: bool,
+    override_protected: bool,
+}
+
+/// The cached result, plus clones of the base context and of the context
+/// whose term definition owns the scoped value. Holding them keeps both term
+/// maps alive and shared, so neither address in the key can be freed and
+/// reused, and `Rc::make_mut` can never mutate either map in place: the key
+/// keeps meaning exactly the inputs that produced `result`.
+struct ScopedEntry {
+    _base: Context,
+    _owner: Context,
+    result: Context,
+}
+
+thread_local! {
+    static TOP_LEVEL_CONTEXTS: RefCell<HashMap<(bool, Vec<String>), Context>> =
+        RefCell::new(HashMap::new());
+    static SCOPED_CONTEXTS: RefCell<HashMap<ScopedKey, ScopedEntry>> =
+        RefCell::new(HashMap::new());
+}
+
+/// The active context for a document's top-level `@context`. A URL or list of
+/// URLs (the usual VC form) is processed once per thread and then cloned.
+fn top_level_context(value: &Value, safe: bool) -> Result<Context> {
+    let urls: Option<Vec<String>> = match value {
+        Value::String(url) => Some(vec![url.clone()]),
+        Value::Array(items) => items
+            .iter()
+            .map(|item| item.as_str().map(str::to_string))
+            .collect(),
+        _ => None,
+    };
+    let Some(urls) = urls else {
+        let mut context = Context::default();
+        process_context(&mut context, value, safe, false)?;
+        return Ok(context);
+    };
+    let key = (safe, urls);
+    if let Some(hit) = TOP_LEVEL_CONTEXTS.with(|cache| cache.borrow().get(&key).cloned()) {
+        return Ok(hit);
+    }
+    let mut context = Context::default();
+    process_context(&mut context, value, safe, false)?;
+    TOP_LEVEL_CONTEXTS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= MAX_CACHED_TOP_LEVEL_CONTEXTS {
+            cache.clear();
+        }
+        cache.insert(key, context.clone());
+    });
+    Ok(context)
+}
+
+/// Layer `scoped` — a scoped `@context` taken from a term definition in
+/// `owner` — over `base`, reusing an earlier identical application.
+fn apply_scoped_context(
+    base: &Context,
+    owner: &Context,
+    scoped: &Value,
+    safe: bool,
+    override_protected: bool,
+) -> Result<Context> {
+    let key = ScopedKey {
+        base_terms: Rc::as_ptr(&base.terms) as usize,
+        vocab: base.vocab.clone(),
+        base_iri: base.base.clone(),
+        language: base.default_language.clone(),
+        scoped: scoped as *const Value as usize,
+        safe,
+        override_protected,
+    };
+    if let Some(hit) =
+        SCOPED_CONTEXTS.with(|cache| cache.borrow().get(&key).map(|e| e.result.clone()))
+    {
+        return Ok(hit);
+    }
+    let mut child = base.clone();
+    process_context(&mut child, scoped, safe, override_protected)?;
+    SCOPED_CONTEXTS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= MAX_CACHED_SCOPED_CONTEXTS {
+            cache.clear();
+        }
+        cache.insert(
+            key,
+            ScopedEntry {
+                _base: base.clone(),
+                _owner: owner.clone(),
+                result: child.clone(),
+            },
+        );
+    });
+    Ok(child)
 }
 
 /// Process a `@context` value. Safe mode refuses features this crate does not
@@ -222,9 +345,9 @@ fn expand_object(obj: &Value, parent_context: &Context, safe: bool) -> Result<Va
         // value objects) see the full active context; nested node objects see
         // the context from before any type-scoped context (safe mode).
         let scoped_ctx = term_def.and_then(|td| td.context.as_ref());
-        let value_context = with_property_scope(&context, scoped_ctx, safe)?;
+        let value_context = with_property_scope(&context, &context, scoped_ctx, safe)?;
         let node_context = if safe && pre_type_context.is_some() {
-            with_property_scope(outer_context, scoped_ctx, safe)?
+            with_property_scope(outer_context, &context, scoped_ctx, safe)?
         } else {
             value_context.clone()
         };
@@ -263,13 +386,18 @@ fn expand_object(obj: &Value, parent_context: &Context, safe: bool) -> Result<Va
     Ok(Value::Object(result))
 }
 
-/// Layer a property-scoped context, if any, over `context`.
-fn with_property_scope(context: &Context, scoped: Option<&Value>, safe: bool) -> Result<Context> {
-    let mut child = context.clone();
-    if let Some(scoped) = scoped {
-        process_context(&mut child, scoped, safe, true)?;
+/// Layer a property-scoped context, if any, over `context`. `owner` is the
+/// context whose term definition holds `scoped`.
+fn with_property_scope(
+    context: &Context,
+    owner: &Context,
+    scoped: Option<&Value>,
+    safe: bool,
+) -> Result<Context> {
+    match scoped {
+        Some(scoped) => apply_scoped_context(context, owner, scoped, safe, true),
+        None => Ok(context.clone()),
     }
-    Ok(child)
 }
 
 /// Add a node's `@id` to `result`. Safe mode refuses an id this crate would
@@ -373,7 +501,7 @@ fn build_type_scoped_context(
         if let Some(term_def) = context.get_term(type_name)
             && let Some(ref scoped_ctx) = term_def.context
         {
-            process_context(&mut new_context, scoped_ctx, safe, false)?;
+            new_context = apply_scoped_context(&new_context, context, scoped_ctx, safe, false)?;
             had_scoped = true;
         }
     }
@@ -665,6 +793,62 @@ fn expand_id_value(value: &str, mapping: &str, context: &Context) -> Result<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn clear_context_caches() {
+        TOP_LEVEL_CONTEXTS.with(|cache| cache.borrow_mut().clear());
+        SCOPED_CONTEXTS.with(|cache| cache.borrow_mut().clear());
+    }
+
+    /// The per-thread context caches only ever return what processing would:
+    /// expansion with warm caches equals expansion from cold, in both modes,
+    /// and an error (never cached) is raised every time.
+    #[test]
+    fn context_caches_do_not_change_expansion() {
+        let vc = json!({
+            "@context": [
+                "https://www.w3.org/ns/credentials/v2",
+                "https://www.w3.org/ns/credentials/examples/v2"
+            ],
+            "id": "urn:uuid:test",
+            "type": ["VerifiableCredential", "ExampleAlumniCredential"],
+            "issuer": "https://example.com/issuer",
+            "validFrom": "2023-01-01T00:00:00Z",
+            "credentialSubject": {
+                "id": "did:example:123",
+                "alumniOf": { "id": "did:example:c276e12ec21ebfeb1f712ebc6f1", "name": "Example University" }
+            },
+            "credentialStatus": {
+                "id": "https://example.com/status/1#94567",
+                "type": "BitstringStatusListEntry",
+                "statusPurpose": "revocation",
+                "statusListIndex": "94567",
+                "statusListCredential": "https://example.com/status/1"
+            }
+        });
+        let mut cold = Vec::new();
+        for safe in [false, true] {
+            clear_context_caches();
+            cold.push(expand_document_inner(&vc, safe).unwrap());
+        }
+        for _ in 0..3 {
+            for (i, safe) in [false, true].into_iter().enumerate() {
+                assert_eq!(expand_document_inner(&vc, safe).unwrap(), cold[i]);
+            }
+        }
+
+        let protected_clash = json!({
+            "@context": [
+                "https://www.w3.org/ns/credentials/v2",
+                { "name": "https://example.com/name" }
+            ],
+            "type": ["VerifiableCredential"],
+            "name": "x"
+        });
+        for _ in 0..2 {
+            assert!(expand_document_safe(&protected_clash).is_err());
+            assert!(expand_document(&protected_clash).is_ok());
+        }
+    }
 
     #[test]
     fn expand_simple_vc() {

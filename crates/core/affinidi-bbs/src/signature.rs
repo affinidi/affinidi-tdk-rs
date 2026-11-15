@@ -37,11 +37,16 @@ pub(crate) fn compute_b(
     h_generators: &[G1Projective],
     msg_scalars: &[Scalar],
 ) -> G1Projective {
-    let mut b = p1_generator() + *q1 * *domain;
-    for (i, scalar) in msg_scalars.iter().enumerate() {
-        b += h_generators[i] * scalar;
-    }
-    b
+    // One multi-scalar multiplication over (Q1, H1..HL). Constant time in the
+    // scalars: on the proof-generation path the messages may be undisclosed.
+    let l = msg_scalars.len();
+    let mut points = Vec::with_capacity(l + 1);
+    points.push(*q1);
+    points.extend_from_slice(&h_generators[..l]);
+    let mut scalars = Vec::with_capacity(l + 1);
+    scalars.push(*domain);
+    scalars.extend_from_slice(msg_scalars);
+    p1_generator() + G1Projective::sum_of_products(&points, &scalars)
 }
 
 /// Sign a set of messages with a BBS secret key.

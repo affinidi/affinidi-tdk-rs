@@ -1,5 +1,18 @@
 # Affinidi Data Integrity Changelog
 
+## Unreleased (0.8.9) — `verify_multi` hashes the document once
+
+Performance only; results and errors are unchanged (#1055).
+
+- `multi::verify_multi` canonicalizes and hashes the document once per
+  canonicalization kind (JCS, RDFC) and reuses that hash for every proof; it
+  used to re-serialize and re-hash it per proof — a full JSON-LD expansion
+  and RDFC-1.0 run per proof for RDFC suites. Only each proof's own config is
+  hashed per proof. A document that fails to canonicalize fails every proof
+  with the same error as before.
+- Picks up `affinidi-rdf-encoding` 0.1.10's context caching (RDFC sign and
+  verify are faster; `verify/eddsa-rdfc-2022` ~213 → ~182 µs on the bench).
+
 ## Unreleased (0.8.8) — did:key decoding goes through affinidi-encoding
 
 - **Changed (#1056):** `resolve_did_key` / `DidKeyResolver` decode with

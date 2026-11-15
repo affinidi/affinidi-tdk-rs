@@ -1,10 +1,25 @@
 /*!
  * OpenID for Verifiable Credential Issuance (OpenID4VCI).
  *
- * Implements the [OpenID4VCI 1.0](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html)
- * specification for issuing verifiable credentials to wallet instances.
+ * Message types and issuer/wallet helpers modelled on
+ * [OpenID4VCI draft 13](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0-13.html).
  *
- * # Flows
+ * **This is not OpenID4VCI 1.0 Final.** The wire types are the draft-13
+ * shapes (`format` + `proof` in [`types::CredentialRequest`], a single
+ * `credential` + `c_nonce` in [`types::CredentialResponse`],
+ * `batch_credential_endpoint` in issuer metadata, `vc+sd-jwt` as the SD-JWT VC
+ * format). A 1.0 Final peer cannot exchange these messages with this crate.
+ *
+ * # Scope
+ *
+ * The crate covers issuer metadata, credential offers, the credential
+ * request/response, a structural request check, deferred responses and the
+ * key-binding [`proof`] (build + verify). It does **not** model the OAuth
+ * token endpoint (no token request/response types, no PKCE, no `tx_code`
+ * verification) or batch issuance: those steps of the flows below are the
+ * caller's responsibility.
+ *
+ * # Flows (for orientation; steps 3–6 / 3 are outside this crate)
  *
  * ## Authorization Code Flow
  * 1. Issuer creates credential offer (QR code / deep link)

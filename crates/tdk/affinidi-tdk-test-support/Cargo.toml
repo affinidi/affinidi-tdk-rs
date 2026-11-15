@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk-test-support"
-version = "0.12.1"
+version = "0.12.2"
 description = "Shared in-process test fixtures and harnesses for the Affinidi TDK workspace"
 edition.workspace = true
 authors.workspace = true
@@ -40,7 +40,7 @@ thiserror = "2"
 ## present / verifier APIs + the SdHasher; status-list backs revocation.
 affinidi-vc = { version = "0.3", path = "../../credentials/affinidi-vc" }
 affinidi-sd-jwt = { version = "0.2", path = "../../credentials/affinidi-sd-jwt" }
-affinidi-status-list = { version = "0.1", path = "../../credentials/affinidi-status-list" }
+affinidi-status-list = { version = "0.2", path = "../../credentials/affinidi-status-list" }
 ## `ed25519_pub_to_did_key` for deterministic issuer/holder/verifier DIDs;
 ## `jose::key_agreement` backs the didcomm_fuzz deterministic keypairs.
 affinidi-crypto = { version = "0.3", path = "../../core/affinidi-crypto" }

@@ -142,7 +142,6 @@ W3C Verifiable Credentials and selective-disclosure formats.
 |---|---|
 | [`affinidi-vc`](./crates/credentials/affinidi-vc/) | W3C Verifiable Credentials Data Model 1.1 and 2.0 |
 | [`affinidi-sd-jwt`](./crates/credentials/affinidi-sd-jwt/) | SD-JWT (Selective Disclosure JWT) per RFC 9901 |
-| [`affinidi-sd-jwt-vc`](./crates/credentials/affinidi-sd-jwt-vc/) | Deprecated: re-exports `affinidi_vc::sd_jwt_vc` (SD-JWT VC) |
 | [`affinidi-data-integrity`](./crates/credentials/affinidi-data-integrity/) | W3C Data Integrity proofs (eddsa-jcs-2022, eddsa-rdfc-2022) |
 | [`affinidi-rdf-encoding`](./crates/credentials/affinidi-rdf-encoding/) | RDFC-1.0 canonicalization and JSON-LD expansion |
 | [`affinidi-status-list`](./crates/credentials/affinidi-status-list/) | Credential status and revocation lists (Bitstring Status List, eIDAS ASL/ARL) |
@@ -156,7 +155,7 @@ OpenID for Verifiable Credentials (OID4VC) protocol family.
 |---|---|
 | [`affinidi-oid4vc-core`](./crates/protocols/affinidi-oid4vc-core/) | Shared types for the OID4VC protocol family |
 | [`affinidi-siopv2`](./crates/protocols/affinidi-siopv2/) | Self-Issued OpenID Provider v2 (SIOPv2) |
-| [`affinidi-openid4vci`](./crates/protocols/affinidi-openid4vci/) | OpenID for Verifiable Credential Issuance (OpenID4VCI) |
+| [`affinidi-openid4vci`](./crates/protocols/affinidi-openid4vci/) | OpenID for Verifiable Credential Issuance (OpenID4VCI) — draft-13 message types |
 | [`affinidi-openid4vp`](./crates/protocols/affinidi-openid4vp/) | OpenID for Verifiable Presentations (OpenID4VP) |
 
 ### [Messaging](./crates/messaging/)

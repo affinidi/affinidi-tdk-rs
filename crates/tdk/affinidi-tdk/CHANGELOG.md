@@ -1,5 +1,19 @@
 # Changelog — `affinidi-tdk`
 
+## 0.48.0 — affinidi-status-list 0.2
+
+- **Changed (breaking):** requires `affinidi-status-list` 0.2, which it
+  re-exports as `status_list` (`status-list` feature). In 0.2 the issuer's
+  index allocation moved to `StatusListAllocator` (persist it with the list),
+  `add_decoys` returns a `Result`, `StatusPurpose` gained `Refresh`,
+  `Message` and `Other(String)` and is `#[non_exhaustive]` (no longer `Copy`),
+  and `encodedList` is emitted with the multibase `u` prefix — a wire change
+  for status list credentials (older lists still decode). See the
+  `affinidi-status-list` changelog.
+- **Docs:** the `sd-jwt-vc` feature row names `affinidi-vc` (the
+  `affinidi-sd-jwt-vc` crate is removed from the workspace; the feature
+  already re-exported `affinidi_vc::sd_jwt_vc`).
+
 ## 0.47.0 — affinidi-messaging-sdk 0.49
 
 - **Changed (breaking):** requires `affinidi-messaging-sdk` 0.49, which it

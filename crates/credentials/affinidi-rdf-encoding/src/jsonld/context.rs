@@ -130,17 +130,18 @@ impl Context {
         // of key order. Pass 1 defines simple string mappings (prefixes / IRIs);
         // pass 2 defines the expanded (object) term definitions, inserting each
         // immediately so later terms can reference earlier ones.
-        let entries: Vec<(String, Value)> = obj
+        // `entries` borrows from `ctx`, not from `self`, so no deep copy of the
+        // context is needed while `self` is updated.
+        let entries: Vec<(&String, &Value)> = obj
             .iter()
             .filter(|(key, _)| !key.starts_with('@'))
-            .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        for (key, value) in entries.iter().filter(|(_, v)| v.is_string()) {
+        for &(key, value) in entries.iter().filter(|(_, v)| v.is_string()) {
             let term_def = create_term_definition(key, value, is_protected, self, mode)?;
             self.define_term(key, term_def, mode)?;
         }
-        for (key, value) in entries.iter().filter(|(_, v)| !v.is_string()) {
+        for &(key, value) in entries.iter().filter(|(_, v)| !v.is_string()) {
             let term_def = create_term_definition(key, value, is_protected, self, mode)?;
             self.define_term(key, term_def, mode)?;
         }

@@ -277,10 +277,18 @@ pub(crate) fn proof_gen_core(
     let t1 = abar * e_tilde + d * r1_tilde;
 
     // 8. Compute T2 = D * r3~ + sum(H_j * m~_j for undisclosed j)
-    let mut t2 = d * r3_tilde;
-    for (k, &j) in undisclosed_indexes.iter().enumerate() {
-        t2 += h_generators[j] * m_tildes[k];
-    }
+    // One constant-time multi-scalar multiplication (the m~ are secret).
+    let t2 = {
+        let mut points = Vec::with_capacity(undisclosed_indexes.len() + 1);
+        let mut scalars = Vec::with_capacity(undisclosed_indexes.len() + 1);
+        points.push(d);
+        scalars.push(r3_tilde);
+        for (k, &j) in undisclosed_indexes.iter().enumerate() {
+            points.push(h_generators[j]);
+            scalars.push(m_tildes[k]);
+        }
+        G1Projective::sum_of_products(&points, &scalars)
+    };
 
     // 8b. Per-verifier pseudonym binding (optional). Per
     // draft-irtf-cfrg-bbs-per-verifier-linkability, the `nym_secret` is the
@@ -553,15 +561,30 @@ pub(crate) fn proof_verify_core(
     // T2 = D*r3~ + sum(H_j*m~_j)
     // And the relationship Bbar = D*r1 - Abar*e means:
     // T2_verify = Bv*c + D*r3^ + sum(H_j*m^_j) - Bbar*c
-    let mut bv = p1_generator() + *q1 * domain;
-    for (k, &i) in disclosed_indexes.iter().enumerate() {
-        bv += h_generators[i] * disclosed_scalars[k];
-    }
-
-    let mut t2 = bv * challenge + d * r3_hat;
-    for (k, &j) in undisclosed_indexes.iter().enumerate() {
-        t2 += h_generators[j] * m_hats[k];
-    }
+    //
+    // Bv*c is distributed over its terms so the whole of T2 is one
+    // multi-scalar multiplication:
+    // T2 = P1*c + Q1*(domain*c) + sum(H_i*(msg_i*c)) + D*r3^ + sum(H_j*m^_j)
+    let t2 = {
+        let n = 3 + disclosed_indexes.len() + undisclosed_indexes.len();
+        let mut points = Vec::with_capacity(n);
+        let mut scalars = Vec::with_capacity(n);
+        points.push(p1_generator());
+        scalars.push(challenge);
+        points.push(*q1);
+        scalars.push(domain * challenge);
+        for (k, &i) in disclosed_indexes.iter().enumerate() {
+            points.push(h_generators[i]);
+            scalars.push(disclosed_scalars[k] * challenge);
+        }
+        points.push(d);
+        scalars.push(r3_hat);
+        for (k, &j) in undisclosed_indexes.iter().enumerate() {
+            points.push(h_generators[j]);
+            scalars.push(m_hats[k]);
+        }
+        G1Projective::sum_of_products(&points, &scalars)
+    };
 
     // 7b. Per-verifier pseudonym binding (optional). nym_secret is the last
     // message (index L-1), always undisclosed; its response is m_hats[u-1].

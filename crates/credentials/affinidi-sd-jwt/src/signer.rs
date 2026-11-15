@@ -31,6 +31,14 @@ pub trait JwtSigner: Send + Sync {
 /// Trait for verifying JWT signatures.
 ///
 /// Implementations verify a compact JWS and return the decoded payload.
+///
+/// Rather than hand-writing one (compact-JWS parsing and the `alg` check are
+/// the error-prone part), wrap a raw-bytes verifier from `affinidi-oid4vc-core`
+/// (`Es256Verifier`, `EdDsaVerifier`, or your own) in
+/// `affinidi_oid4vc_core::sd_jwt::AllowlistVerifier` with the algorithms you
+/// accept (`sd-jwt` feature of that crate). Its `holder_key_verifier` is a
+/// ready-made [`HolderKeyVerifier`](crate::verifier::HolderKeyVerifier) for
+/// KB-JWTs, and `SdJwtSigner` adapts a raw-bytes signer to [`JwtSigner`].
 pub trait JwtVerifier: Send + Sync {
     /// Verify the compact JWS string and return the decoded payload.
     /// Should check the signature and validate the `alg` header.

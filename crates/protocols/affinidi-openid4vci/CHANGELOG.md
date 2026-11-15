@@ -1,5 +1,19 @@
 # Affinidi OpenID4VCI Changelog
 
+## Unreleased (0.2.3) — documented as OpenID4VCI draft 13
+
+Docs only; no code or wire change (#1060).
+
+- The crate, README and module docs said "OpenID4VCI 1.0". The wire types are
+  the **draft-13** shapes (`format` + `proof` in the credential request, a
+  single `credential` + `c_nonce` in the response, `batch_credential_endpoint`
+  in issuer metadata, `vc+sd-jwt`), which a 1.0 Final peer cannot exchange.
+  The docs now name draft 13 and say so.
+- Removed claims of features the crate does not have: no token endpoint
+  types, PKCE or `tx_code` verification (the offer only carries the grant),
+  and no batch request/response types.
+- OpenID4VCI 1.0 Final types are tracked in #1152.
+
 ## Unreleased (0.2.2) — key proof freshness check does not overflow
 
 - **Fixed:** `KeyProof::verify_claims` (and so `verify`) computed
