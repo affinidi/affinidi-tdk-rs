@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-ethr"
-version = "0.1.4"
+version = "0.1.5"
 description = "Minimal did:ethr DID method resolver for the Affinidi TDK"
 repository.workspace = true
 edition.workspace = true
@@ -15,7 +15,16 @@ rust-version.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+# `EthrResolver`: did:ethr as an `affinidi-did-resolver-traits` `Resolver`, so a
+# resolver chain can hold it without an adapter.
+resolver-traits = ["dep:affinidi-did-resolver-traits"]
+
 [dependencies]
+# `EthrResolver`, an `affinidi-did-resolver-traits` `Resolver` for did:ethr.
+# 0.1.6: `NetworkFetchError` converts from `NetworkError`.
+affinidi-did-resolver-traits = { version = "0.1.6", path = "../../affinidi-did-resolver-traits", optional = true }
 affinidi-did-common = "0.4.8"
 base64.workspace = true
 hex.workspace = true

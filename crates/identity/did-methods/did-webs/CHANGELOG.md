@@ -2,6 +2,44 @@
 
 All notable changes to this crate are documented here.
 
+## [0.13.8] - 2026-11-15
+
+DID parsing through `affinidi_did_common::DID`, `affinidi-net-guard` egress
+policies, and an optional resolver-trait impl
+
+### Added
+
+- `WebsResolver::with_egress_policy(builder, EgressPolicy)` (#1153): a
+  resolver that vets each artifact fetch with an `affinidi-net-guard`
+  `EgressPolicy` (an allow-list, named private ranges, …) before the request
+  and at connect time. A loopback host is fetched over plain HTTP when the
+  policy admits loopback (`with_dev_loopback`). It keeps the builder's own
+  request timeout and user agent (#1154); `reqwest` sets neither by default,
+  so set a timeout.
+- `HostPolicy::egress_policy()`: the `EgressPolicy` the shorthand stands for
+  (`None` for `AllowPrivate`). `HostPolicy` is now that shorthand; resolution
+  goes through the egress policy.
+- `DidWebs::from_did(&DID)`: read a parsed `did:webs` DID (or DID URL),
+  whose method `affinidi-did-common` gives as
+  `DIDMethod::Other { method: "webs", .. }`.
+- Feature `resolver-traits` (off by default) (#1153): `WebsResolver`
+  implements `affinidi_did_resolver_traits::AsyncResolver` (name
+  `"WebsResolver"`), declining every method but did:webs. A failed fetch is
+  `ResolverError::NetworkFetch` with its URL, status and `Retry-After`;
+  anything else, including a deactivated identifier, is
+  `ResolverError::ResolutionFailed`.
+
+### Changed — BEHAVIOUR (R3.6)
+
+- `DidWebs::parse` parses the DID with `affinidi_did_common::DID` (#1153)
+  instead of its own splitter, then applies the same did:webs rules as
+  before. A label must now be DID Core syntax: `idchar`s and
+  percent-encodings, so `did:webs:example.com:a~b:<AID>` is refused (write
+  `a%7Eb`). A DID URL with a path (`…:<AID>/x`) is still refused, now with a
+  message naming the path. Resolution through
+  `affinidi-did-resolver-cache-sdk` already parsed the DID this way, so it is
+  unaffected.
+
 ## [0.13.7] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

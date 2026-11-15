@@ -1,5 +1,31 @@
 # Affinidi DID Authentication
 
+## [0.3.19] - 2026-11-15
+
+protocol failures are not retried
+
+### Changed — BEHAVIOUR (R3.6)
+
+- An authentication service answer that arrives but cannot be used is now
+  `DIDAuthError::InvalidResponse` (was `Authentication`) and is not retried
+  (#1145): a body that does not deserialize, and token expiries that are not
+  RFC 3339 timestamps or are before the Unix epoch. Before, they were retried
+  like a transport failure, and with `retry_limit = -1` forever; now
+  `authenticate` returns the first one at once. Display is
+  `Invalid authentication response: …` (was `Authentication failed: …`).
+- A refresh with no tokens, or whose refresh token has expired too, is now
+  `DIDAuthError::NoTokens` (was `Authentication`), which is not retryable: a
+  full `authenticate` is needed. `refresh_tokens` returns it; `authenticate`
+  still falls back to a full handshake as before. Display is
+  `Authentication tokens unavailable: …`.
+- `DIDAuthError::Authentication` now means a transport failure only (the
+  request could not be made or its body read), and stays retryable.
+
+### Added
+
+- `DIDAuthError::InvalidResponse(String)` and `DIDAuthError::NoTokens(String)`;
+  the enum is `#[non_exhaustive]`, so these are additive.
+
 ## [0.3.18] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

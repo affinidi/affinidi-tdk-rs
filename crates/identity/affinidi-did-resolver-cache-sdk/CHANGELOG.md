@@ -1,5 +1,25 @@
 # Affinidi DID Resolver Cache SDK
 
+## [0.8.57] - 2026-11-15
+
+method crates' own resolvers
+
+### Changed
+
+- The did:web, did:webs, did:ebsi, did:ethr, did:jwk and did:pkh resolvers
+  delegate to the method crates' own `affinidi-did-resolver-traits` impls
+  (their new `resolver-traits` feature, #1153), so each method's error
+  mapping lives in one place. `EthrResolver`, `JwkResolver` and `PkhResolver`
+  are now re-exports of those crates' types (same names, still unit structs);
+  `WebResolver`, `WebsResolver` and `EbsiResolver` keep their constructors.
+  The errors callers see are unchanged: an unsuccessful status or transport
+  failure is `DIDCacheError::NetworkFetch`, anything else
+  `DIDCacheError::DIDError`. did:ethr, did:jwk and did:pkh now read the
+  `DIDMethod`'s parsed fields rather than re-splitting the identifier.
+- Requires `affinidi-did-web` 0.1.11, `affinidi-did-webs` 0.13.8,
+  `did-ebsi` 0.1.10, `affinidi-did-ethr` 0.1.5, `affinidi-did-jwk` 0.1.3 and
+  `affinidi-did-pkh` 0.1.5.
+
 ## [0.8.56] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

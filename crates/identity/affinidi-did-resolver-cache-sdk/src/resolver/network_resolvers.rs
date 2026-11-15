@@ -7,8 +7,25 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use affinidi_did_common::{DID, DIDMethod};
-use affinidi_did_resolver_traits::{AsyncResolver, NetworkFetchError, Resolution, ResolverError};
+use affinidi_did_common::DID;
+#[cfg(any(
+    feature = "did-webvh",
+    feature = "did-cheqd",
+    feature = "did-scid",
+    feature = "did-ebsi"
+))]
+use affinidi_did_common::DIDMethod;
+#[cfg(feature = "did-webvh")]
+use affinidi_did_resolver_traits::NetworkFetchError;
+#[cfg(any(
+    test,
+    feature = "did-webvh",
+    feature = "did-cheqd",
+    feature = "did-scid",
+    feature = "did-ebsi"
+))]
+use affinidi_did_resolver_traits::ResolverError;
+use affinidi_did_resolver_traits::{AsyncResolver, Resolution};
 pub use affinidi_did_web::HostPolicy;
 use tracing::error;
 
@@ -46,92 +63,35 @@ pub(crate) fn webvh_deactivated(did: &str) -> didwebvh_rs::DIDWebVHError {
     didwebvh_rs::DIDWebVHError::DeactivatedError(format!("{did} has been deactivated"))
 }
 
-fn did_web_error(err: affinidi_did_web::DidWebError) -> ResolverError {
-    match err {
-        affinidi_did_web::DidWebError::ResolutionFailed { status, url, .. } => {
-            ResolverError::NetworkFetch(
-                NetworkFetchError::new(format!("HTTP {status}"))
-                    .with_url(url)
-                    .with_status(status),
-            )
-        }
-        affinidi_did_web::DidWebError::Http(message) => {
-            ResolverError::NetworkFetch(NetworkFetchError::new(message))
-        }
-        other => ResolverError::ResolutionFailed(other.to_string()),
+/// Log a failed resolution, and pass the resolution on.
+fn logged(method: &str, resolution: Resolution) -> Resolution {
+    if let Some(Err(e)) = &resolution {
+        error!("did:{method} resolution error: {e:?}");
     }
+    resolution
 }
 
 // ---------------------------------------------------------------------------
 // did:ethr
 // ---------------------------------------------------------------------------
 
-/// Resolver for `did:ethr` — Ethereum DID method.
+/// Resolver for `did:ethr` — Ethereum DID method: `affinidi-did-ethr`'s own
+/// [`Resolver`](affinidi_did_resolver_traits::Resolver) (since 0.8.57).
 ///
 /// Resolution is an offline derivation from the identifier: this does not
 /// replay ERC-1056 registry events, so the document is the DID's genesis state.
 #[cfg(feature = "did-ethr")]
-pub struct EthrResolver;
-
-#[cfg(feature = "did-ethr")]
-impl AsyncResolver for EthrResolver {
-    fn name(&self) -> &str {
-        "EthrResolver"
-    }
-
-    fn resolve<'a>(
-        &'a self,
-        did: &'a DID,
-    ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
-        Box::pin(async move {
-            let identifier = match did.method() {
-                DIDMethod::Ethr { identifier, .. } => identifier,
-                _ => return None,
-            };
-
-            Some(
-                affinidi_did_ethr::resolve_identifier(&identifier).map_err(|e| {
-                    error!("did:ethr resolution error: {e:?}");
-                    ResolverError::ResolutionFailed(e.to_string())
-                }),
-            )
-        })
-    }
-}
+pub use affinidi_did_ethr::EthrResolver;
 
 // ---------------------------------------------------------------------------
 // did:pkh
 // ---------------------------------------------------------------------------
 
-/// Resolver for `did:pkh` — PKH (Public Key Hash) DID method.
+/// Resolver for `did:pkh` — PKH (Public Key Hash) DID method:
+/// `affinidi-did-pkh`'s own [`Resolver`](affinidi_did_resolver_traits::Resolver)
+/// (since 0.8.57), which reads the CAIP-10 parts `DIDMethod::Pkh` holds.
 #[cfg(feature = "did-pkh")]
-pub struct PkhResolver;
-
-#[cfg(feature = "did-pkh")]
-impl AsyncResolver for PkhResolver {
-    fn name(&self) -> &str {
-        "PkhResolver"
-    }
-
-    fn resolve<'a>(
-        &'a self,
-        did: &'a DID,
-    ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
-        Box::pin(async move {
-            let identifier = match did.method() {
-                DIDMethod::Pkh { identifier, .. } => identifier,
-                _ => return None,
-            };
-
-            Some(
-                affinidi_did_pkh::resolve_identifier(&identifier).map_err(|e| {
-                    error!("did:pkh resolution error: {e:?}");
-                    ResolverError::ResolutionFailed(e.to_string())
-                }),
-            )
-        })
-    }
-}
+pub use affinidi_did_pkh::PkhResolver;
 
 // ---------------------------------------------------------------------------
 // did:web
@@ -184,20 +144,9 @@ impl AsyncResolver for WebResolver {
         &'a self,
         did: &'a DID,
     ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
-        Box::pin(async move {
-            if !matches!(did.method(), DIDMethod::Web { .. }) {
-                return None;
-            }
-
-            let did_str = did.to_string();
-            Some(match self.inner.resolve(&did_str).await {
-                Ok(doc) => Ok(doc),
-                Err(e) => {
-                    error!("did:web resolution error: {e:?}");
-                    Err(did_web_error(e))
-                }
-            })
-        })
+        // `affinidi-did-web`'s own `AsyncResolver`: an unsuccessful status is a
+        // `NetworkFetch` with its URL, status and `Retry-After`.
+        Box::pin(async move { logged("web", AsyncResolver::resolve(&self.inner, did).await) })
     }
 }
 
@@ -205,35 +154,10 @@ impl AsyncResolver for WebResolver {
 // did:jwk (feature-gated)
 // ---------------------------------------------------------------------------
 
-/// Resolver for `did:jwk` — JSON Web Key DID method.
+/// Resolver for `did:jwk` — JSON Web Key DID method: `affinidi-did-jwk`'s own
+/// [`Resolver`](affinidi_did_resolver_traits::Resolver) (since 0.8.57).
 #[cfg(feature = "did-jwk")]
-pub struct JwkResolver;
-
-#[cfg(feature = "did-jwk")]
-impl AsyncResolver for JwkResolver {
-    fn name(&self) -> &str {
-        "JwkResolver"
-    }
-
-    fn resolve<'a>(
-        &'a self,
-        did: &'a DID,
-    ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
-        Box::pin(async move {
-            let identifier = match did.method() {
-                DIDMethod::Jwk { identifier, .. } => identifier,
-                _ => return None,
-            };
-
-            Some(
-                affinidi_did_jwk::resolve_identifier(&identifier).map_err(|e| {
-                    error!("did:jwk resolution error: {e:?}");
-                    ResolverError::ResolutionFailed(e.to_string())
-                }),
-            )
-        })
-    }
-}
+pub use affinidi_did_jwk::JwkResolver;
 
 // ---------------------------------------------------------------------------
 // did:webvh (feature-gated)
@@ -956,19 +880,6 @@ fn ebsi_pilot() -> Result<&'static did_ebsi::EbsiResolver, ResolverError> {
     Ok(PILOT.get_or_init(|| resolver))
 }
 
-/// A failed did:ebsi resolution: a failed fetch keeps its URL, status and
-/// `Retry-After` as data.
-#[cfg(feature = "did-ebsi")]
-fn ebsi_error(err: did_ebsi::EbsiError) -> ResolverError {
-    match err {
-        did_ebsi::EbsiError::Network(network) => ResolverError::from(network),
-        did_ebsi::EbsiError::Http(message) => {
-            ResolverError::NetworkFetch(NetworkFetchError::new(message))
-        }
-        other => ResolverError::ResolutionFailed(other.to_string()),
-    }
-}
-
 #[cfg(feature = "did-ebsi")]
 impl AsyncResolver for EbsiResolver {
     fn name(&self) -> &str {
@@ -984,15 +895,13 @@ impl AsyncResolver for EbsiResolver {
                 return None;
             }
 
-            let did_str = did.to_string();
             let resolver = match ebsi_pilot() {
                 Ok(resolver) => resolver,
                 Err(e) => return Some(Err(e)),
             };
-            Some(resolver.resolve(&did_str).await.map_err(|e| {
-                error!("did:ebsi resolution error: {e:?}");
-                ebsi_error(e)
-            }))
+            // `did-ebsi`'s own `AsyncResolver`: a failed fetch keeps its URL,
+            // status and `Retry-After` as data.
+            logged("ebsi", AsyncResolver::resolve(resolver, did).await)
         })
     }
 }
@@ -1008,7 +917,7 @@ impl AsyncResolver for EbsiResolver {
 /// `did.json` is cross-checked rather than trusted; a disagreement fails the
 /// resolution.
 ///
-/// `did:webs` is not modelled by [`DIDMethod`], so it arrives here as
+/// `did:webs` is not modelled by `DIDMethod`, so it arrives here as
 /// `DIDMethod::Other { method: "webs", .. }` and is registered under
 /// `MethodName::Other("webs")`.
 #[cfg(feature = "did-webs")]
@@ -1054,64 +963,15 @@ impl AsyncResolver for WebsResolver {
         &'a self,
         did: &'a DID,
     ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
-        Box::pin(async move {
-            match did.method() {
-                DIDMethod::Other { method, .. } if method == "webs" => {}
-                _ => return None,
-            }
-
-            let did_str = did.to_string();
-            Some(self.inner.resolve(&did_str).await.map_err(|e| {
-                error!("did:webs resolution error: {e:?}");
-                webs_error(e)
-            }))
-        })
-    }
-}
-
-/// A failed did:webs resolution: a failed fetch keeps its URL, status and
-/// `Retry-After` as data.
-#[cfg(feature = "did-webs")]
-fn webs_error(err: affinidi_did_webs::DidWebsError) -> ResolverError {
-    match err.network_error() {
-        Some(network) => ResolverError::from(network),
-        None => ResolverError::ResolutionFailed(err.to_string()),
+        // `affinidi-did-webs`'s own `AsyncResolver`: a failed fetch keeps its
+        // URL, status and `Retry-After` as data.
+        Box::pin(async move { logged("webs", AsyncResolver::resolve(&self.inner, did).await) })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(feature = "did-ebsi")]
-    #[test]
-    fn did_ebsi_http_status_is_kept() {
-        let error = ebsi_error(did_ebsi::EbsiError::Network(
-            affinidi_did_common::NetworkError::new("HTTP 429")
-                .with_url("https://api-pilot.ebsi.eu/did-registry/v5/identifiers/did:ebsi:z")
-                .with_status(429)
-                .with_retry_after(std::time::Duration::from_secs(9)),
-        ));
-        let ResolverError::NetworkFetch(fetch) = error else {
-            panic!("expected NetworkFetch, got {error:?}");
-        };
-        assert!(fetch.is_rate_limited());
-        assert_eq!(fetch.retry_after, Some(std::time::Duration::from_secs(9)));
-    }
-
-    #[cfg(feature = "did-webs")]
-    #[test]
-    fn did_webs_http_status_is_kept() {
-        let error = webs_error(affinidi_did_webs::DidWebsError::Network(
-            affinidi_did_common::NetworkError::new("HTTP 404")
-                .with_url("https://example.com/AID/keri.cesr")
-                .with_status(404),
-        ));
-        let ResolverError::NetworkFetch(fetch) = error else {
-            panic!("expected NetworkFetch, got {error:?}");
-        };
-        assert_eq!(fetch.status, Some(404));
-    }
 
     #[cfg(feature = "did-scid")]
     #[test]
@@ -1125,25 +985,34 @@ mod tests {
         assert!(fetch.is_rate_limited());
     }
 
-    #[test]
-    fn did_web_http_status_is_kept() {
-        let error = did_web_error(affinidi_did_web::DidWebError::ResolutionFailed {
-            status: 429,
-            url: "https://example.com/.well-known/did.json".to_string(),
-        });
-        let ResolverError::NetworkFetch(fetch) = error else {
-            panic!("expected NetworkFetch, got {error:?}");
+    /// A refused did:web host is a resolution failure, not a fetch failure;
+    /// the status mapping is tested in `affinidi-did-web`, whose resolver
+    /// this delegates to.
+    #[tokio::test]
+    async fn did_web_refused_host_is_not_a_fetch_failure() {
+        let did: DID = "did:web:127.0.0.1".parse().unwrap();
+        let Some(Err(error)) = WebResolver::new().resolve(&did).await else {
+            panic!("did:web is handled");
         };
-        assert!(fetch.is_rate_limited());
-        assert_eq!(
-            fetch.url.as_deref(),
-            Some("https://example.com/.well-known/did.json")
+        assert!(
+            matches!(error, ResolverError::ResolutionFailed(_)),
+            "{error:?}"
         );
+        let other: DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+            .parse()
+            .unwrap();
+        assert!(WebResolver::new().resolve(&other).await.is_none());
     }
 
-    #[test]
-    fn did_web_invalid_did_is_not_a_fetch_failure() {
-        let error = did_web_error(affinidi_did_web::DidWebError::InvalidDid("bad".into()));
+    #[cfg(feature = "did-webs")]
+    #[tokio::test]
+    async fn did_webs_is_handled_by_its_resolver() {
+        let did: DID = "did:webs:127.0.0.1:ENro7uf0ePmiK3jdTo2YCdXLqW7z7xoP6qhhBou6gBLe"
+            .parse()
+            .unwrap();
+        let Some(Err(error)) = WebsResolver::new().resolve(&did).await else {
+            panic!("did:webs is handled");
+        };
         assert!(
             matches!(error, ResolverError::ResolutionFailed(_)),
             "{error:?}"

@@ -672,6 +672,142 @@ fn normalize_webvh_src(src: &str) -> Result<String, DIDSCIDError> {
     Ok(out)
 }
 
+/// did:scid as an `affinidi-did-resolver-traits`
+/// [`AsyncResolver`](affinidi_did_resolver_traits::AsyncResolver).
+#[cfg(feature = "resolver-traits")]
+mod resolver_impl {
+    use std::future::Future;
+    use std::pin::Pin;
+
+    use affinidi_did_common::{DID, DIDMethod};
+    use affinidi_did_resolver_traits::{AsyncResolver, Resolution, ResolverError};
+    use didwebvh_rs::resolve::ResolveOptions;
+
+    use crate::errors::DIDSCIDError;
+
+    /// Resolves did:scid for a resolver chain, and declines (`None`) every
+    /// other method.
+    ///
+    /// A DID URL's `src` query names the source, as for
+    /// [`resolve_with_options`](crate::resolve_with_options); a peer DID
+    /// (no `src`) has no out-of-band source here and fails with
+    /// [`DIDSCIDError::MissingPeerSource`]. A failed fetch (with its URL,
+    /// status and `Retry-After` when the host answered) is
+    /// [`ResolverError::NetworkFetch`], everything else
+    /// [`ResolverError::ResolutionFailed`].
+    #[derive(Debug, Clone, Default)]
+    pub struct ScidResolver {
+        options: ResolveOptions,
+        #[cfg(feature = "did-webs")]
+        webs: Option<affinidi_did_webs::WebsResolver>,
+    }
+
+    impl ScidResolver {
+        /// A resolver under `ResolveOptions::default()`, whose host policy
+        /// refuses non-public hosts.
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        /// A resolver under `options`, which both formats honour as
+        /// [`resolve_with_options`](crate::resolve_with_options) describes.
+        pub fn with_options(options: ResolveOptions) -> Self {
+            Self {
+                options,
+                #[cfg(feature = "did-webs")]
+                webs: None,
+            }
+        }
+
+        /// Resolve the `ke` format with `webs`, reusing its HTTP client and
+        /// connection pool, as
+        /// [`resolve_with_webs_resolver`](crate::resolve_with_webs_resolver)
+        /// does.
+        #[cfg(feature = "did-webs")]
+        pub fn with_webs_resolver(mut self, webs: affinidi_did_webs::WebsResolver) -> Self {
+            self.webs = Some(webs);
+            self
+        }
+
+        async fn resolve_did(
+            &self,
+            did: &str,
+        ) -> Result<affinidi_did_common::Document, DIDSCIDError> {
+            #[cfg(feature = "did-webs")]
+            let webs = self.webs.as_ref();
+            #[cfg(not(feature = "did-webs"))]
+            let webs = None;
+            crate::resolve_inner(did, None, self.options.clone(), webs).await
+        }
+    }
+
+    /// The [`ResolverError`] for a failed did:scid resolution.
+    pub(crate) fn resolver_error(err: DIDSCIDError) -> ResolverError {
+        match err.network_error() {
+            Some(network) => ResolverError::from(network),
+            None => ResolverError::ResolutionFailed(err.to_string()),
+        }
+    }
+
+    impl AsyncResolver for ScidResolver {
+        fn name(&self) -> &str {
+            "ScidResolver"
+        }
+
+        fn resolve<'a>(
+            &'a self,
+            did: &'a DID,
+        ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+            Box::pin(async move {
+                if !matches!(did.method_ref(), DIDMethod::Scid { .. }) {
+                    return None;
+                }
+                Some(
+                    self.resolve_did(&did.to_string())
+                        .await
+                        .map_err(resolver_error),
+                )
+            })
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn declines_other_methods_and_reports_failures() {
+            let resolver = ScidResolver::new();
+            assert_eq!(AsyncResolver::name(&resolver), "ScidResolver");
+            let web: DID = "did:web:example.com".parse().unwrap();
+            assert!(AsyncResolver::resolve(&resolver, &web).await.is_none());
+
+            // A peer did:scid with no source fails without a fetch.
+            let peer: DID = "did:scid:vh:1:QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"
+                .parse()
+                .unwrap();
+            let Some(Err(err)) = AsyncResolver::resolve(&resolver, &peer).await else {
+                panic!("a did:scid is handled");
+            };
+            assert!(matches!(err, ResolverError::ResolutionFailed(_)), "{err:?}");
+        }
+
+        #[test]
+        fn a_network_error_is_a_network_fetch() {
+            let err = resolver_error(DIDSCIDError::Network(
+                affinidi_did_common::NetworkError::new("HTTP 429").with_status(429),
+            ));
+            let ResolverError::NetworkFetch(fetch) = err else {
+                panic!("expected NetworkFetch, got {err:?}");
+            };
+            assert!(fetch.is_rate_limited());
+        }
+    }
+}
+
+#[cfg(feature = "resolver-traits")]
+pub use resolver_impl::ScidResolver;
+
 #[cfg(test)]
 mod tests {
     use crate::{

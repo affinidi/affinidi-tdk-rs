@@ -1,5 +1,20 @@
 # did:scid
 
+## [0.4.11] - 2026-11-15
+
+optional resolver-trait impl
+
+### Added
+
+- Feature `resolver-traits` (off by default) (#1153): `ScidResolver`, an
+  `affinidi_did_resolver_traits::AsyncResolver` (name `"ScidResolver"`) that
+  resolves did:scid under its `ResolveOptions` (`ScidResolver::with_options`;
+  with `did-webs`, `with_webs_resolver` reuses a did:webs resolver for the
+  `ke` format) and declines every other method. The source is the DID URL's
+  `src`; a peer DID has none here and fails with `MissingPeerSource`. A
+  failed fetch is `ResolverError::NetworkFetch` with its URL, status and
+  `Retry-After`; anything else is `ResolverError::ResolutionFailed`.
+
 ## [0.4.10] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

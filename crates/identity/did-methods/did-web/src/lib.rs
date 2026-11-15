@@ -63,10 +63,10 @@
  */
 
 use std::net::IpAddr;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
-use affinidi_did_common::{DID, DIDMethod, Document};
+use affinidi_did_common::{DID, DIDMethod, Document, NetworkError};
 use affinidi_net_guard::{EgressError, EgressPolicy};
 use percent_encoding::percent_decode_str;
 use thiserror::Error;
@@ -112,10 +112,12 @@ pub enum DidWebError {
         got: String,
     },
 
-    /// The DID named a non-routable host (loopback / private / link-local /
-    /// cloud-metadata), either as a literal address in the DID or as the
-    /// address a hostname in the DID resolved to. Refused before any bytes are
-    /// exchanged, to prevent SSRF into internal services.
+    /// The DID named a host the resolver's policy refuses: a non-routable
+    /// host (loopback / private / link-local / cloud-metadata), either as a
+    /// literal address in the DID or as the address a hostname in the DID
+    /// resolved to, or (under [`DIDWeb::with_egress_policy`]) a host the
+    /// egress policy does not admit. Refused before any bytes are exchanged,
+    /// to prevent SSRF into internal services.
     #[error("did:web refused SSRF-prone host: {0}")]
     BlockedHost(String),
 
@@ -125,6 +127,24 @@ pub enum DidWebError {
         /// The byte cap that was exceeded.
         limit: usize,
     },
+}
+
+impl DidWebError {
+    /// The failed fetch behind this error, as the [`NetworkError`] every DID
+    /// method crate reports: [`DidWebError::ResolutionFailed`] with its URL
+    /// and status, and [`DidWebError::Http`] with its message and no status.
+    /// `None` for any other error.
+    pub fn network_error(&self) -> Option<NetworkError> {
+        match self {
+            Self::ResolutionFailed { status, url } => Some(
+                NetworkError::new(format!("HTTP {status}"))
+                    .with_url(url.clone())
+                    .with_status(*status),
+            ),
+            Self::Http(message) => Some(NetworkError::new(message.clone())),
+            _ => None,
+        }
+    }
 }
 
 /// Default request timeout. Aligns with the historic spruceid `did-web` default.
@@ -142,6 +162,11 @@ pub const DEFAULT_ACCEPT: &str = "application/did+ld+json, application/json";
 ///
 /// A `did:web` value names its own host, so an attacker-supplied DID is an SSRF
 /// primitive unless the resolver refuses non-routable targets.
+///
+/// A shorthand for the two common cases. For anything else (an operator
+/// allow-list, named private ranges, or `affinidi-net-guard`'s full set of
+/// special-use names) build an [`EgressPolicy`] and use
+/// [`DIDWeb::with_egress_policy`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum HostPolicy {
@@ -149,6 +174,13 @@ pub enum HostPolicy {
     /// link-local (which is where the cloud-metadata address lives),
     /// `localhost` and `*.local` — both when the DID names them as a literal
     /// address and when a hostname in the DID *resolves* to one. The default.
+    ///
+    /// Addresses are classified by `affinidi-net-guard`. The names are this
+    /// crate's own, narrower than [`EgressPolicy::public_internet`] (which
+    /// also refuses `*.internal`, `*.home.arpa` and single-label names);
+    /// adopting those is a behaviour change, left for the next breaking
+    /// release. `with_egress_policy(builder, EgressPolicy::public_internet())`
+    /// applies them now.
     #[default]
     PublicOnly,
 
@@ -162,11 +194,32 @@ pub enum HostPolicy {
     AllowPrivate,
 }
 
+/// What a [`DIDWeb`] vets each fetch against.
+#[derive(Debug, Clone)]
+enum Guard {
+    /// [`HostPolicy::PublicOnly`]: this crate's name set and
+    /// `affinidi-net-guard`'s address classes.
+    PublicOnly,
+    /// An [`EgressPolicy`], in full.
+    Egress(EgressPolicy),
+    /// [`HostPolicy::AllowPrivate`]: nothing.
+    Unguarded,
+}
+
+impl From<HostPolicy> for Guard {
+    fn from(policy: HostPolicy) -> Self {
+        match policy {
+            HostPolicy::AllowPrivate => Guard::Unguarded,
+            _ => Guard::PublicOnly,
+        }
+    }
+}
+
 /// did:web resolver wrapping a reusable [`reqwest::Client`].
 #[derive(Debug, Clone)]
 pub struct DIDWeb {
     client: reqwest::Client,
-    policy: HostPolicy,
+    guard: Guard,
 }
 
 impl DIDWeb {
@@ -191,7 +244,10 @@ impl DIDWeb {
     /// connection pool), under an explicit [`HostPolicy`].
     ///
     /// The request timeout is set to [`DEFAULT_TIMEOUT`] and the user agent
-    /// to this crate's, replacing any set on `builder`.
+    /// to this crate's, replacing any set on `builder`. To choose the
+    /// timeout, use [`DIDWeb::with_client_builder_and_timeout`]; to keep the
+    /// builder's own timeout and user agent, use
+    /// [`DIDWeb::with_egress_policy`].
     ///
     /// The guard settings are applied after the caller's, so nothing set on
     /// `builder` can undo them: redirects are never followed, and under
@@ -206,6 +262,19 @@ impl DIDWeb {
         builder: reqwest::ClientBuilder,
         policy: HostPolicy,
     ) -> Result<Self, DidWebError> {
+        Self::with_client_builder_and_timeout(builder, policy, DEFAULT_TIMEOUT)
+    }
+
+    /// As [`DIDWeb::with_client_builder`], with `timeout` as the request
+    /// timeout.
+    ///
+    /// # Errors
+    /// Returns [`DidWebError::Http`] if `reqwest` cannot build the client.
+    pub fn with_client_builder_and_timeout(
+        builder: reqwest::ClientBuilder,
+        policy: HostPolicy,
+        timeout: Duration,
+    ) -> Result<Self, DidWebError> {
         if policy == HostPolicy::AllowPrivate {
             tracing::warn!(
                 target: "affinidi_did_web",
@@ -214,10 +283,39 @@ impl DIDWeb {
                  DIDs resolved are trusted."
             );
         }
-        let client = guard(default_settings(builder), policy)
+        Self::build(default_settings(builder, timeout), policy.into())
+    }
+
+    /// Build a resolver over a client the caller configures, fetching only
+    /// what `policy` admits: the URL a DID points at is vetted with
+    /// [`EgressPolicy::vet_url`] before any request, and every address a
+    /// hostname resolves to is vetted at connect time by
+    /// `affinidi_net_guard::guarded_dns_resolver` under the same policy.
+    ///
+    /// Use it for what [`HostPolicy`] cannot express, such as an operator
+    /// allow-list (`EgressPolicy::with_allow_list`), named private ranges
+    /// (`EgressPolicy::allow_cidrs`), or `affinidi-net-guard`'s full set of
+    /// special-use names ([`EgressPolicy::public_internet`]).
+    ///
+    /// Only the guard settings are applied: redirects are never followed and
+    /// proxies are turned off. The builder's own request timeout and user
+    /// agent are kept, and `reqwest` sets neither by default, so set a
+    /// timeout on `builder` (for example [`DEFAULT_TIMEOUT`]).
+    ///
+    /// # Errors
+    /// Returns [`DidWebError::Http`] if `reqwest` cannot build the client.
+    pub fn with_egress_policy(
+        builder: reqwest::ClientBuilder,
+        policy: EgressPolicy,
+    ) -> Result<Self, DidWebError> {
+        Self::build(builder, Guard::Egress(policy))
+    }
+
+    fn build(builder: reqwest::ClientBuilder, guard: Guard) -> Result<Self, DidWebError> {
+        let client = guard_settings(builder, &guard)
             .build()
             .map_err(|e| DidWebError::Http(format!("cannot build the HTTP client: {e}")))?;
-        Ok(Self { client, policy })
+        Ok(Self { client, guard })
     }
 
     /// Build a resolver from a caller-built client, under
@@ -234,7 +332,7 @@ impl DIDWeb {
     pub fn with_client(client: reqwest::Client) -> Self {
         Self {
             client,
-            policy: HostPolicy::PublicOnly,
+            guard: Guard::PublicOnly,
         }
     }
 
@@ -245,7 +343,10 @@ impl DIDWeb {
         note = "a built client may not carry the connect-time guard; use `with_client_builder`, which applies it"
     )]
     pub fn with_client_and_policy(client: reqwest::Client, policy: HostPolicy) -> Self {
-        Self { client, policy }
+        Self {
+            client,
+            guard: policy.into(),
+        }
     }
 
     /// Resolve a `did:web` DID into its DID Document.
@@ -257,7 +358,11 @@ impl DIDWeb {
         let parsed: DID = did
             .parse()
             .map_err(|e| DidWebError::InvalidDid(format!("{e}")))?;
+        self.resolve_parsed(did, &parsed).await
+    }
 
+    /// Resolve an already parsed `did:web` DID, `did` being its text.
+    async fn resolve_parsed(&self, did: &str, parsed: &DID) -> Result<Document, DidWebError> {
         let (domain, path_segments) = match parsed.method_ref() {
             DIDMethod::Web {
                 domain,
@@ -284,16 +389,21 @@ impl DIDWeb {
         // SSRF guard, first half: the DID names the host, so an
         // attacker-supplied did:web:169.254.169.254 / did:web:localhost would
         // make the resolver fetch an internal or cloud-metadata endpoint.
-        // Refuse a non-routable literal before issuing any request. (Redirects
-        // are already disabled, so a 3xx cannot pivot to one after the fact
-        // either.) The second half -- a hostname that *resolves* to such an
-        // address -- is enforced at connect time by `guarded_dns_resolver`,
-        // which also closes the DNS-rebinding window between the two.
-        if self.policy == HostPolicy::PublicOnly
-            && let Some(host) = parsed_url.host_str()
-            && host_is_blocked(host)
-        {
-            return Err(DidWebError::BlockedHost(host.to_owned()));
+        // Refuse a host the policy does not admit before issuing any request.
+        // (Redirects are already disabled, so a 3xx cannot pivot to one after
+        // the fact either.) The second half -- a hostname that *resolves* to
+        // such an address -- is enforced at connect time by the guarded DNS
+        // resolver, which also closes the DNS-rebinding window between the two.
+        match &self.guard {
+            Guard::PublicOnly => {
+                if let Some(host) = parsed_url.host_str()
+                    && host_is_blocked(host)
+                {
+                    return Err(DidWebError::BlockedHost(host.to_owned()));
+                }
+            }
+            Guard::Egress(policy) => vet(policy, &parsed_url)?,
+            Guard::Unguarded => {}
         }
 
         debug!(target: "affinidi_did_web", did, %url, "resolving did:web");
@@ -314,13 +424,12 @@ impl DIDWeb {
             .header(reqwest::header::ACCEPT, DEFAULT_ACCEPT)
             .send()
             .await
-            .map_err(|e| {
-                blocked_address_in_chain(&e).map_or_else(
-                    || DidWebError::Http(format!("GET {url}: {e}")),
-                    |(host, addr)| {
-                        DidWebError::BlockedHost(format!("{host} resolves to non-routable {addr}"))
-                    },
-                )
+            .map_err(|e| match affinidi_net_guard::blocked_in_chain(&e) {
+                Some(EgressError::BlockedAddress { host, addr, .. }) => {
+                    DidWebError::BlockedHost(format!("{host} resolves to non-routable {addr}"))
+                }
+                Some(refusal) => DidWebError::BlockedHost(refusal.to_string()),
+                None => DidWebError::Http(format!("GET {url}: {e}")),
             })?;
 
         let status = response.status();
@@ -378,6 +487,56 @@ impl Default for DIDWeb {
     }
 }
 
+/// did:web as an `affinidi-did-resolver-traits`
+/// [`AsyncResolver`](affinidi_did_resolver_traits::AsyncResolver).
+#[cfg(feature = "resolver-traits")]
+mod resolver_impl {
+    use std::future::Future;
+    use std::pin::Pin;
+
+    use affinidi_did_common::{DID, DIDMethod};
+    use affinidi_did_resolver_traits::{AsyncResolver, Resolution, ResolverError};
+
+    use crate::{DIDWeb, DidWebError};
+
+    /// The [`ResolverError`] for a failed did:web resolution: an unsuccessful
+    /// HTTP status (with its URL) and a transport failure are
+    /// [`ResolverError::NetworkFetch`], everything else
+    /// [`ResolverError::ResolutionFailed`].
+    pub(crate) fn resolver_error(err: DidWebError) -> ResolverError {
+        match err.network_error() {
+            Some(network) => ResolverError::from(network),
+            None => ResolverError::ResolutionFailed(err.to_string()),
+        }
+    }
+
+    /// Resolves did:web under the resolver's host policy, and declines
+    /// (`None`) every other method. A DID URL resolves to the document of
+    /// its DID.
+    impl AsyncResolver for DIDWeb {
+        fn name(&self) -> &str {
+            "WebResolver"
+        }
+
+        fn resolve<'a>(
+            &'a self,
+            did: &'a DID,
+        ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+            Box::pin(async move {
+                if !matches!(did.method_ref(), DIDMethod::Web { .. }) {
+                    return None;
+                }
+                let bare = format!("did:web:{}", did.method_specific_id_ref());
+                Some(
+                    self.resolve_parsed(&bare, did)
+                        .await
+                        .map_err(resolver_error),
+                )
+            })
+        }
+    }
+}
+
 /// Resolve a `did:web` DID using a transient default client.
 ///
 /// Convenience wrapper for one-off lookups. For repeated calls use
@@ -386,10 +545,23 @@ pub async fn resolve(did: &str) -> Result<Document, DidWebError> {
     DIDWeb::new().resolve(did).await
 }
 
-/// Reject a host that must never be the target of a `did:web` fetch: loopback,
-/// RFC-1918 / unique-local, carrier-grade NAT, link-local (which includes the
-/// cloud-metadata address `169.254.169.254`), unspecified, or broadcast. Bare
-/// `localhost` and `*.localhost` / `*.local` are refused by name.
+/// Vet the URL a did:web DID points at under `policy`, before any request:
+/// its host as written (a literal address's class, a special-use name, an
+/// allow-list), its port and its userinfo. A hostname that resolves to a
+/// refused address is caught separately, at connect time, by the guarded DNS
+/// resolver.
+fn vet(policy: &EgressPolicy, url: &reqwest::Url) -> Result<(), DidWebError> {
+    policy.vet_url(url).map(|_| ()).map_err(|e| match e {
+        EgressError::InvalidUrl(reason) => DidWebError::InvalidDid(reason),
+        refusal => DidWebError::BlockedHost(refusal.to_string()),
+    })
+}
+
+/// Reject a host that must never be the target of a `did:web` fetch under
+/// [`HostPolicy::PublicOnly`]: loopback, RFC-1918 / unique-local,
+/// carrier-grade NAT, link-local (which includes the cloud-metadata address
+/// `169.254.169.254`), unspecified, or broadcast. Bare `localhost` and
+/// `*.localhost` / `*.local` are refused by name.
 ///
 /// This classifies the host *as written in the DID*. A hostname that resolves
 /// to one of these addresses is caught separately, at connect time, by
@@ -398,7 +570,8 @@ pub async fn resolve(did: &str) -> Result<Document, DidWebError> {
 /// Addresses are classified by `affinidi_net_guard`. The name set is this
 /// crate's own and deliberately narrower than `affinidi-net-guard`'s default
 /// (which also refuses `*.internal`, `*.home.arpa` and single-label names):
-/// adopting that is a behaviour change, left for a minor release.
+/// adopting that is a behaviour change, left for the next breaking release.
+/// [`DIDWeb::with_egress_policy`] applies `affinidi-net-guard`'s rules in full.
 fn host_is_blocked(host: &str) -> bool {
     // A trailing root dot is part of a legal hostname and survives URL
     // normalisation, so `localhost.` must normalise to `localhost` before the
@@ -412,27 +585,8 @@ fn host_is_blocked(host: &str) -> bool {
         return true;
     }
     match h.parse::<IpAddr>() {
-        Ok(a) => ip_is_blocked(a),
+        Ok(a) => !affinidi_net_guard::is_globally_routable(a),
         Err(_) => false,
-    }
-}
-
-/// Reject a resolved address that must never be connected to: anything
-/// `affinidi_net_guard` does not classify as globally routable.
-fn ip_is_blocked(addr: IpAddr) -> bool {
-    !affinidi_net_guard::is_globally_routable(addr)
-}
-
-/// Recover the refusal raised by [`guarded_dns_resolver`] (a hostname that
-/// resolved to a non-routable address) from anywhere in an error's source
-/// chain, so it is reported as [`DidWebError::BlockedHost`] rather than as a
-/// generic transport failure.
-fn blocked_address_in_chain<'a>(
-    err: &'a (dyn std::error::Error + 'static),
-) -> Option<(&'a str, IpAddr)> {
-    match affinidi_net_guard::blocked_in_chain(err) {
-        Some(EgressError::BlockedAddress { host, addr, .. }) => Some((host.as_str(), *addr)),
-        _ => None,
     }
 }
 
@@ -445,8 +599,13 @@ fn blocked_address_in_chain<'a>(
 /// addresses returned here, it also closes the DNS-rebinding window: there is
 /// no second, unchecked lookup between the guard and the connect.
 ///
-/// [`DIDWeb::new`], [`DIDWeb::with_policy`] and [`DIDWeb::with_client_builder`]
-/// install it. It is public for clients built for other purposes:
+/// It is `affinidi_net_guard::guarded_dns_resolver` under
+/// [`EgressPolicy::public_internet`]: it resolves the name, fails closed if
+/// *any* answer is non-routable, and returns only the vetted addresses. It
+/// checks addresses only, never names. [`DIDWeb::new`],
+/// [`DIDWeb::with_policy`] and [`DIDWeb::with_client_builder`] install it
+/// ([`DIDWeb::with_egress_policy`] installs one under its own policy). It is
+/// public for clients built for other purposes:
 ///
 /// ```no_run
 /// let client = reqwest::Client::builder()
@@ -456,48 +615,32 @@ fn blocked_address_in_chain<'a>(
 /// # Ok::<(), reqwest::Error>(())
 /// ```
 pub fn guarded_dns_resolver() -> Arc<dyn reqwest::dns::Resolve> {
-    Arc::new(GuardedResolver)
-}
-
-/// Delegates to `affinidi_net_guard::GuardedResolver` under
-/// `EgressPolicy::public_internet()`: it resolves the name, fails closed if
-/// *any* answer is non-routable, and returns only the vetted addresses. The
-/// resolver checks addresses only, never names, so this crate's name set is
-/// unaffected.
-#[derive(Debug, Clone, Copy)]
-struct GuardedResolver;
-
-impl reqwest::dns::Resolve for GuardedResolver {
-    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        static PUBLIC_ONLY: OnceLock<affinidi_net_guard::GuardedResolver> = OnceLock::new();
-        PUBLIC_ONLY
-            .get_or_init(|| {
-                affinidi_net_guard::GuardedResolver::new(EgressPolicy::public_internet())
-            })
-            .resolve(name)
-    }
+    affinidi_net_guard::guarded_dns_resolver(EgressPolicy::public_internet())
 }
 
 /// The user agent and request timeout. They replace any the caller's builder
 /// set; the guard settings are applied after them.
-fn default_settings(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+fn default_settings(builder: reqwest::ClientBuilder, timeout: Duration) -> reqwest::ClientBuilder {
     builder
         .user_agent(concat!("affinidi-did-web/", env!("CARGO_PKG_VERSION")))
-        .timeout(DEFAULT_TIMEOUT)
+        .timeout(timeout)
 }
 
 /// The guard settings. Applied last, so nothing set before can undo them.
-fn guard(builder: reqwest::ClientBuilder, policy: HostPolicy) -> reqwest::ClientBuilder {
+fn guard_settings(builder: reqwest::ClientBuilder, guard: &Guard) -> reqwest::ClientBuilder {
     // The DID names the host. Following a 3xx lets that host pivot the
     // resolver to an arbitrary internal address (SSRF), so refuse.
     let builder = builder
         .redirect(reqwest::redirect::Policy::none())
         .referer(false);
-    match policy {
-        HostPolicy::AllowPrivate => builder,
-        // A proxy resolves the hostname itself, so the guarded resolver would
-        // see only the proxy's name.
-        HostPolicy::PublicOnly => builder.dns_resolver(guarded_dns_resolver()).no_proxy(),
+    // A proxy resolves the hostname itself, so the guarded resolver would
+    // see only the proxy's name.
+    match guard {
+        Guard::Unguarded => builder,
+        Guard::PublicOnly => builder.dns_resolver(guarded_dns_resolver()).no_proxy(),
+        Guard::Egress(policy) => builder
+            .dns_resolver(affinidi_net_guard::guarded_dns_resolver(policy.clone()))
+            .no_proxy(),
     }
 }
 
@@ -872,6 +1015,14 @@ mod tests {
             ),
             "{err:?}"
         );
+        let network = err.network_error().expect("a network error");
+        assert_eq!(network.status, Some(404));
+        assert!(
+            network
+                .url
+                .as_deref()
+                .is_some_and(|url| url.ends_with("/.well-known/did.json"))
+        );
     }
 
     #[tokio::test]
@@ -886,6 +1037,29 @@ mod tests {
             matches!(err, DidWebError::ResponseTooLarge { .. }),
             "{err:?}"
         );
+    }
+
+    /// `HostPolicy::PublicOnly` keeps this crate's narrower name set; an
+    /// egress policy applies `affinidi-net-guard`'s, which also refuses
+    /// `*.internal`, `*.home.arpa` and single-label names.
+    #[tokio::test]
+    async fn an_egress_policy_applies_the_net_guard_special_use_names() {
+        let resolver = DIDWeb::with_egress_policy(
+            reqwest::Client::builder().timeout(Duration::from_secs(5)),
+            EgressPolicy::public_internet(),
+        )
+        .unwrap();
+        for host in ["metadata.internal", "router.home.arpa", "intranet"] {
+            assert!(!host_is_blocked(host), "{host}: PublicOnly is unchanged");
+            let err = resolver
+                .resolve(&format!("did:web:{host}"))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, DidWebError::BlockedHost(_)),
+                "{host}: {err:?}"
+            );
+        }
     }
 
     #[test]
@@ -984,11 +1158,11 @@ mod tests {
         use std::str::FromStr;
 
         let name = reqwest::dns::Name::from_str("localhost").unwrap();
-        let Err(err) = reqwest::dns::Resolve::resolve(&GuardedResolver, name).await else {
+        let Err(err) = guarded_dns_resolver().resolve(name).await else {
             panic!("localhost resolves to loopback and must be refused");
         };
         assert!(
-            blocked_address_in_chain(err.as_ref()).is_some(),
+            affinidi_net_guard::blocked_in_chain(err.as_ref()).is_some(),
             "expected a BlockedAddress, got {err:?}"
         );
     }
@@ -1005,7 +1179,7 @@ mod tests {
             .await
             .expect_err("the guarded resolver must refuse localhost");
         assert!(
-            blocked_address_in_chain(&err).is_some(),
+            affinidi_net_guard::blocked_in_chain(&err).is_some(),
             "BlockedAddress should be recoverable from the reqwest error chain, got {err:?}"
         );
     }
@@ -1015,7 +1189,140 @@ mod tests {
     #[allow(deprecated)]
     fn with_client_defaults_to_public_only() {
         let resolver = DIDWeb::with_client(reqwest::Client::new());
-        assert_eq!(resolver.policy, HostPolicy::PublicOnly);
+        assert!(matches!(resolver.guard, Guard::PublicOnly));
+    }
+
+    /// A resolver under an allow-list refuses a public host outside it,
+    /// before any request.
+    #[tokio::test]
+    async fn an_egress_policy_allow_list_is_enforced() {
+        use affinidi_net_guard::{AllowList, HostRule};
+        let policy = EgressPolicy::public_internet()
+            .with_allow_list(AllowList::new([HostRule::Exact("did.example.org".into())]).unwrap());
+        let resolver = DIDWeb::with_egress_policy(
+            reqwest::Client::builder().timeout(Duration::from_secs(5)),
+            policy,
+        )
+        .unwrap();
+        let err = resolver.resolve("did:web:example.com").await.unwrap_err();
+        assert!(matches!(err, DidWebError::BlockedHost(_)), "{err:?}");
+        // The policy's address rules still apply.
+        let err = resolver.resolve("did:web:127.0.0.1").await.unwrap_err();
+        assert!(matches!(err, DidWebError::BlockedHost(_)), "{err:?}");
+    }
+
+    /// Serve `/.well-known/did.json` after `delay`, recording requests.
+    async fn slow_server(delay: Duration) -> (MockServer, reqwest::Url, String) {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/did.json"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(delay)
+                    .set_body_json(serde_json::json!({ "id": "did:web:example.com" })),
+            )
+            .mount(&server)
+            .await;
+        let url = format!("{}/.well-known/did.json", server.uri());
+        (server, reqwest::Url::parse(&url).unwrap(), url)
+    }
+
+    /// `with_client_builder_and_timeout` is the timeout requests get (#1154).
+    #[tokio::test]
+    async fn the_chosen_timeout_is_applied() {
+        let (_server, parsed, url) = slow_server(Duration::from_secs(10)).await;
+        let resolver = DIDWeb::with_client_builder_and_timeout(
+            reqwest::Client::builder(),
+            HostPolicy::AllowPrivate,
+            Duration::from_millis(200),
+        )
+        .unwrap();
+        let started = std::time::Instant::now();
+        let err = resolver
+            .fetch_document("did:web:example.com", parsed, url)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DidWebError::Http(_)), "{err:?}");
+        assert!(started.elapsed() < Duration::from_secs(5), "timed out late");
+    }
+
+    /// `with_egress_policy` keeps the builder's timeout and user agent
+    /// (#1154). The mock is a loopback literal, which the connect-time guard
+    /// never sees (no name is resolved), so the fetch is driven directly.
+    #[tokio::test]
+    async fn an_egress_policy_resolver_keeps_the_builders_timeout_and_user_agent() {
+        let (server, parsed, url) = slow_server(Duration::from_secs(10)).await;
+        let resolver = DIDWeb::with_egress_policy(
+            reqwest::Client::builder().timeout(Duration::from_millis(200)),
+            EgressPolicy::public_internet(),
+        )
+        .unwrap();
+        let started = std::time::Instant::now();
+        let err = resolver
+            .fetch_document("did:web:example.com", parsed, url)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DidWebError::Http(_)), "{err:?}");
+        assert!(started.elapsed() < Duration::from_secs(5), "timed out late");
+        drop(server);
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/did.json"))
+            .and(wiremock::matchers::header("user-agent", "caller/1.0"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "id": "did:web:example.com" })),
+            )
+            .mount(&server)
+            .await;
+        let url = format!("{}/.well-known/did.json", server.uri());
+        let resolver = DIDWeb::with_egress_policy(
+            reqwest::Client::builder()
+                .user_agent("caller/1.0")
+                .timeout(Duration::from_secs(5)),
+            EgressPolicy::public_internet(),
+        )
+        .unwrap();
+        resolver
+            .fetch_document(
+                "did:web:example.com",
+                reqwest::Url::parse(&url).unwrap(),
+                url,
+            )
+            .await
+            .expect("the caller's user agent was sent");
+    }
+
+    #[cfg(feature = "resolver-traits")]
+    #[tokio::test]
+    async fn the_resolver_trait_declines_other_methods_and_maps_errors() {
+        use affinidi_did_resolver_traits::{AsyncResolver, ResolverError};
+        let resolver = DIDWeb::new();
+        assert_eq!(AsyncResolver::name(&resolver), "WebResolver");
+        let other: DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+            .parse()
+            .unwrap();
+        assert!(AsyncResolver::resolve(&resolver, &other).await.is_none());
+
+        let blocked: DID = "did:web:127.0.0.1".parse().unwrap();
+        let Some(Err(err)) = AsyncResolver::resolve(&resolver, &blocked).await else {
+            panic!("a refused host is handled and fails");
+        };
+        assert!(matches!(err, ResolverError::ResolutionFailed(_)), "{err:?}");
+
+        let status = super::resolver_impl::resolver_error(DidWebError::ResolutionFailed {
+            status: 429,
+            url: "https://example.com/.well-known/did.json".to_string(),
+        });
+        let ResolverError::NetworkFetch(fetch) = status else {
+            panic!("expected NetworkFetch, got {status:?}");
+        };
+        assert!(fetch.is_rate_limited());
+        assert_eq!(
+            fetch.url.as_deref(),
+            Some("https://example.com/.well-known/did.json")
+        );
     }
 
     /// Under `PublicOnly` no proxy is used, even one the caller's builder
@@ -1066,7 +1373,7 @@ mod tests {
             .await
             .expect_err("the guarded resolver must refuse localhost");
         assert!(
-            blocked_address_in_chain(&err).is_some(),
+            affinidi_net_guard::blocked_in_chain(&err).is_some(),
             "expected the DNS guard to refuse, got {err:?}"
         );
     }

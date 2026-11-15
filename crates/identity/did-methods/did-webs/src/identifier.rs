@@ -9,6 +9,8 @@
 //! `did:webs` never resolves to `/.well-known/` the way a pathless `did:web`
 //! does — there is always at least one path element.
 
+use affinidi_did_common::{DID, DIDMethod};
+
 use crate::errors::DidWebsError;
 
 /// The two artifacts a `did:webs` identifier publishes.
@@ -39,61 +41,93 @@ pub struct DidWebs {
 impl DidWebs {
     /// Parse a `did:webs` identifier.
     ///
+    /// The string is parsed as an [`affinidi_did_common::DID`] first, so it
+    /// is held to DID Core syntax (each label is `idchar`s and
+    /// percent-encodings), and then to this method's rules by
+    /// [`DidWebs::from_did`].
+    ///
     /// # Errors
     /// Returns [`DidWebsError::InvalidDid`] if the identifier is not a
     /// `did:webs` DID with a host and a trailing AID.
     pub fn parse(did: &str) -> Result<Self, DidWebsError> {
-        let rest = did.strip_prefix("did:webs:").ok_or_else(|| {
-            DidWebsError::InvalidDid(format!("{did:?} does not start with 'did:webs:'"))
-        })?;
-
-        // A DID URL's query/fragment is not part of the method-specific id.
-        let (rest, query) = split_query(rest);
-        if rest.is_empty() {
-            return Err(DidWebsError::InvalidDid(
-                "empty method-specific identifier".into(),
-            ));
+        if !did.starts_with("did:webs:") {
+            return Err(DidWebsError::InvalidDid(format!(
+                "{did:?} does not start with 'did:webs:'"
+            )));
         }
-        let version_id = parse_version_id(query, did)?;
+        let parsed: DID = did
+            .parse()
+            .map_err(|e| DidWebsError::InvalidDid(format!("{did:?}: {e}")))?;
+        Self::from_did(&parsed)
+    }
 
-        let labels: Vec<&str> = rest.split(':').collect();
+    /// Read a parsed `did:webs` DID (or DID URL) as this method's identifier.
+    ///
+    /// `affinidi-did-common` does not model did:webs, so the DID's method is
+    /// `DIDMethod::Other { method: "webs", .. }` and its method-specific id
+    /// is split here into the host, path and AID labels. This checks what DID
+    /// syntax does not: there is a host and an AID and no empty label, the
+    /// host label decodes to a host and optional port, each path label to one
+    /// path segment, and the AID is plausibly a CESR primitive. A `versionId` query parameter is kept; a fragment is
+    /// ignored; a path is refused, because it is not part of the identifier.
+    ///
+    /// # Errors
+    /// Returns [`DidWebsError::InvalidDid`] if `did` is another method or
+    /// breaks one of those rules.
+    pub fn from_did(did: &DID) -> Result<Self, DidWebsError> {
+        let text = did.to_string();
+        let identifier = match did.method_ref() {
+            DIDMethod::Other { method, identifier } if method == "webs" => identifier,
+            _ => {
+                return Err(DidWebsError::InvalidDid(format!(
+                    "{text:?} is not a did:webs DID"
+                )));
+            }
+        };
+        let labels: Vec<&str> = identifier.split(':').collect();
         if labels.len() < 2 {
             return Err(DidWebsError::InvalidDid(format!(
-                "{did:?} has no AID: did:webs requires a host and a trailing AID"
+                "{text:?} has no AID: did:webs requires a host and a trailing AID"
             )));
         }
-        if labels.iter().any(|l| l.is_empty()) {
+        if labels.iter().any(|label| label.is_empty()) {
             return Err(DidWebsError::InvalidDid(format!(
-                "{did:?} contains an empty label"
+                "{text:?} contains an empty label"
             )));
         }
+        let (domain, aid) = (labels[0], labels[labels.len() - 1]);
+        let path_segments: Vec<String> = labels[1..labels.len() - 1]
+            .iter()
+            .map(|label| (*label).to_string())
+            .collect();
+        if did.path_ref().is_some() {
+            return Err(DidWebsError::InvalidDid(format!(
+                "{text:?} has a path, which is not part of a did:webs identifier"
+            )));
+        }
+        let version_id = parse_version_id(did.query_ref(), &text)?;
 
-        let aid = labels[labels.len() - 1].to_string();
-        validate_aid(&aid, did)?;
+        validate_aid(aid, &text)?;
 
         // `%3A` is how did:web encodes the port separator. It is written
         // lowercase in the wild as often as uppercase. The host label is
         // decoded in full, and must then still be a host and an optional
         // port and nothing else, so it names the host the URL is fetched from.
-        let host = percent_decode(labels[0], did)?;
-        validate_host(&host, did)?;
+        let host = percent_decode(domain, &text)?;
+        validate_host(&host, &text)?;
 
         // Path segments stay as written in the URL, but each must decode to a
         // single path segment.
-        let path: Vec<String> = labels[1..labels.len() - 1]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        for segment in &path {
-            validate_path_segment(&percent_decode(segment, did)?, did)?;
+        for segment in &path_segments {
+            validate_path_segment(&percent_decode(segment, &text)?, &text)?;
         }
 
         Ok(Self {
-            did: format!("did:webs:{rest}"),
+            did: format!("did:webs:{identifier}"),
             version_id,
             host,
-            path,
-            aid,
+            path: path_segments,
+            aid: aid.to_string(),
         })
     }
 
@@ -182,15 +216,6 @@ impl DidWebs {
         // Formed by replacing the prefix, as the specification describes, so
         // the twin keeps exactly the encoding the DID was written with.
         format!("did:web:{}", &self.did["did:webs:".len()..])
-    }
-}
-
-/// Split a method-specific identifier from its query, dropping any fragment.
-fn split_query(rest: &str) -> (&str, Option<&str>) {
-    let rest = rest.split('#').next().unwrap_or_default();
-    match rest.split_once('?') {
-        Some((id, query)) => (id, Some(query)),
-        None => (rest, None),
     }
 }
 
@@ -558,8 +583,35 @@ mod tests {
                 "{segment} must be refused"
             );
         }
-        let d = DidWebs::parse(&format!("did:webs:example.com:a-b_c.d~e:{AID}")).expect("valid");
-        assert_eq!(d.path(), ["a-b_c.d~e"]);
+        let d = DidWebs::parse(&format!("did:webs:example.com:a-b_c.d:{AID}")).expect("valid");
+        assert_eq!(d.path(), ["a-b_c.d"]);
+    }
+
+    #[test]
+    fn a_label_is_held_to_did_core_syntax() {
+        // `~` is unreserved in a URL but is not a DID Core `idchar`; it is
+        // written `%7E` in a DID.
+        assert!(DidWebs::parse(&format!("did:webs:example.com:a~b:{AID}")).is_err());
+        let d = DidWebs::parse(&format!("did:webs:example.com:a%7Eb:{AID}")).expect("valid");
+        assert_eq!(d.path(), ["a%7Eb"]);
+    }
+
+    #[test]
+    fn from_did_reads_the_parsed_method() {
+        let did: DID = format!("did:webs:example.com%3A8443:dids:{AID}?versionId=3#key")
+            .parse()
+            .expect("valid DID");
+        let d = DidWebs::from_did(&did).expect("valid did:webs");
+        assert_eq!(d.host(), "example.com:8443");
+        assert_eq!(d.path(), ["dids"]);
+        assert_eq!(d.aid(), AID);
+        assert_eq!(d.version_id(), Some(3));
+        assert_eq!(d.did(), format!("did:webs:example.com%3A8443:dids:{AID}"));
+
+        let web: DID = "did:web:example.com".parse().unwrap();
+        assert!(DidWebs::from_did(&web).is_err());
+        let with_path: DID = format!("did:webs:example.com:{AID}/x").parse().unwrap();
+        assert!(DidWebs::from_did(&with_path).is_err());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-web"
-version = "0.1.10"
+version = "0.1.11"
 description = "Minimal did:web DID method resolver for the Affinidi TDK"
 repository.workspace = true
 edition.workspace = true
@@ -15,9 +15,17 @@ rust-version.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+# `DIDWeb` as an `affinidi-did-resolver-traits` `AsyncResolver`, so a resolver
+# chain can hold it without an adapter.
+resolver-traits = ["dep:affinidi-did-resolver-traits"]
+
 [dependencies]
 # 0.4.8: `Document::from_json_slice`, which reads relative ids.
 affinidi-did-common = "0.4.8"
+# 0.1.6: `NetworkFetchError` converts from `NetworkError`.
+affinidi-did-resolver-traits = { version = "0.1.6", path = "../../affinidi-did-resolver-traits", optional = true }
 # Address classification and the connect-time DNS resolver of the SSRF guard.
 # Named at the exact sibling version so the publish dry-run guard reports
 # `wait` until it is on crates.io, rather than registry drift.

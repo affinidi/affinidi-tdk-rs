@@ -1,5 +1,19 @@
 # did:ebsi
 
+## [0.1.10] - 2026-11-15
+
+optional resolver-trait impl
+
+### Added
+
+- Feature `resolver-traits` (off by default) (#1153): `EbsiResolver`
+  implements `affinidi_did_resolver_traits::AsyncResolver` (name
+  `"EbsiResolver"`), declining every method but did:ebsi. An unsuccessful
+  registry status (with its URL, status and `Retry-After`) and a transport
+  failure are `ResolverError::NetworkFetch`; anything else is
+  `ResolverError::ResolutionFailed`. A DID URL resolves to the document of
+  its DID.
+
 ## [0.1.9] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

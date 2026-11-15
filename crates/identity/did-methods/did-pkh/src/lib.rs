@@ -117,6 +117,52 @@ pub fn resolve(did: &str) -> Result<Document, DidPkhError> {
     resolve_identifier(identifier)
 }
 
+/// Resolve a parsed `did:pkh` DID (or DID URL, whose path, query and fragment
+/// are ignored) from the CAIP-10 parts its [`DIDMethod::Pkh`] already holds,
+/// without splitting the identifier again.
+///
+/// A deprecated single-token prefix (`did:pkh:eth:0x…`) has two labels, not
+/// three, so it never parses as a [`DID`] and only reaches this crate through
+/// [`resolve`] or [`resolve_identifier`].
+///
+/// Returns [`DidPkhError::NotPkh`] when `did` is another method.
+///
+/// [`DID`]: affinidi_did_common::DID
+/// [`DIDMethod::Pkh`]: affinidi_did_common::DIDMethod::Pkh
+pub fn resolve_did(did: &affinidi_did_common::DID) -> Result<Document, DidPkhError> {
+    match did.method_ref() {
+        affinidi_did_common::DIDMethod::Pkh {
+            identifier,
+            chain_namespace,
+            chain_reference,
+            account_address,
+            ..
+        } => {
+            // A legacy prefix with a third label is not CAIP-10 either; it
+            // takes the same path, and gets the same error, as the string form.
+            if is_legacy_prefix(chain_namespace) {
+                return resolve_identifier(identifier);
+            }
+            caip10_parts(
+                &format!("did:pkh:{identifier}"),
+                identifier,
+                chain_namespace,
+                chain_reference,
+                account_address,
+            )
+        }
+        _ => Err(DidPkhError::NotPkh(did.to_string())),
+    }
+}
+
+/// The deprecated single-token prefixes, each naming one chain outright.
+fn is_legacy_prefix(prefix: &str) -> bool {
+    matches!(
+        prefix,
+        "tz" | "eth" | "celo" | "poly" | "sol" | "btc" | "doge"
+    )
+}
+
 /// Resolve the method-specific identifier of a `did:pkh` DID — everything after
 /// `did:pkh:` — into its DID Document.
 pub fn resolve_identifier(identifier: &str) -> Result<Document, DidPkhError> {
@@ -129,10 +175,7 @@ pub fn resolve_identifier(identifier: &str) -> Result<Document, DidPkhError> {
     // The deprecated prefixes name a chain outright; everything else is read as
     // a CAIP-10 account id. The address after a deprecated prefix is held to
     // the same CAIP-10 grammar as one after a full chain id.
-    let legacy = matches!(
-        prefix,
-        "tz" | "eth" | "celo" | "poly" | "sol" | "btc" | "doge"
-    );
+    let legacy = is_legacy_prefix(prefix);
     if legacy && !valid_caip10_address(rest) {
         return Err(DidPkhError::InvalidIdentifier(identifier.to_string()));
     }
@@ -159,7 +202,18 @@ fn caip10(did: &str, account_id: &str) -> Result<Document, DidPkhError> {
     let address = parts
         .next()
         .ok_or_else(|| DidPkhError::InvalidIdentifier(account_id.to_string()))?;
+    caip10_parts(did, account_id, namespace, reference, address)
+}
 
+/// Resolve a CAIP-10 account id already split into its namespace, reference
+/// and address. `account_id` is the whole id, for error messages.
+fn caip10_parts(
+    did: &str,
+    account_id: &str,
+    namespace: &str,
+    reference: &str,
+    address: &str,
+) -> Result<Document, DidPkhError> {
     // CAIP-2 / CAIP-10 grammar. Enforced so a malformed account id is refused
     // here rather than copied into `blockchainAccountId`, where it would read
     // as a real account to every consumer of the document.
@@ -512,9 +566,104 @@ fn build(
     Ok(builder.verification_methods(methods).build())
 }
 
+/// did:pkh as an `affinidi-did-resolver-traits` [`Resolver`](affinidi_did_resolver_traits::Resolver).
+#[cfg(feature = "resolver-traits")]
+mod resolver_impl {
+    use affinidi_did_common::{DID, DIDMethod};
+    use affinidi_did_resolver_traits::{Resolution, Resolver, ResolverError};
+
+    /// Resolves did:pkh for a resolver chain, and declines (`None`) every
+    /// other method.
+    ///
+    /// Resolution is pure computation, so this is a sync [`Resolver`] (and
+    /// with it an `AsyncResolver`). A failure is
+    /// [`ResolverError::ResolutionFailed`] carrying the
+    /// [`DidPkhError`](crate::DidPkhError) text.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct PkhResolver;
+
+    impl Resolver for PkhResolver {
+        fn name(&self) -> &str {
+            "PkhResolver"
+        }
+
+        fn resolve(&self, did: &DID) -> Resolution {
+            if !matches!(did.method_ref(), DIDMethod::Pkh { .. }) {
+                return None;
+            }
+            Some(
+                crate::resolve_did(did).map_err(|e| ResolverError::ResolutionFailed(e.to_string())),
+            )
+        }
+    }
+}
+
+#[cfg(feature = "resolver-traits")]
+pub use resolver_impl::PkhResolver;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_did_reads_the_parsed_method() {
+        let did: affinidi_did_common::DID =
+            "did:pkh:eip155:1:0xb9c5714089478a327f09197987f16f9e5d936e8a#frag"
+                .parse()
+                .unwrap();
+        let doc = resolve_did(&did).expect("resolves");
+        assert_eq!(
+            doc.id.as_str(),
+            "did:pkh:eip155:1:0xb9c5714089478a327f09197987f16f9e5d936e8a"
+        );
+        let other: affinidi_did_common::DID = "did:web:example.com".parse().unwrap();
+        assert!(matches!(resolve_did(&other), Err(DidPkhError::NotPkh(_))));
+    }
+
+    #[test]
+    fn resolve_did_agrees_with_the_string_form() {
+        for did in [
+            format!("did:pkh:eip155:1:{ETH}"),
+            format!("did:pkh:tezos:NetXdQprcVkpaWU:{TZ1}"),
+            format!("did:pkh:eth:1:{ETH}"),
+            format!("did:pkh:nope:1:{ETH}"),
+        ] {
+            let parsed: affinidi_did_common::DID = did.parse().unwrap();
+            match (resolve(&did), resolve_did(&parsed)) {
+                (Ok(a), Ok(b)) => assert_eq!(a, b, "{did}"),
+                (Err(a), Err(b)) => assert_eq!(a.to_string(), b.to_string(), "{did}"),
+                (a, b) => panic!("{did}: {a:?} vs {b:?}"),
+            }
+        }
+    }
+
+    #[cfg(feature = "resolver-traits")]
+    #[test]
+    fn resolver_trait_resolves_its_method_and_declines_others() {
+        use affinidi_did_resolver_traits::Resolver;
+        let did: affinidi_did_common::DID =
+            "did:pkh:eip155:1:0xb9c5714089478a327f09197987f16f9e5d936e8a"
+                .parse()
+                .unwrap();
+        let doc = PkhResolver
+            .resolve(&did)
+            .expect("handled")
+            .expect("resolves");
+        assert_eq!(
+            doc,
+            resolve("did:pkh:eip155:1:0xb9c5714089478a327f09197987f16f9e5d936e8a").unwrap()
+        );
+        assert_eq!(Resolver::name(&PkhResolver), "PkhResolver");
+        let other: affinidi_did_common::DID = "did:web:example.com".parse().unwrap();
+        assert!(PkhResolver.resolve(&other).is_none());
+        let bad: affinidi_did_common::DID = "did:pkh:eip155:1:0xZZ".parse().unwrap();
+        assert!(matches!(
+            PkhResolver.resolve(&bad),
+            Some(Err(
+                affinidi_did_resolver_traits::ResolverError::ResolutionFailed(_)
+            ))
+        ));
+    }
 
     /// A real mainnet address, used as the base for the mutation tests below.
     const TZ1: &str = "tz1TzrmTBSuiVHV2VfMnGRMYvTEPCP42oSM8";

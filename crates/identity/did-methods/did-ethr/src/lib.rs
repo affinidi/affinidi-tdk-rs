@@ -108,6 +108,20 @@ pub fn resolve(did: &str) -> Result<Document, DidEthrError> {
     resolve_identifier(identifier)
 }
 
+/// Resolve a parsed `did:ethr` DID (or DID URL, whose path, query and
+/// fragment are ignored) from the identifier its [`DIDMethod`] holds, without
+/// splitting the DID string again.
+///
+/// Returns [`DidEthrError::NotEthr`] when `did` is another method.
+///
+/// [`DIDMethod`]: affinidi_did_common::DIDMethod
+pub fn resolve_did(did: &affinidi_did_common::DID) -> Result<Document, DidEthrError> {
+    match did.method_ref() {
+        affinidi_did_common::DIDMethod::Ethr { identifier, .. } => resolve_identifier(identifier),
+        _ => Err(DidEthrError::NotEthr(did.to_string())),
+    }
+}
+
 /// Resolve the method-specific identifier of a `did:ethr` DID — everything
 /// after `did:ethr:` — into its genesis DID Document.
 pub fn resolve_identifier(identifier: &str) -> Result<Document, DidEthrError> {
@@ -358,9 +372,88 @@ fn build(
     Ok(builder.verification_methods(methods).build())
 }
 
+/// did:ethr as an `affinidi-did-resolver-traits` [`Resolver`](affinidi_did_resolver_traits::Resolver).
+#[cfg(feature = "resolver-traits")]
+mod resolver_impl {
+    use affinidi_did_common::{DID, DIDMethod};
+    use affinidi_did_resolver_traits::{Resolution, Resolver, ResolverError};
+
+    /// Resolves did:ethr for a resolver chain, and declines (`None`) every
+    /// other method.
+    ///
+    /// Resolution is pure computation, so this is a sync [`Resolver`] (and
+    /// with it an `AsyncResolver`). A failure is
+    /// [`ResolverError::ResolutionFailed`] carrying the
+    /// [`DidEthrError`](crate::DidEthrError) text.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct EthrResolver;
+
+    impl Resolver for EthrResolver {
+        fn name(&self) -> &str {
+            "EthrResolver"
+        }
+
+        fn resolve(&self, did: &DID) -> Resolution {
+            if !matches!(did.method_ref(), DIDMethod::Ethr { .. }) {
+                return None;
+            }
+            Some(
+                crate::resolve_did(did).map_err(|e| ResolverError::ResolutionFailed(e.to_string())),
+            )
+        }
+    }
+}
+
+#[cfg(feature = "resolver-traits")]
+pub use resolver_impl::EthrResolver;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_did_reads_the_parsed_method() {
+        let did: affinidi_did_common::DID =
+            "did:ethr:0xb9c5714089478a327f09197987f16f9e5d936e8a#frag"
+                .parse()
+                .unwrap();
+        let doc = resolve_did(&did).expect("resolves");
+        assert_eq!(
+            doc.id.as_str(),
+            "did:ethr:0xb9c5714089478a327f09197987f16f9e5d936e8a"
+        );
+        let other: affinidi_did_common::DID = "did:web:example.com".parse().unwrap();
+        assert!(matches!(resolve_did(&other), Err(DidEthrError::NotEthr(_))));
+    }
+
+    #[cfg(feature = "resolver-traits")]
+    #[test]
+    fn resolver_trait_resolves_its_method_and_declines_others() {
+        use affinidi_did_resolver_traits::Resolver;
+        let did: affinidi_did_common::DID = "did:ethr:0xb9c5714089478a327f09197987f16f9e5d936e8a"
+            .parse()
+            .unwrap();
+        let doc = EthrResolver
+            .resolve(&did)
+            .expect("handled")
+            .expect("resolves");
+        assert_eq!(
+            doc,
+            resolve("did:ethr:0xb9c5714089478a327f09197987f16f9e5d936e8a").unwrap()
+        );
+        assert_eq!(Resolver::name(&EthrResolver), "EthrResolver");
+        let other: affinidi_did_common::DID = "did:web:example.com".parse().unwrap();
+        assert!(EthrResolver.resolve(&other).is_none());
+        let bad: affinidi_did_common::DID = "did:ethr:0xb9c5714089478a327f09197987f16f9e5d936e8"
+            .parse()
+            .unwrap();
+        assert!(matches!(
+            EthrResolver.resolve(&bad),
+            Some(Err(
+                affinidi_did_resolver_traits::ResolverError::ResolutionFailed(_)
+            ))
+        ));
+    }
 
     /// Round-trip the document through JSON so the assertions below compare the
     /// wire form — which is what consumers actually see.

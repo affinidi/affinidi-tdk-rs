@@ -32,13 +32,28 @@ let document = resolver.resolve("did:web:example.com:user:alice").await?;
 
 // Configure the client (headers, TLS, connection pool, …). The SSRF guard is
 // applied on top of the builder, so nothing set on it can turn the guard off.
-// The request timeout is `DEFAULT_TIMEOUT` (20 s) whatever the builder sets.
+// The request timeout is `DEFAULT_TIMEOUT` (20 s) whatever the builder sets;
+// `with_client_builder_and_timeout` chooses another.
 let builder = reqwest::Client::builder().pool_max_idle_per_host(8);
 let resolver = affinidi_did_web::DIDWeb::with_client_builder(
     builder,
     affinidi_did_web::HostPolicy::PublicOnly,
 )?;
+
+// Vet every fetch with an `affinidi-net-guard` egress policy (here an
+// allow-list). The builder's own timeout and user agent are kept.
+use affinidi_net_guard::{AllowList, EgressPolicy, HostRule};
+let policy = EgressPolicy::public_internet()
+    .with_allow_list(AllowList::new([HostRule::Suffix("example.com".into())])?);
+let resolver = affinidi_did_web::DIDWeb::with_egress_policy(
+    reqwest::Client::builder().timeout(affinidi_did_web::DEFAULT_TIMEOUT),
+    policy,
+)?;
 ```
+
+With the `resolver-traits` feature, `DIDWeb` is an
+`affinidi_did_resolver_traits::AsyncResolver`, so a resolver chain can hold it
+directly.
 
 `DIDWeb::with_client`, which takes an already built client, is deprecated: a
 built client cannot be given the connect-time guard.
@@ -60,6 +75,10 @@ resolves to one (checked at connect time), and it never follows a redirect or
 uses a proxy. `HostPolicy::AllowPrivate` turns that off for deployments whose
 did:web hosts really are internal, or for a local test stack
 (`did:web:localhost%3A8080`); use it only where the DIDs resolved are trusted.
+`DIDWeb::with_egress_policy` takes an `affinidi-net-guard` `EgressPolicy`
+instead, for an operator allow-list, named private ranges, or net-guard's full
+set of special-use names (`*.internal`, `*.home.arpa`, single-label names),
+which `PublicOnly` does not yet refuse.
 
 ## License
 

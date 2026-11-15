@@ -11,6 +11,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use affinidi_did_common::Document;
+use affinidi_net_guard::EgressPolicy;
 use tokio::sync::Semaphore;
 use tracing::{debug, warn};
 
@@ -33,6 +34,10 @@ pub const MAX_ARTIFACT_BYTES: usize = 4 * 1024 * 1024;
 /// A `did:webs` identifier names its own host, so a DID an attacker supplies
 /// can aim the resolver at loopback, a private network or a cloud-metadata
 /// address (SSRF), unless the resolver refuses to go there.
+///
+/// A shorthand for the two common cases. For anything in between (an operator
+/// allow-list, named private ranges) build an [`EgressPolicy`] and use
+/// [`WebsResolver::with_egress_policy`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum HostPolicy {
@@ -55,6 +60,17 @@ pub enum HostPolicy {
     AllowPrivate,
 }
 
+impl HostPolicy {
+    /// The egress policy this shorthand stands for: `None` for
+    /// [`HostPolicy::AllowPrivate`], which applies none.
+    pub fn egress_policy(self) -> Option<EgressPolicy> {
+        match self {
+            HostPolicy::AllowPrivate => None,
+            _ => Some(EgressPolicy::public_internet()),
+        }
+    }
+}
+
 /// A `did:webs` resolver holding a reusable HTTP client.
 ///
 /// Resolution fetches two artifacts from the same host, so sharing a client —
@@ -66,7 +82,10 @@ pub enum HostPolicy {
 pub struct WebsResolver {
     client: reqwest::Client,
     allow_http: bool,
-    policy: HostPolicy,
+    /// What every fetch is vetted against, before the request (the host as
+    /// written) and at connect time (what a name resolves to). `None` under
+    /// [`HostPolicy::AllowPrivate`].
+    egress: Option<EgressPolicy>,
 }
 
 impl WebsResolver {
@@ -90,7 +109,8 @@ impl WebsResolver {
     ///
     /// The request timeout is set to [`DEFAULT_TIMEOUT`] and the user agent
     /// to this crate's, replacing any set on `builder`; to choose the timeout,
-    /// use [`WebsResolver::with_client_builder_and_timeout`].
+    /// use [`WebsResolver::with_client_builder_and_timeout`], and to keep the
+    /// builder's own timeout and user agent, [`WebsResolver::with_egress_policy`].
     ///
     /// The guard settings are applied last, so nothing set on `builder` can
     /// undo them: redirects are never followed, and under
@@ -125,7 +145,40 @@ impl WebsResolver {
                  DIDs resolved are trusted."
             );
         }
-        let client = guard(default_settings(builder, timeout), policy)
+        Self::build(default_settings(builder, timeout), policy.egress_policy())
+    }
+
+    /// A resolver over a client the caller configures, fetching only what
+    /// `policy` admits: each artifact URL is vetted with
+    /// [`EgressPolicy::vet_url`] before any request (in its `https` form; see
+    /// [`WebsResolver::allow_http`]), and every address a hostname resolves to
+    /// is vetted at connect time by `affinidi_net_guard::guarded_dns_resolver`
+    /// under the same policy. A loopback host is fetched over plain HTTP when
+    /// the policy admits loopback (`EgressPolicy::with_dev_loopback`).
+    ///
+    /// Use it for what [`HostPolicy`] cannot express, such as an operator
+    /// allow-list (`EgressPolicy::with_allow_list`) or named private ranges
+    /// (`EgressPolicy::allow_cidrs`).
+    ///
+    /// Only the guard settings are applied: redirects are never followed and
+    /// proxies are turned off. The builder's own request timeout and user
+    /// agent are kept, and `reqwest` sets neither by default, so set a
+    /// timeout on `builder` (for example [`DEFAULT_TIMEOUT`]).
+    ///
+    /// # Errors
+    /// Returns [`DidWebsError::Fetch`] if `reqwest` cannot build the client.
+    pub fn with_egress_policy(
+        builder: reqwest::ClientBuilder,
+        policy: EgressPolicy,
+    ) -> Result<Self, DidWebsError> {
+        Self::build(builder, Some(policy))
+    }
+
+    fn build(
+        builder: reqwest::ClientBuilder,
+        egress: Option<EgressPolicy>,
+    ) -> Result<Self, DidWebsError> {
+        let client = guard(builder, egress.as_ref())
             .build()
             .map_err(|e| DidWebsError::Fetch {
                 url: String::new(),
@@ -134,7 +187,7 @@ impl WebsResolver {
         Ok(Self {
             client,
             allow_http: false,
-            policy,
+            egress,
         })
     }
 
@@ -153,7 +206,7 @@ impl WebsResolver {
         Self {
             client,
             allow_http: false,
-            policy: HostPolicy::PublicOnly,
+            egress: HostPolicy::PublicOnly.egress_policy(),
         }
     }
 
@@ -177,9 +230,14 @@ impl WebsResolver {
     /// The scheme to fetch this DID's artifacts over.
     ///
     /// A loopback host is fetched over plain HTTP only where loopback is
-    /// reachable at all, under [`HostPolicy::AllowPrivate`].
+    /// reachable at all: under [`HostPolicy::AllowPrivate`], or an egress
+    /// policy that admits loopback.
     fn scheme(&self, did: &DidWebs) -> &'static str {
-        if self.allow_http || (self.policy == HostPolicy::AllowPrivate && did.is_loopback()) {
+        let loopback_reachable = self
+            .egress
+            .as_ref()
+            .is_none_or(EgressPolicy::is_dev_loopback);
+        if self.allow_http || (loopback_reachable && did.is_loopback()) {
             "http"
         } else {
             "https"
@@ -213,7 +271,12 @@ impl WebsResolver {
     /// As [`resolve`](Self::resolve), except that a deactivated identifier is
     /// not an error.
     pub async fn resolve_with_metadata(&self, did: &str) -> Result<Resolution, DidWebsError> {
-        let parsed = DidWebs::parse(did)?;
+        self.resolve_parsed(DidWebs::parse(did)?).await
+    }
+
+    /// Resolve an already parsed identifier, as
+    /// [`resolve_with_metadata`](Self::resolve_with_metadata).
+    async fn resolve_parsed(&self, parsed: DidWebs) -> Result<Resolution, DidWebsError> {
         let scheme = self.scheme(&parsed);
 
         let cesr_url = parsed.artifact_url_with_scheme(scheme, KERI_CESR);
@@ -231,8 +294,8 @@ impl WebsResolver {
             url: url.to_string(),
             reason: format!("not a valid URL: {e}"),
         })?;
-        if self.policy == HostPolicy::PublicOnly {
-            vet_public(&parsed)?;
+        if let Some(policy) = &self.egress {
+            vet(policy, &parsed)?;
         }
 
         let response = self.client.get(parsed).send().await.map_err(|e| {
@@ -300,22 +363,22 @@ async fn read_capped(
     Ok(body)
 }
 
-/// Check the URL's host, port and userinfo under
-/// `EgressPolicy::public_internet`, before any request is made.
+/// Check the URL's host, port and userinfo under `policy`, before any request
+/// is made.
 ///
 /// This half sees literal addresses, which never reach a DNS resolver. The
 /// URL is checked in its `https` form, because the scheme is not what this
 /// guards: `affinidi-net-guard` admits plain HTTP only for loopback, while
 /// [`WebsResolver::allow_http`] is an explicit choice to fetch public hosts
 /// over HTTP.
-fn vet_public(url: &reqwest::Url) -> Result<(), DidWebsError> {
+fn vet(policy: &EgressPolicy, url: &reqwest::Url) -> Result<(), DidWebsError> {
     let mut https = url.clone();
     if https.scheme() != "https" && https.set_scheme("https").is_err() {
         return Err(DidWebsError::BlockedHost(format!(
             "{url} cannot be checked as an https URL"
         )));
     }
-    affinidi_net_guard::EgressPolicy::public_internet()
+    policy
         .vet_url(&https)
         .map(|_| ())
         .map_err(|e| DidWebsError::BlockedHost(e.to_string()))
@@ -330,21 +393,75 @@ fn default_settings(builder: reqwest::ClientBuilder, timeout: Duration) -> reqwe
 }
 
 /// The guard settings. Applied last, so nothing set before can undo them.
-fn guard(builder: reqwest::ClientBuilder, policy: HostPolicy) -> reqwest::ClientBuilder {
+fn guard(builder: reqwest::ClientBuilder, egress: Option<&EgressPolicy>) -> reqwest::ClientBuilder {
     // The DID names the host. Following a redirect lets that host send the
     // resolver to an internal address the literal check never saw.
     let builder = builder
         .redirect(reqwest::redirect::Policy::none())
         .referer(false);
-    match policy {
-        HostPolicy::AllowPrivate => builder,
+    match egress {
+        None => builder,
         // A proxy resolves the hostname itself, so the guarded resolver would
         // see only the proxy's name.
-        HostPolicy::PublicOnly => builder
-            .dns_resolver(affinidi_net_guard::guarded_dns_resolver(
-                affinidi_net_guard::EgressPolicy::public_internet(),
-            ))
+        Some(policy) => builder
+            .dns_resolver(affinidi_net_guard::guarded_dns_resolver(policy.clone()))
             .no_proxy(),
+    }
+}
+
+/// did:webs as an `affinidi-did-resolver-traits`
+/// [`AsyncResolver`](affinidi_did_resolver_traits::AsyncResolver).
+#[cfg(feature = "resolver-traits")]
+mod resolver_impl {
+    use std::future::Future;
+    use std::pin::Pin;
+
+    use affinidi_did_common::{DID, DIDMethod};
+    use affinidi_did_resolver_traits::{AsyncResolver, Resolution, ResolverError};
+
+    use super::WebsResolver;
+    use crate::{DidWebs, DidWebsError};
+
+    /// The [`ResolverError`] for a failed did:webs resolution: a failed fetch
+    /// (with its URL, status and `Retry-After` when the host answered) is
+    /// [`ResolverError::NetworkFetch`], everything else
+    /// [`ResolverError::ResolutionFailed`].
+    pub(crate) fn resolver_error(err: DidWebsError) -> ResolverError {
+        match err.network_error() {
+            Some(network) => ResolverError::from(network),
+            None => ResolverError::ResolutionFailed(err.to_string()),
+        }
+    }
+
+    /// Resolves did:webs under the resolver's host policy, and declines
+    /// (`None`) every other method. A `versionId` DID parameter resolves as
+    /// of that key event; a deactivated identifier is an error, as
+    /// [`WebsResolver::resolve`] reports it.
+    impl AsyncResolver for WebsResolver {
+        fn name(&self) -> &str {
+            "WebsResolver"
+        }
+
+        fn resolve<'a>(
+            &'a self,
+            did: &'a DID,
+        ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+            Box::pin(async move {
+                if !matches!(did.method_ref(), DIDMethod::Other { method, .. } if method == "webs")
+                {
+                    return None;
+                }
+                let resolution = match DidWebs::from_did(did) {
+                    Ok(parsed) => self.resolve_parsed(parsed).await,
+                    Err(e) => Err(e),
+                };
+                Some(
+                    resolution
+                        .and_then(super::Resolution::into_document)
+                        .map_err(resolver_error),
+                )
+            })
+        }
     }
 }
 
@@ -427,6 +544,101 @@ mod tests {
         })
         .await
         .expect("sleeps");
+    }
+
+    /// `with_egress_policy` keeps the caller's timeout and user agent
+    /// (#1154). The client is driven directly at a loopback literal, which
+    /// the connect-time guard never sees (no name is resolved).
+    #[tokio::test]
+    async fn an_egress_policy_resolver_keeps_the_builders_timeout_and_user_agent() {
+        use wiremock::matchers::{header, method};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(header("user-agent", "caller/1.0"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(10)))
+            .mount(&server)
+            .await;
+        let resolver = WebsResolver::with_egress_policy(
+            reqwest::Client::builder()
+                .user_agent("caller/1.0")
+                .timeout(Duration::from_millis(200)),
+            EgressPolicy::public_internet(),
+        )
+        .expect("builds");
+        let started = std::time::Instant::now();
+        let err = resolver
+            .client
+            .get(server.uri())
+            .send()
+            .await
+            .expect_err("the caller's 200 ms timeout applies");
+        assert!(err.is_timeout(), "{err:?}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        // The request reached the mock only because it carried the caller's
+        // user agent; a mismatch would have been answered 404 at once.
+        assert_eq!(server.received_requests().await.expect("recorded").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_egress_policy_allow_list_is_enforced_before_any_request() {
+        use affinidi_net_guard::{AllowList, HostRule};
+
+        let policy = EgressPolicy::public_internet().with_allow_list(
+            AllowList::new([HostRule::Exact("only.example".into())]).expect("valid"),
+        );
+        let resolver = WebsResolver::with_egress_policy(
+            reqwest::Client::builder().timeout(Duration::from_secs(5)),
+            policy,
+        )
+        .expect("builds");
+        let err = resolver
+            .resolve("did:webs:example.com:ENro7uf0ePmiK3jdTo2YCdXLqW7z7xoP6qhhBou6gBLe")
+            .await
+            .expect_err("example.com is not on the allow-list");
+        assert!(matches!(err, DidWebsError::BlockedHost(_)), "{err:?}");
+    }
+
+    #[test]
+    fn host_policy_maps_onto_an_egress_policy() {
+        assert!(HostPolicy::AllowPrivate.egress_policy().is_none());
+        let public = HostPolicy::PublicOnly.egress_policy().expect("a policy");
+        assert!(!public.is_dev_loopback());
+        assert!(public.vet("https://localhost/x").is_err());
+    }
+
+    #[cfg(feature = "resolver-traits")]
+    #[tokio::test]
+    async fn the_resolver_trait_declines_other_methods_and_keeps_fetch_failures() {
+        use affinidi_did_common::DID;
+        use affinidi_did_resolver_traits::{AsyncResolver, ResolverError};
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let resolver = WebsResolver::with_policy(HostPolicy::AllowPrivate);
+        assert_eq!(AsyncResolver::name(&resolver), "WebsResolver");
+        let web: DID = "did:web:example.com".parse().expect("valid");
+        assert!(AsyncResolver::resolve(&resolver, &web).await.is_none());
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "7"))
+            .mount(&server)
+            .await;
+        let did: DID = format!(
+            "did:webs:{}:ENro7uf0ePmiK3jdTo2YCdXLqW7z7xoP6qhhBou6gBLe",
+            server.address().to_string().replace(':', "%3A")
+        )
+        .parse()
+        .expect("valid");
+        let Some(Err(ResolverError::NetworkFetch(fetch))) =
+            AsyncResolver::resolve(&resolver, &did).await
+        else {
+            panic!("a 429 is a network fetch failure");
+        };
+        assert!(fetch.is_rate_limited());
+        assert_eq!(fetch.retry_after, Some(Duration::from_secs(7)));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

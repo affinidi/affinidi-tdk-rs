@@ -119,11 +119,11 @@ impl TokensType {
 fn unix_secs_from_rfc3339(field: &str, value: &str) -> Result<u64> {
     let timestamp = DateTime::parse_from_rfc3339(value)
         .map_err(|_| {
-            DIDAuthError::Authentication(format!("{field} is not a valid RFC 3339 timestamp"))
+            DIDAuthError::InvalidResponse(format!("{field} is not a valid RFC 3339 timestamp"))
         })?
         .timestamp();
     u64::try_from(timestamp)
-        .map_err(|_| DIDAuthError::Authentication(format!("{field} is before the Unix epoch")))
+        .map_err(|_| DIDAuthError::InvalidResponse(format!("{field} is before the Unix epoch")))
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -518,7 +518,7 @@ impl DIDAuthentication {
         let refresh_token = if let Some(tokens) = &self.tokens {
             &tokens.refresh_token
         } else {
-            return Err(DIDAuthError::Authentication(
+            return Err(DIDAuthError::NoTokens(
                 "No tokens found to refresh".to_owned(),
             ));
         };
@@ -607,7 +607,7 @@ impl DIDAuthentication {
         S: SecretsResolver,
     {
         let Some(tokens) = &self.tokens else {
-            return Err(DIDAuthError::Authentication(
+            return Err(DIDAuthError::NoTokens(
                 "No tokens found to refresh".to_owned(),
             ));
         };
@@ -662,7 +662,7 @@ impl DIDAuthentication {
                 .await?;
 
                 let Some(tokens) = &mut self.tokens else {
-                    return Err(DIDAuthError::Authentication(
+                    return Err(DIDAuthError::NoTokens(
                         "No tokens found to refresh".to_owned(),
                     ));
                 };
@@ -680,7 +680,7 @@ impl DIDAuthentication {
             }
             RefreshCheck::Expired => {
                 // Access and refresh tokens have expired, need to re-authenticate
-                Err(DIDAuthError::Authentication(
+                Err(DIDAuthError::NoTokens(
                     "Access and refresh tokens have expired".to_owned(),
                 ))
             }
@@ -781,7 +781,7 @@ where
     }
 
     serde_json::from_str::<T>(&response_body).map_err(|e| {
-        DIDAuthError::Authentication(format!("Couldn't deserialize AuthorizationResponse: {e}"))
+        DIDAuthError::InvalidResponse(format!("Couldn't deserialize AuthorizationResponse: {e}"))
     })
 }
 
@@ -1186,6 +1186,17 @@ mod tests {
         let err = unix_secs_from_rfc3339("refresh_expires_at", "not a date").unwrap_err();
         assert!(err.to_string().contains("refresh_expires_at"), "{err}");
         assert!(!err.to_string().contains("not a date"), "{err}");
+        // A bad expiry is in the service's answer: asking again gets the same.
+        assert!(
+            matches!(err, crate::errors::DIDAuthError::InvalidResponse(_)),
+            "{err:?}"
+        );
+        assert!(!err.is_retryable());
+        let before = unix_secs_from_rfc3339("access_expires_at", "1969-12-31T23:59:59Z");
+        assert!(matches!(
+            before,
+            Err(crate::errors::DIDAuthError::InvalidResponse(_))
+        ));
     }
 
     /// A forced refresh of a still-valid token actually refreshes.
@@ -1469,6 +1480,50 @@ mod tests {
             assert_eq!(body, serde_json::json!({ "did": "did:example:alice" }));
         }
 
+        /// A successful status with a body that is not a challenge will not
+        /// change on retry either (#1145): it is returned at once, from the
+        /// first attempt, even with no retry limit.
+        #[tokio::test]
+        async fn an_unreadable_answer_is_returned_without_retrying() {
+            let (url, served) =
+                serve("HTTP/1.1 200 OK\r\ncontent-length: 9\r\nconnection: close\r\n\r\nnot json!")
+                    .await;
+            let started = Instant::now();
+            let err = tokio::time::timeout(Duration::from_secs(5), authenticate(&url, -1))
+                .await
+                .expect("returns without retrying");
+            assert!(started.elapsed() < Duration::from_secs(1));
+            assert_eq!(served.load(Ordering::SeqCst), 1);
+            assert!(matches!(err, DIDAuthError::InvalidResponse(_)), "{err:?}");
+        }
+
+        /// Refreshing with no tokens cannot succeed: `NoTokens`, not a
+        /// retryable `Authentication`.
+        #[tokio::test]
+        async fn refreshing_without_tokens_is_no_tokens() {
+            let (url, served) = serve(
+                "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            )
+            .await;
+            let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+                .await
+                .unwrap();
+            let secrets = SimpleSecretsResolver::new(&[]).await;
+            let err = DIDAuthentication::new()
+                .refresh_tokens(
+                    "did:example:alice",
+                    &url,
+                    &resolver,
+                    &secrets,
+                    &reqwest::Client::new(),
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(err, DIDAuthError::NoTokens(_)), "{err:?}");
+            assert!(!err.is_retryable());
+            assert_eq!(served.load(Ordering::SeqCst), 0, "nothing was sent");
+        }
+
         /// A 4xx other than 408/429 will not change on retry: it is
         /// returned at once, from the first attempt, even with no retry limit.
         #[tokio::test]
@@ -1529,6 +1584,8 @@ mod tests {
                 assert!(!status(code).is_retryable(), "{code}");
             }
             assert!(DIDAuthError::Authentication("connect".into()).is_retryable());
+            assert!(!DIDAuthError::InvalidResponse("garbled".into()).is_retryable());
+            assert!(!DIDAuthError::NoTokens("none".into()).is_retryable());
             assert!(!DIDAuthError::AuthenticationAbort("x".into()).is_retryable());
             assert!(!DIDAuthError::DIDComm("no key".into()).is_retryable());
             assert!(!DIDAuthError::Secrets("x".into()).is_retryable());
