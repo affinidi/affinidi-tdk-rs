@@ -24,6 +24,10 @@ pub enum Oid4vciError {
     #[error("Authorization error: {0}")]
     Authorization(String),
 
+    /// A response from the issuer is invalid (OpenID4VCI 1.0 helpers).
+    #[error("Invalid response: {0}")]
+    InvalidResponse(String),
+
     /// The proof of possession is invalid.
     #[error("Invalid proof: {0}")]
     InvalidProof(String),
