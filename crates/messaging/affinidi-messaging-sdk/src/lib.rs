@@ -55,7 +55,7 @@
 //! let config = ATMConfig::builder()
 //!     // Trust a private CA for the mediator's websocket (wss://), on top of
 //!     // the platform's roots
-//!     .with_ssl_certificates(&mut environment.ssl_certificate_paths().to_vec())
+//!     .with_ssl_certificate_paths(environment.ssl_certificate_paths())
 //!     // Optional: tune the per-profile message fetch cache
 //!     .with_fetch_cache_limit_count(100)
 //!     .with_fetch_cache_limit_bytes(10 * 1024 * 1024)

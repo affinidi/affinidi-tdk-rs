@@ -7,7 +7,7 @@
  *
  */
 use crate::messages::compat::UnpackMetadata;
-use affinidi_messaging_didcomm::message::Message;
+use affinidi_messaging_didcomm::message::{Attachment, Message};
 use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -86,6 +86,132 @@ pub(crate) async fn auto_delete_message(atm: &ATM, profile: &Arc<ATMProfile>, me
     }
 }
 
+/// Why a delivery attachment could not be handed to a consumer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RejectKind {
+    /// Can never become processable: malformed base64/utf8, an unsupported
+    /// attachment type, or a cryptographically invalid signature.
+    Undeliverable,
+    /// Refused by the configured unpack policy (`UnexpectedEnvelope`,
+    /// `AddressingMismatch`).
+    PolicyRejected,
+    /// Failed for a reason that may clear later (e.g. an unresolvable signer).
+    Transient,
+}
+
+/// A rejected delivery attachment: what went wrong, the raw payload as
+/// received, and a human-readable reason.
+struct Rejected {
+    kind: RejectKind,
+    raw: String,
+    reason: String,
+}
+
+/// What the pickup drain made of one delivery attachment.
+enum Classified {
+    /// An unpacked DIDComm message. The metadata's `sha256_hash` is the
+    /// mediator's id for it (the attachment id when present).
+    DidComm(Box<Message>, Box<UnpackMetadata>),
+    /// A still-packed TSP frame (the decoded stored form, `base64url(qb2)`).
+    Tsp(String),
+    /// Not deliverable; the caller decides whether to report, ack or retain.
+    Rejected(Rejected),
+}
+
+/// Classify one delivery attachment: decode it, sniff TSP, and DIDComm-unpack
+/// anything else under the configured unpack policy.
+///
+/// The single classifier behind both pickup drains
+/// ([`MessagePickup::_handle_delivery`] and, with the `tsp` feature,
+/// `MessagePickup::_handle_delivery_frames`), so they agree on what each
+/// attachment is (#1148). It reports and deletes nothing: each drain applies
+/// its own disposition to the result.
+async fn classify_attachment(atm: &ATM, attachment: &Attachment) -> Classified {
+    let reject = |kind, raw, reason| Classified::Rejected(Rejected { kind, raw, reason });
+
+    let Some(b64) = &attachment.data.base64 else {
+        return reject(
+            RejectKind::Undeliverable,
+            String::new(),
+            format!("unsupported attachment type: {:?}", attachment.data),
+        );
+    };
+    let decoded = match BASE64_URL_SAFE_NO_PAD.decode(b64.as_bytes()) {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(e) => {
+                return reject(
+                    RejectKind::Undeliverable,
+                    b64.clone(),
+                    format!("attachment payload is not valid UTF-8: {e}"),
+                );
+            }
+        },
+        Err(e) => {
+            return reject(
+                RejectKind::Undeliverable,
+                b64.clone(),
+                format!("attachment is not valid base64: {e}"),
+            );
+        }
+    };
+
+    // Sniffed before the DIDComm unpacker sees it; the same classifier
+    // `TspOps::is_tsp` delegates to, available in every build.
+    if crate::tsp_wire::looks_like_tsp(&decoded) {
+        return Classified::Tsp(decoded);
+    }
+
+    // DIDComm frames pulled via pickup are unpacked under the same configured
+    // secure `unpack_policy` as a direct `atm.unpack`, so an envelope the
+    // policy rejects (e.g. an unauthenticated wrapping, or a forged `from`) is
+    // not surfaced.
+    match atm
+        .inner
+        .unpack_with(&decoded, atm.inner.config.unpack_policy())
+        .await
+    {
+        // The message keeps the id its sender gave it, so a reply threads to
+        // the sender's id (VTI-49). The mediator's id, the one to ack or delete
+        // with, is `u.sha256_hash`: sha256 of these bytes, which is how the
+        // mediator ids a stored message, so it equals the attachment id. Should
+        // a mediator name it differently, its id is the one an ack must carry.
+        Ok((m, mut u)) => {
+            if let Some(attachment_id) = &attachment.id
+                && *attachment_id != u.sha256_hash
+            {
+                debug!(
+                    "delivery attachment id ({attachment_id}) differs from the message hash \
+                     ({}); acking by the attachment id",
+                    u.sha256_hash
+                );
+                u.sha256_hash = attachment_id.to_string();
+            }
+            Classified::DidComm(Box::new(m), Box::new(u))
+        }
+        // A cryptographically invalid signature is deterministic garbage — it
+        // will never verify on any redelivery.
+        Err(e @ ATMError::VerificationFailed(_)) => {
+            reject(RejectKind::Undeliverable, decoded, e.to_string())
+        }
+        Err(e @ (ATMError::UnexpectedEnvelope(_) | ATMError::AddressingMismatch(_))) => {
+            reject(RejectKind::PolicyRejected, decoded, e.to_string())
+        }
+        Err(e) => reject(RejectKind::Transient, decoded, e.to_string()),
+    }
+}
+
+/// Best-effort delete of an unprocessable message by its id (== the delivery
+/// attachment id, the mediator's sha256-of-body message id), so it is not
+/// redelivered every pickup.
+async fn delete_if_present(atm: &ATM, profile: &Arc<ATMProfile>, id: &Option<String>) {
+    if let Some(id) = id
+        && let Err(e) = atm.delete_message_background(profile, id).await
+    {
+        warn!("Couldn't delete unprocessable message id({id}): {e:?}");
+    }
+}
+
 /// How long a request/response exchange waits for its reply over the
 /// websocket when the caller does not say: [`ATM::send_message`] and the
 /// Message Pickup requests given `wait: None`.
@@ -108,6 +234,53 @@ pub enum InboundFrame {
     /// A still-packed TSP frame (CESR/qb64), to be handed to
     /// `atm.tsp().unpack_bytes`. Carried opaquely — the SDK does not unpack it.
     Tsp(Box<String>),
+}
+
+impl InboundFrame {
+    /// The mediator's id for this frame: the id to ack (delete) it by, and the
+    /// key a consumer uses to recognise the same queued message arriving by
+    /// another path (the live stream and a delivery-request drain).
+    ///
+    /// - DIDComm: [`UnpackMetadata::sha256_hash`].
+    /// - TSP: sha256 (hex) of the stored frame. The mediator ids a stored
+    ///   message as `digest(body)` and streams the exact bytes it stored, so
+    ///   this equals the delivery attachment id the same frame carries when it
+    ///   is fetched with a delivery request.
+    ///
+    /// A frame taken from `send_delivery_request_frames` (`tsp` feature) comes
+    /// paired with its attachment id; that id is authoritative there.
+    pub fn ack_id(&self) -> String {
+        match self {
+            InboundFrame::DidComm(_, meta) => meta.sha256_hash.clone(),
+            InboundFrame::Tsp(frame) => sha256::digest(frame.as_str()),
+        }
+    }
+}
+
+/// What a delivery-request drain made of one queued message, as returned (with
+/// the message's mediator id) by
+/// `send_delivery_request_classified` (`tsp` feature).
+///
+/// Unlike the `(Option<InboundFrame>, String)` pairs of
+/// `send_delivery_request_frames`, where `None` means "ack it" for every
+/// failure, this tells a message that can never be processed apart from one
+/// that may be processed on a later pickup, so a consumer acks only the first.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum DeliveryOutcome {
+    /// A frame for a handler. Ack it once it has been handled.
+    Frame(InboundFrame),
+    /// Can never be processed: malformed base64/utf8, an unsupported
+    /// attachment type, an invalid signature, or (by default) a message the
+    /// unpack policy rejects. Reported on the unprocessable-message channel.
+    /// Ack it, so the mediator stops redelivering it.
+    Reject,
+    /// Not processed now, but may be later: a transient unpack failure (e.g.
+    /// a signer DID that cannot be resolved right now), or a policy reject
+    /// retained by
+    /// [`with_purge_policy_rejected_messages(false)`](crate::config::ATMConfigBuilder::with_purge_policy_rejected_messages).
+    /// Do not ack it; it stays queued and comes back on a later pickup.
+    Retry,
 }
 
 // Reads the body of an incoming Message Pickup 3.0 Status Request Message
@@ -442,6 +615,11 @@ impl MessagePickup {
     /// deletes the received message in the background (by unpack `sha256_hash`
     /// for DIDComm, by hash of the packed frame for TSP), matching the two
     /// single-protocol methods.
+    ///
+    /// A consumer that acks only after handling the frame passes
+    /// `auto_delete = false` and later deletes it by
+    /// [`InboundFrame::ack_id`], which is also the id the same message carries
+    /// when fetched by a delivery request.
     pub async fn live_stream_next_frame(
         &self,
         atm: &ATM,
@@ -507,17 +685,18 @@ impl MessagePickup {
                     Ok(Some(InboundFrame::DidComm(msg, meta)))
                 }
                 Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
+                    let frame = InboundFrame::Tsp(packed_msg);
                     if auto_delete {
                         // The live path carries no attachment id, so the
                         // message id is reconstructed as sha256 of the
-                        // received frame. This matches the mediator's id
-                        // derivation (`msg_id = digest(body)`), since it
-                        // streams the exact bytes it stored — locked by
-                        // the mediator's `message_id_is_sha256_of_body`.
-                        let sha256_hash = sha256::digest(packed_msg.as_str());
-                        auto_delete_message(atm, profile, &sha256_hash).await;
+                        // received frame (`InboundFrame::ack_id`). This
+                        // matches the mediator's id derivation
+                        // (`msg_id = digest(body)`), since it streams the
+                        // exact bytes it stored — locked by the mediator's
+                        // `message_id_is_sha256_of_body`.
+                        auto_delete_message(atm, profile, &frame.ack_id()).await;
                     }
-                    Ok(Some(InboundFrame::Tsp(packed_msg)))
+                    Ok(Some(frame))
                 }
                 Ok(WebSocketResponses::Disconnected) => {
                     // Connection dropped while waiting — treat as "no
@@ -738,6 +917,35 @@ impl MessagePickup {
         }
     }
 
+    /// Like [`send_delivery_request_frames`](Self::send_delivery_request_frames),
+    /// but tells a permanent reject ([`DeliveryOutcome::Reject`], safe to ack)
+    /// apart from a failure that may clear ([`DeliveryOutcome::Retry`], leave
+    /// queued), so a consumer that acks rejects does not ack — and lose — a
+    /// message whose signer DID merely failed to resolve this time. Each
+    /// outcome is paired with the message's mediator id (the delivery
+    /// attachment id), the id to ack it by. An attachment without an id is
+    /// skipped. Requires the `tsp` feature.
+    ///
+    /// Uses the same classifier as both other drains: a reject here is exactly
+    /// what [`send_delivery_request`](Self::send_delivery_request) deletes
+    /// itself, and a retry is what it leaves queued.
+    #[cfg(feature = "tsp")]
+    pub async fn send_delivery_request_classified(
+        &self,
+        atm: &ATM,
+        profile: &Arc<ATMProfile>,
+        limit: Option<usize>,
+        wait_for_response: bool,
+    ) -> Result<Vec<(DeliveryOutcome, String)>, ATMError> {
+        match self
+            ._request_delivery(atm, profile, limit, wait_for_response)
+            .await?
+        {
+            Some(message) => Ok(self._handle_delivery_classified(atm, &message).await),
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// Send a Message-Pickup 3.0 delivery-request and return the mediator's
     /// `delivery` message (whose attachments are the queued messages), or
     /// `None` when `wait_for_response` is false. Shared by
@@ -813,14 +1021,82 @@ impl MessagePickup {
         .await
     }
 
-    /// TSP-aware sibling of [`_handle_delivery`]: classify each delivered
-    /// attachment (DIDComm vs TSP) and return it as an [`InboundFrame`] paired
-    /// with the attachment id needed to ack/delete it. Undeliverable
-    /// attachments — bad base64/utf8, or a non-TSP frame that fails DIDComm
-    /// unpack — yield `(None, id)` so the caller still acks them and the
-    /// mediator stops redelivering (no redelivery loop). Unlike [`_handle_delivery`],
-    /// a TSP frame is surfaced (`InboundFrame::Tsp`) rather than DIDComm-unpacked
-    /// and dropped.
+    /// The drain behind [`send_delivery_request_classified`]: classify each
+    /// attachment with [`classify_attachment`] and decide it the way
+    /// [`_handle_delivery`] does — non-recoverable and (by default)
+    /// policy-rejected attachments are reported and marked `Reject`;
+    /// transient failures, and policy rejects retained by configuration, are
+    /// marked `Retry` and not reported — but delete nothing itself.
+    #[cfg(feature = "tsp")]
+    pub(crate) async fn _handle_delivery_classified(
+        &self,
+        atm: &ATM,
+        message: &Message,
+    ) -> Vec<(DeliveryOutcome, String)> {
+        let mut out = Vec::new();
+        let Some(attachments) = &message.attachments else {
+            return out;
+        };
+        for attachment in attachments {
+            let Some(id) = attachment.id.clone() else {
+                warn!("Delivery attachment has no id; cannot ack — skipping");
+                continue;
+            };
+            let outcome = match classify_attachment(atm, attachment).await {
+                Classified::DidComm(m, u) => DeliveryOutcome::Frame(InboundFrame::DidComm(m, u)),
+                Classified::Tsp(frame) => {
+                    DeliveryOutcome::Frame(InboundFrame::Tsp(Box::new(frame)))
+                }
+                Classified::Rejected(rejected) => match rejected.kind {
+                    RejectKind::Undeliverable => {
+                        warn!(
+                            "Undeliverable attachment ({}); reject. id({id})",
+                            rejected.reason
+                        );
+                        emit_unprocessable(atm, Some(id.clone()), rejected.raw, rejected.reason);
+                        DeliveryOutcome::Reject
+                    }
+                    RejectKind::PolicyRejected => {
+                        let purge = atm.inner.config.purge_policy_rejected_messages();
+                        warn!(
+                            "Policy-rejected message ({}); {}. id({id})",
+                            rejected.reason,
+                            if purge { "reject" } else { "retained" },
+                        );
+                        emit_unprocessable(atm, Some(id.clone()), rejected.raw, rejected.reason);
+                        if purge {
+                            DeliveryOutcome::Reject
+                        } else {
+                            DeliveryOutcome::Retry
+                        }
+                    }
+                    RejectKind::Transient => {
+                        warn!(
+                            "Error unpacking message ({}); left queued for retry. id({id})",
+                            rejected.reason
+                        );
+                        DeliveryOutcome::Retry
+                    }
+                },
+            };
+            out.push((outcome, id));
+        }
+        out
+    }
+
+    /// TSP-aware sibling of [`_handle_delivery`]: return each delivered
+    /// attachment as an [`InboundFrame`] paired with the attachment id needed
+    /// to ack/delete it.
+    ///
+    /// Both drains classify attachments with the same
+    /// [`classify_attachment`]; they differ only in what they do with the
+    /// result (#1148). This one deletes nothing itself: an attachment no
+    /// consumer can take — bad base64/utf8, an unsupported type, or a non-TSP
+    /// frame that fails DIDComm unpack for any reason — is reported on the
+    /// unprocessable channel and yielded as `(None, id)` so the caller acks it
+    /// and the mediator stops redelivering it. Unlike [`_handle_delivery`], a
+    /// TSP frame is surfaced (`InboundFrame::Tsp`) rather than purged. An
+    /// attachment without an id cannot be acked individually and is skipped.
     #[cfg(feature = "tsp")]
     pub(crate) async fn _handle_delivery_frames(
         &self,
@@ -840,72 +1116,17 @@ impl MessagePickup {
                 warn!("Delivery attachment has no id; cannot ack — skipping");
                 continue;
             };
-            let Some(b64) = &attachment.data.base64 else {
-                warn!("Attachment type not supported: {:?}", attachment.data);
-                emit_unprocessable(
-                    atm,
-                    Some(id.clone()),
-                    String::new(),
-                    format!("unsupported attachment type: {:?}", attachment.data),
-                );
-                out.push((None, id));
-                continue;
-            };
-            let decoded = match BASE64_URL_SAFE_NO_PAD.decode(b64.clone()) {
-                Ok(bytes) => match String::from_utf8(bytes) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        warn!("Error decoding attachment to utf8: ({e:?}). id({id})");
-                        emit_unprocessable(
-                            atm,
-                            Some(id.clone()),
-                            b64.clone(),
-                            format!("attachment payload is not valid UTF-8: {e}"),
-                        );
-                        out.push((None, id));
-                        continue;
-                    }
-                },
-                Err(e) => {
-                    warn!("Error decoding base64: ({e:?}). id({id})");
-                    emit_unprocessable(
-                        atm,
-                        Some(id.clone()),
-                        b64.clone(),
-                        format!("attachment is not valid base64: {e}"),
+            match classify_attachment(atm, attachment).await {
+                Classified::DidComm(m, u) => out.push((Some(InboundFrame::DidComm(m, u)), id)),
+                Classified::Tsp(frame) => out.push((Some(InboundFrame::Tsp(Box::new(frame))), id)),
+                Classified::Rejected(rejected) => {
+                    warn!(
+                        "Unprocessable delivery attachment ({}); yielded for the caller to ack. \
+                         id({id})",
+                        rejected.reason
                     );
+                    emit_unprocessable(atm, Some(id.clone()), rejected.raw, rejected.reason);
                     out.push((None, id));
-                    continue;
-                }
-            };
-
-            if atm.tsp().is_tsp(&decoded) {
-                out.push((Some(InboundFrame::Tsp(Box::new(decoded))), id));
-            } else {
-                // DIDComm frames pulled via pickup are unpacked under the same
-                // configured secure `unpack_policy` as a direct `atm.unpack`, so
-                // an envelope the policy rejects (e.g. an unauthenticated
-                // wrapping, or a forged `from`) is dropped rather than surfaced.
-                match atm
-                    .inner
-                    .unpack_with(&decoded, atm.inner.config.unpack_policy())
-                    .await
-                {
-                    // The message keeps the id its sender gave it. The
-                    // mediator's id for it (the one to ack or delete) is `id`,
-                    // returned beside it. Overwriting `m.id` with that made a
-                    // reply to a request collected this way thread to the
-                    // mediator's id rather than the sender's, so the sender's
-                    // waiter never matched it. The same request collected
-                    // live kept its id and was answered (VTI-49).
-                    Ok((m, u)) => {
-                        out.push((Some(InboundFrame::DidComm(Box::new(m), Box::new(u))), id));
-                    }
-                    Err(e) => {
-                        warn!("Error unpacking message: ({e:?}); dropping. id({id})");
-                        emit_unprocessable(atm, Some(id.clone()), decoded.clone(), e.to_string());
-                        out.push((None, id));
-                    }
                 }
             }
         }
@@ -915,18 +1136,21 @@ impl MessagePickup {
 
     /// Iterates through each attachment and unpacks each message into an array to return.
     ///
-    /// Each attachment is unpacked under the **configured
+    /// Each attachment is classified by [`classify_attachment`] (shared with
+    /// [`_handle_delivery_frames`], so the two drains cannot drift — #1148) and
+    /// unpacked under the **configured
     /// [`UnpackPolicy`](crate::config::UnpackPolicy)** — the same secure
     /// authenticated-encryption default that [`crate::ATM::unpack`] applies — so
     /// messages pulled via pickup get the same guarantees as a direct unpack.
     ///
     /// An attachment is handled by *recoverability*:
     /// - **Non-recoverable** — malformed base64/utf8, an unsupported attachment
-    ///   type, or a cryptographically invalid signature (`VerificationFailed`) —
-    ///   can never become processable, so it is **always deleted from the
-    ///   mediator** (best-effort, by its message id) to stop it being
-    ///   redelivered every pickup (which would stall the queue and, under
-    ///   backpressure, the mediator connection).
+    ///   type, a TSP frame (this drain is DIDComm-only), or a cryptographically
+    ///   invalid signature (`VerificationFailed`) — can never become
+    ///   processable here, so it is **always deleted from the mediator**
+    ///   (best-effort, by its message id) to stop it being redelivered every
+    ///   pickup (which would stall the queue and, under backpressure, the
+    ///   mediator connection).
     /// - **Policy-rejected** — a disallowed wrapping (`UnexpectedEnvelope`) or an
     ///   addressing mismatch (`AddressingMismatch`) — is **deleted by default**,
     ///   because the mediator's per-recipient queue is bounded (a fixed message
@@ -938,9 +1162,9 @@ impl MessagePickup {
     /// - **Transient** — e.g. a temporarily unresolvable signer DID — is always
     ///   left queued for retry.
     ///
-    /// Every rejected attachment is reported on the optional
-    /// unprocessable-message channel *before* any deletion, so a consumer can
-    /// observe or quarantine it.
+    /// Every non-recoverable or policy-rejected attachment is reported on the
+    /// optional unprocessable-message channel *before* any deletion, so a
+    /// consumer can observe or quarantine it.
     pub(crate) async fn _handle_delivery(
         &self,
         atm: &ATM,
@@ -949,214 +1173,78 @@ impl MessagePickup {
     ) -> Result<Vec<(Message, UnpackMetadata)>, ATMError> {
         let mut response: Vec<(Message, UnpackMetadata)> = Vec::new();
 
-        // Report the unprocessable message on the optional channel (so a
-        // consumer can observe/quarantine it), then decide deletion by
-        // recoverability. `delete_if_present` is the shared best-effort delete
-        // by message id (== the delivery attachment id, which is the mediator's
-        // sha256-of-body message id) so it can't be redelivered every pickup.
-        async fn delete_if_present(atm: &ATM, profile: &Arc<ATMProfile>, id: &Option<String>) {
-            if let Some(id) = id
-                && let Err(e) = atm.delete_message_background(profile, id).await
-            {
-                warn!("Couldn't delete unprocessable message id({id}): {e:?}");
-            }
-        }
+        let Some(attachments) = &message.attachments else {
+            return Ok(response);
+        };
 
-        // Non-recoverable input (malformed base64/utf8, unsupported type, an
-        // invalid signature): report, then *always* delete — it can never become
-        // processable, so retaining it would only poison-loop the queue.
-        async fn report_and_delete(
-            atm: &ATM,
-            profile: &Arc<ATMProfile>,
-            id: &Option<String>,
-            raw: String,
-            reason: String,
-        ) {
-            emit_unprocessable(atm, id.clone(), raw, reason);
-            delete_if_present(atm, profile, id).await;
-        }
-
-        // Policy rejection (`UnexpectedEnvelope` / `AddressingMismatch`): report,
-        // then delete by default. The mediator's per-recipient queue is bounded
-        // (a fixed message limit), and a retained reject is redelivered every
-        // pickup, so leaving it queued would accumulate and eventually fill the
-        // queue, blocking new inbound messages. An operator can opt to retain it
-        // (e.g. for a bounded upgrade window) via
-        // `with_purge_policy_rejected_messages(false)`.
-        async fn report_policy_rejected(
-            atm: &ATM,
-            profile: &Arc<ATMProfile>,
-            id: &Option<String>,
-            raw: String,
-            reason: String,
-        ) {
-            emit_unprocessable(atm, id.clone(), raw, reason);
-            if atm.inner.config.purge_policy_rejected_messages() {
-                delete_if_present(atm, profile, id).await;
-            }
-        }
-
-        if let Some(attachments) = &message.attachments {
-            for attachment in attachments {
-                if let Some(b64) = &attachment.data.base64 {
-                    let decoded = match BASE64_URL_SAFE_NO_PAD.decode(b64.clone()) {
-                        Ok(decoded) => match String::from_utf8(decoded) {
-                            Ok(decoded) => decoded,
-                            Err(e) => {
-                                warn!(
-                                    "Undeliverable attachment (not utf8: {e:?}); purging. id({:?})",
-                                    attachment.id
-                                );
-                                report_and_delete(
-                                    atm,
-                                    profile,
-                                    &attachment.id,
-                                    b64.clone(),
-                                    format!("attachment payload is not valid UTF-8: {e}"),
-                                )
-                                .await;
-                                continue;
-                            }
-                        },
-                        Err(e) => {
-                            warn!(
-                                "Undeliverable attachment (bad base64: {e:?}); purging. id({:?})",
-                                attachment.id
-                            );
-                            report_and_delete(
-                                atm,
-                                profile,
-                                &attachment.id,
-                                b64.clone(),
-                                format!("attachment is not valid base64: {e}"),
-                            )
-                            .await;
-                            continue;
-                        }
-                    };
-
-                    // Name a TSP frame before it reaches the DIDComm unpacker.
-                    // This is the DIDComm-only pickup path, so a TSP frame here
-                    // cannot be delivered either way — but "this is TSP and this
-                    // stream doesn't carry TSP" is a diagnosis, where the unpack
-                    // failure below is `Cannot parse message as JSON ... invalid
-                    // number at line 1 column 2` (CESR qb64 opens with `-`),
-                    // which names nothing an operator can act on. Purged like
-                    // any other undeliverable attachment so the mediator stops
-                    // redelivering it every pickup cycle.
-                    if crate::tsp_wire::looks_like_tsp(&decoded) {
-                        warn!(
-                            "Undeliverable attachment: a TSP frame arrived on a DIDComm-only \
-                             pickup stream; purging. id({:?}). The frame is not corrupt — either \
-                             this build lacks the `tsp` feature, or this consumer is using the \
-                             DIDComm-only pickup path (use `live_stream_next_frame` to \
-                             multiplex TSP + DIDComm).",
-                            attachment.id
-                        );
-                        report_and_delete(
-                            atm,
-                            profile,
-                            &attachment.id,
-                            decoded.clone(),
-                            "TSP frame received on a DIDComm-only pickup stream".to_string(),
-                        )
-                        .await;
-                        continue;
-                    }
-
-                    match atm
-                        .inner
-                        .unpack_with(&decoded, atm.inner.config.unpack_policy())
-                        .await
-                    {
-                        // The message keeps the id its sender gave it, so a reply
-                        // threads to the sender's id (VTI-49; the frames variant
-                        // above already did this). The mediator's id, the one to
-                        // ack or delete with, is `u.sha256_hash`: sha256 of these
-                        // bytes, which is how the mediator ids a stored message,
-                        // so it equals the attachment id. Should a mediator name
-                        // it differently, its id is the one an ack must carry.
-                        Ok((m, mut u)) => {
-                            if let Some(attachment_id) = &attachment.id
-                                && *attachment_id != u.sha256_hash
-                            {
-                                debug!(
-                                    "delivery attachment id ({attachment_id}) differs from the \
-                                     message hash ({}); acking by the attachment id",
-                                    u.sha256_hash
-                                );
-                                u.sha256_hash = attachment_id.to_string();
-                            }
-                            response.push((m, u))
-                        }
-                        // A cryptographically invalid signature is deterministic
-                        // garbage — it will never verify on any redelivery — so
-                        // purge it regardless of the policy-retention flag.
-                        Err(e @ ATMError::VerificationFailed(_)) => {
-                            warn!(
-                                "Unprocessable message (invalid signature: {e:?}); purging. id({:?})",
-                                attachment.id
-                            );
-                            report_and_delete(
-                                atm,
-                                profile,
-                                &attachment.id,
-                                decoded.clone(),
-                                e.to_string(),
-                            )
-                            .await;
-                            continue;
-                        }
-                        // A policy rejection — a disallowed wrapping
-                        // (`UnexpectedEnvelope`) or an addressing mismatch
-                        // (`AddressingMismatch`) — is deleted by default: the
-                        // mediator queue is bounded, so a retained reject
-                        // redelivered every pickup would fill it. An operator can
-                        // opt to retain it instead.
-                        Err(
-                            e @ (ATMError::UnexpectedEnvelope(_) | ATMError::AddressingMismatch(_)),
-                        ) => {
-                            warn!(
-                                "Policy-rejected message ({e:?}); {}. id({:?})",
-                                if atm.inner.config.purge_policy_rejected_messages() {
-                                    "purging"
-                                } else {
-                                    "retained"
-                                },
-                                attachment.id
-                            );
-                            report_policy_rejected(
-                                atm,
-                                profile,
-                                &attachment.id,
-                                decoded.clone(),
-                                e.to_string(),
-                            )
-                            .await;
-                            continue;
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Error unpacking message ({e:?}); left queued for retry. id({:?})",
-                                attachment.id
-                            );
-                            continue;
-                        }
-                    };
-                } else {
-                    warn!(
-                        "Undeliverable attachment (unsupported type: {:?}); purging. id({:?})",
-                        attachment.data, attachment.id
-                    );
-                    report_and_delete(
-                        atm,
-                        profile,
-                        &attachment.id,
-                        String::new(),
-                        format!("unsupported attachment type: {:?}", attachment.data),
-                    )
-                    .await;
+        for attachment in attachments {
+            let id = &attachment.id;
+            let rejected = match classify_attachment(atm, attachment).await {
+                Classified::DidComm(m, u) => {
+                    response.push((*m, *u));
                     continue;
+                }
+                // Name a TSP frame instead of letting it reach the DIDComm
+                // unpacker. This is the DIDComm-only pickup path, so a TSP
+                // frame here cannot be delivered either way — but "this is TSP
+                // and this stream doesn't carry TSP" is a diagnosis, where the
+                // unpack failure is `Cannot parse message as JSON ... invalid
+                // number at line 1 column 2` (CESR qb64 opens with `-`), which
+                // names nothing an operator can act on. Purged like any other
+                // undeliverable attachment so the mediator stops redelivering
+                // it every pickup cycle.
+                Classified::Tsp(frame) => {
+                    warn!(
+                        "Undeliverable attachment: a TSP frame arrived on a DIDComm-only \
+                         pickup stream; purging. id({id:?}). The frame is not corrupt — either \
+                         this build lacks the `tsp` feature, or this consumer is using the \
+                         DIDComm-only pickup path (use `live_stream_next_frame` to \
+                         multiplex TSP + DIDComm)."
+                    );
+                    Rejected {
+                        kind: RejectKind::Undeliverable,
+                        raw: frame,
+                        reason: "TSP frame received on a DIDComm-only pickup stream".to_string(),
+                    }
+                }
+                Classified::Rejected(rejected) => rejected,
+            };
+
+            match rejected.kind {
+                // Non-recoverable: report, then *always* delete — it can never
+                // become processable, so retaining it would only poison-loop
+                // the queue.
+                RejectKind::Undeliverable => {
+                    warn!(
+                        "Undeliverable attachment ({}); purging. id({id:?})",
+                        rejected.reason
+                    );
+                    emit_unprocessable(atm, id.clone(), rejected.raw, rejected.reason);
+                    delete_if_present(atm, profile, id).await;
+                }
+                // Policy rejection: report, then delete by default. The
+                // mediator queue is bounded, so a retained reject redelivered
+                // every pickup would fill it. An operator can opt to retain it
+                // (e.g. for a bounded upgrade window) via
+                // `with_purge_policy_rejected_messages(false)`.
+                RejectKind::PolicyRejected => {
+                    let purge = atm.inner.config.purge_policy_rejected_messages();
+                    warn!(
+                        "Policy-rejected message ({}); {}. id({id:?})",
+                        rejected.reason,
+                        if purge { "purging" } else { "retained" },
+                    );
+                    emit_unprocessable(atm, id.clone(), rejected.raw, rejected.reason);
+                    if purge {
+                        delete_if_present(atm, profile, id).await;
+                    }
+                }
+                // May clear on a later pickup: left queued, not reported.
+                RejectKind::Transient => {
+                    warn!(
+                        "Error unpacking message ({}); left queued for retry. id({id:?})",
+                        rejected.reason
+                    );
                 }
             }
         }
@@ -1463,6 +1551,22 @@ impl<'a> MessagePickupOps<'a> {
     ) -> Result<Vec<(Option<InboundFrame>, String)>, ATMError> {
         MessagePickup::default()
             .send_delivery_request_frames(self.atm, profile, limit, wait_for_response)
+            .await
+    }
+
+    /// Sends a Message Pickup 3.0 `Delivery Request` and returns each queued
+    /// message's [`DeliveryOutcome`] — a frame, a permanent reject to ack, or
+    /// a failure to leave queued — paired with its ack id.
+    /// See [`MessagePickup::send_delivery_request_classified`] for full documentation.
+    #[cfg(feature = "tsp")]
+    pub async fn send_delivery_request_classified(
+        &self,
+        profile: &Arc<ATMProfile>,
+        limit: Option<usize>,
+        wait_for_response: bool,
+    ) -> Result<Vec<(DeliveryOutcome, String)>, ATMError> {
+        MessagePickup::default()
+            .send_delivery_request_classified(self.atm, profile, limit, wait_for_response)
             .await
     }
 }
@@ -2100,6 +2204,272 @@ mod tests {
             rx.try_recv().is_err(),
             "only the unprocessable frame is reported, not the valid one"
         );
+    }
+
+    /// #1148: the two drains share one classifier, so on the same batch they
+    /// surface the same DIDComm messages under the same ack ids and reject the
+    /// same attachments. They differ only where intended: the frames drain
+    /// surfaces a TSP frame and yields rejects as `(None, id)` for the caller
+    /// to ack, while the DIDComm-only drain reports the TSP frame and purges
+    /// rejects itself.
+    #[cfg(feature = "tsp")]
+    #[tokio::test]
+    async fn both_drains_classify_a_batch_alike() {
+        let (sender_did, sender_x) = peer_with_x25519();
+        let (recipient_did, recipient_x) = peer_with_x25519();
+        let config = ATMConfig::builder()
+            .with_unprocessable_message_channel(32)
+            .build()
+            .unwrap();
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        tdk.secrets_resolver().insert(recipient_x.clone()).await;
+        let atm = ATM::new(config, tdk).await.unwrap();
+        let mut rx = atm.get_unprocessable_message_channel().unwrap();
+        let profile = fake_profile();
+
+        let good = |id: &str, msg_id: &str| {
+            Attachment::base64(authcrypt_b64(
+                &sender_did,
+                &sender_x,
+                &recipient_did,
+                &recipient_x,
+                msg_id,
+            ))
+            .id(id.to_string())
+            .finalize()
+        };
+        let plaintext = DcMessage::build("evil".to_string(), "example/v1".to_string(), json!({}))
+            .from(sender_did.clone())
+            .to(recipient_did.clone())
+            .finalize();
+        let tsp_stored = BASE64_URL_SAFE_NO_PAD.encode([crate::tsp_wire::TSP_MAGIC_BYTE, 1, 2, 3]);
+        let delivery = delivery_with(vec![
+            good("good-1", "m1"),
+            Attachment::base64("!!!".to_string())
+                .id("bad-base64".to_string())
+                .finalize(),
+            Attachment::json(json!({"x": 1}))
+                .id("unsupported".to_string())
+                .finalize(),
+            Attachment::base64(
+                BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_string(&plaintext).unwrap()),
+            )
+            .id("rejected".to_string())
+            .finalize(),
+            Attachment::base64(BASE64_URL_SAFE_NO_PAD.encode(&tsp_stored))
+                .id("tsp-1".to_string())
+                .finalize(),
+            good("good-2", "m2"),
+        ]);
+        let drain_reports = |rx: &mut tokio::sync::broadcast::Receiver<UnprocessableMessage>| {
+            let mut ids = Vec::new();
+            while let Ok(p) = rx.try_recv() {
+                ids.push(p.attachment_id.unwrap());
+            }
+            ids.sort();
+            ids
+        };
+
+        let frames = MessagePickup {}
+            ._handle_delivery_frames(&atm, &delivery)
+            .await
+            .unwrap();
+        let frame_reports = drain_reports(&mut rx);
+        let didcomm = MessagePickup {}
+            ._handle_delivery(&atm, &profile, &delivery)
+            .await
+            .unwrap();
+        let didcomm_reports = drain_reports(&mut rx);
+
+        let mut from_frames: Vec<(String, String)> = Vec::new();
+        let mut rejected: Vec<String> = Vec::new();
+        let mut tsp: Vec<(String, String)> = Vec::new();
+        for (frame, id) in frames {
+            match frame {
+                Some(InboundFrame::DidComm(m, u)) => {
+                    assert_eq!(u.sha256_hash, id, "one ack id per message");
+                    from_frames.push((m.id.clone(), id));
+                }
+                Some(InboundFrame::Tsp(f)) => tsp.push((*f, id)),
+                None => rejected.push(id),
+            }
+        }
+        let from_didcomm: Vec<(String, String)> = didcomm
+            .into_iter()
+            .map(|(m, u)| (m.id, u.sha256_hash))
+            .collect();
+        assert_eq!(from_frames, from_didcomm);
+        assert_eq!(
+            from_didcomm,
+            vec![
+                ("m1".to_string(), "good-1".to_string()),
+                ("m2".to_string(), "good-2".to_string())
+            ]
+        );
+
+        assert_eq!(tsp, vec![(tsp_stored, "tsp-1".to_string())]);
+        rejected.sort();
+        assert_eq!(rejected, ["bad-base64", "rejected", "unsupported"]);
+        assert_eq!(frame_reports, rejected);
+        assert_eq!(
+            didcomm_reports,
+            ["bad-base64", "rejected", "tsp-1", "unsupported"]
+        );
+    }
+
+    /// The classified drain tells a permanent reject (ack it) from a failure
+    /// that may clear (leave it queued): a message for a key this agent does
+    /// not hold yet is `Retry` and is not reported, while malformed and
+    /// policy-rejected attachments are `Reject` and reported. The frames drain
+    /// keeps yielding all of them as `(None, id)`.
+    #[cfg(feature = "tsp")]
+    #[tokio::test]
+    async fn the_classified_drain_leaves_transient_failures_queued() {
+        let (sender_did, sender_x) = peer_with_x25519();
+        let (recipient_did, recipient_x) = peer_with_x25519();
+        let (other_did, other_x) = peer_with_x25519();
+        let config = ATMConfig::builder()
+            .with_unprocessable_message_channel(32)
+            .build()
+            .unwrap();
+        let tdk = Arc::new(
+            TDKSharedState::new(TDKConfig::headless().unwrap())
+                .await
+                .unwrap(),
+        );
+        tdk.secrets_resolver().insert(recipient_x.clone()).await;
+        let atm = ATM::new(config, tdk).await.unwrap();
+        let mut rx = atm.get_unprocessable_message_channel().unwrap();
+
+        let plaintext = DcMessage::build("evil".to_string(), "example/v1".to_string(), json!({}))
+            .from(sender_did.clone())
+            .to(recipient_did.clone())
+            .finalize();
+        let delivery = delivery_with(vec![
+            Attachment::base64(authcrypt_b64(
+                &sender_did,
+                &sender_x,
+                &recipient_did,
+                &recipient_x,
+                "m1",
+            ))
+            .id("good".to_string())
+            .finalize(),
+            // Encrypted to a key not loaded here: unpack fails, but not
+            // permanently (the secret may yet be loaded).
+            Attachment::base64(authcrypt_b64(
+                &sender_did,
+                &sender_x,
+                &other_did,
+                &other_x,
+                "m2",
+            ))
+            .id("transient".to_string())
+            .finalize(),
+            Attachment::base64("!!!".to_string())
+                .id("bad-base64".to_string())
+                .finalize(),
+            Attachment::base64(
+                BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_string(&plaintext).unwrap()),
+            )
+            .id("rejected".to_string())
+            .finalize(),
+        ]);
+
+        let out = MessagePickup {}
+            ._handle_delivery_classified(&atm, &delivery)
+            .await;
+        let summary: Vec<(&str, &str)> = out
+            .iter()
+            .map(|(o, id)| {
+                let kind = match o {
+                    DeliveryOutcome::Frame(InboundFrame::DidComm(..)) => "didcomm",
+                    DeliveryOutcome::Frame(_) => "frame",
+                    DeliveryOutcome::Reject => "reject",
+                    DeliveryOutcome::Retry => "retry",
+                };
+                (id.as_str(), kind)
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("good", "didcomm"),
+                ("transient", "retry"),
+                ("bad-base64", "reject"),
+                ("rejected", "reject"),
+            ]
+        );
+        let mut reported = Vec::new();
+        while let Ok(p) = rx.try_recv() {
+            reported.push(p.attachment_id.unwrap());
+        }
+        assert_eq!(
+            reported,
+            ["bad-base64", "rejected"],
+            "a retry is not reported"
+        );
+
+        // The frames drain is unchanged: every failure is `(None, id)`.
+        let frames = MessagePickup {}
+            ._handle_delivery_frames(&atm, &delivery)
+            .await
+            .unwrap();
+        let none: Vec<&str> = frames
+            .iter()
+            .filter(|(f, _)| f.is_none())
+            .map(|(_, id)| id.as_str())
+            .collect();
+        assert_eq!(none, ["transient", "bad-base64", "rejected"]);
+    }
+
+    /// `InboundFrame::ack_id` is the mediator's id: the unpack hash for
+    /// DIDComm, sha256 of the stored frame for TSP.
+    #[test]
+    fn inbound_frame_ack_ids() {
+        let WebSocketResponses::MessageReceived(msg, meta) = received("x") else {
+            unreachable!()
+        };
+        assert_eq!(InboundFrame::DidComm(msg, meta).ack_id(), "hash-x");
+        let stored = "-EABframe".to_string();
+        assert_eq!(
+            InboundFrame::Tsp(Box::new(stored.clone())).ack_id(),
+            sha256::digest(stored.as_str())
+        );
+    }
+
+    /// The multiplexed live stream hands a TSP frame over with the id to ack
+    /// it by, so a consumer pulling with `auto_delete = false` can ack it after
+    /// handling.
+    #[tokio::test]
+    async fn a_live_tsp_frame_carries_its_ack_id() {
+        let (_, secret) = peer_with_x25519();
+        let atm = atm_with_secret(secret).await;
+        let (tx, mut rx) = mpsc::channel(8);
+        let profile = profile_with_ws("did:peer:fake", "did:peer:fake-mediator", tx);
+        let transport = tokio::spawn(async move {
+            while let Some(cmd) = rx.recv().await {
+                if let WebSocketCommands::Next(_, sender) = cmd {
+                    let _ = sender.send(WebSocketResponses::PackedMessageReceived(Box::new(
+                        "-EABframe".to_string(),
+                    )));
+                }
+            }
+        });
+
+        let frame = atm
+            .message_pickup()
+            .live_stream_next_frame(&profile, Some(Duration::from_secs(10)), false)
+            .await
+            .unwrap()
+            .expect("the frame is returned");
+        assert!(matches!(frame, InboundFrame::Tsp(_)));
+        assert_eq!(frame.ack_id(), sha256::digest("-EABframe"));
+        transport.abort();
     }
 
     // ── live stream / request helpers against a stand-in websocket task ────

@@ -529,7 +529,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm-service"
-version = "0.35.1"
+version = "0.36.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-messaging-core",
@@ -580,7 +580,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-helpers"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "affinidi-crypto",
  "affinidi-messaging-core",
@@ -618,7 +618,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-sdk"
-version = "0.49.1"
+version = "0.49.2"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-authentication",
@@ -2429,7 +2429,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 3.0.7",
+ "syn 1.0.109",
 ]
 
 [[package]]

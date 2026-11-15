@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.49.2] - 2026-11-15
+
+One pickup drain, a stable ack id for live frames, a classified drain that
+keeps transient failures queued, and a friendlier
+certificate-path builder method. Additive; no behaviour change intended.
+
+- **One pickup drain (#1148).** `send_delivery_request` and
+  `send_delivery_request_frames` now classify delivery attachments with one
+  shared classifier (decode, TSP sniff, DIDComm unpack under the configured
+  unpack policy), available in every build. The two drains differ only in what
+  they do with the result, as before: the DIDComm-only drain reports and
+  deletes non-recoverable and (by default) policy-rejected attachments itself,
+  purges TSP frames and leaves transient failures queued; the frames drain
+  surfaces TSP frames and yields every reject as `(None, id)` for the caller
+  to ack. Return types and deletion behaviour are unchanged. On the frames
+  drain a DIDComm frame's `UnpackMetadata::sha256_hash` now equals the
+  attachment id returned beside it (it already did whenever the mediator ids
+  messages by body hash).
+- **`InboundFrame::ack_id()` (#1150).** The mediator's id for a live frame:
+  `UnpackMetadata::sha256_hash` for DIDComm, sha256 of the stored frame for
+  TSP. It equals the delivery attachment id the same message carries when it
+  is fetched by a delivery request, so a consumer can pull with
+  `live_stream_next_frame(.., auto_delete = false)`, ack after handling, and
+  key a TSP frame in the same de-duplication record as its DIDComm frames.
+- **`send_delivery_request_classified` (`tsp` feature) and `DeliveryOutcome`.**
+  A sibling of `send_delivery_request_frames` that tells a permanent reject
+  (`DeliveryOutcome::Reject`: malformed, unsupported, invalid signature, or a
+  policy reject that is purged, the default; safe to ack) apart from a failure
+  that may clear (`DeliveryOutcome::Retry`: a transient unpack failure such as
+  a signer DID that cannot be resolved right now, or a policy reject retained
+  with `with_purge_policy_rejected_messages(false)`; leave it queued). It uses
+  the same classifier and the same split as `send_delivery_request`. Use it
+  instead of `send_delivery_request_frames` when you ack rejects: that function
+  still yields every failure, transient ones included, as `(None, id)`
+  (unchanged), so a caller that acks every `None` loses a message whose unpack
+  would have succeeded on a later pickup.
+- **`ATMConfigBuilder::with_ssl_certificate_paths`** takes any
+  `IntoIterator<Item = impl Into<String>>` (`["ca.pem"]`,
+  `environment.ssl_certificate_paths()`, a `Vec<String>`) and adds to the paths
+  already set. `with_ssl_certificates(&mut Vec<String>)`, which drained the
+  caller's vector, is deprecated in its favour and still works.
+
 ## [0.49.1] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

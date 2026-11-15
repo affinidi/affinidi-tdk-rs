@@ -199,15 +199,9 @@ async fn init() -> Result<(ColorfulTheme, ATMConfig, TDKEnvironment), Box<dyn Er
         return Err("Admin DID not found in Environment".into());
     }
 
-    let mut ssl_certificates: Vec<String> = environment
-        .ssl_certificate_paths()
-        .iter()
-        .map(|c| c.to_string())
-        .collect();
-
     // Connect to the Mediator
     let config = ATMConfig::builder()
-        .with_ssl_certificates(&mut ssl_certificates)
+        .with_ssl_certificate_paths(environment.ssl_certificate_paths())
         .build()?;
 
     Ok((theme, config, environment))

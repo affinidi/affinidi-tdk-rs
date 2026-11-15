@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-helpers"
-version = "0.13.5"
+version = "0.13.6"
 description = "CLI tools for Affinidi Messaging (mediator administration)"
 edition.workspace = true
 authors.workspace = true
@@ -21,7 +21,7 @@ path = "src/mediator_administration/main.rs"
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
 ## SDK for connecting to and communicating with a running mediator
-affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.49.0" }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.49.2" }
 ## Trust Tasks runtime (the `hijack_admin` example builds a `TrustTask`). The
 ## task types come from `affinidi_messaging_sdk::tasks`.
 trust-tasks-rs = { version = "0.39", default-features = false }

@@ -110,7 +110,7 @@ async fn main() -> Result<(), ATMError> {
 
     let mut config = ATMConfig::builder();
     config = config
-        .with_ssl_certificates(&mut environment.ssl_certificate_paths().to_vec())
+        .with_ssl_certificate_paths(environment.ssl_certificate_paths())
         .with_discovery_features(features);
 
     // Create a new ATM Client
