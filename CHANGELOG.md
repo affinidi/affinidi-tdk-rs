@@ -1,13 +1,67 @@
 # Changelog
 
-All notable changes to this workspace are documented here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the workspace
-crates follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+> [!IMPORTANT]
+> **This file is no longer updated** (last entry: 4th November 2026). Every
+> crate in this workspace versions and publishes independently, and its release
+> notes live in its own `CHANGELOG.md`, headed `## [x.y.z] - YYYY-MM-DD`
+> (enforced by `scripts/check-changelogs.sh`). A workspace-level file cannot say
+> which crate a change shipped in, and nothing checks it — like the frozen
+> `crates/messaging/CHANGELOG.md` and `crates/tdk/CHANGELOG.md`, it is kept
+> only for the record.
+>
+> - [`affinidi-meeting-place`](crates/applications/affinidi-meeting-place/CHANGELOG.md)
+> - [`affinidi-bbs`](crates/core/affinidi-bbs/CHANGELOG.md)
+> - [`affinidi-cesr`](crates/core/affinidi-cesr/CHANGELOG.md)
+> - [`affinidi-crypto`](crates/core/affinidi-crypto/CHANGELOG.md)
+> - [`affinidi-encoding`](crates/core/affinidi-encoding/CHANGELOG.md)
+> - [`affinidi-net-guard`](crates/core/affinidi-net-guard/CHANGELOG.md)
+> - [`affinidi-rate-limit`](crates/core/affinidi-rate-limit/CHANGELOG.md)
+> - [`affinidi-secrets-resolver`](crates/core/affinidi-secrets-resolver/CHANGELOG.md)
+> - [`affinidi-task-utils`](crates/core/affinidi-task-utils/CHANGELOG.md)
+> - [`affinidi-data-integrity`](crates/credentials/affinidi-data-integrity/CHANGELOG.md)
+> - [`affinidi-mdoc`](crates/credentials/affinidi-mdoc/CHANGELOG.md)
+> - [`affinidi-rdf-encoding`](crates/credentials/affinidi-rdf-encoding/CHANGELOG.md)
+> - [`affinidi-sd-jwt`](crates/credentials/affinidi-sd-jwt/CHANGELOG.md)
+> - [`affinidi-status-list`](crates/credentials/affinidi-status-list/CHANGELOG.md)
+> - [`affinidi-vc`](crates/credentials/affinidi-vc/CHANGELOG.md)
+> - [`affinidi-did-authentication`](crates/identity/affinidi-did-authentication/CHANGELOG.md)
+> - [`affinidi-did-common`](crates/identity/affinidi-did-common/CHANGELOG.md)
+> - [`affinidi-did-resolver-cache-sdk`](crates/identity/affinidi-did-resolver-cache-sdk/CHANGELOG.md)
+> - [`affinidi-did-resolver-cache-server`](crates/identity/affinidi-did-resolver-cache-server/CHANGELOG.md)
+> - [`affinidi-did-resolver-traits`](crates/identity/affinidi-did-resolver-traits/CHANGELOG.md)
+> - [`did-ebsi`](crates/identity/did-methods/did-ebsi/CHANGELOG.md)
+> - [`affinidi-did-ethr`](crates/identity/did-methods/did-ethr/CHANGELOG.md)
+> - [`did-example`](crates/identity/did-methods/did-example/CHANGELOG.md)
+> - [`affinidi-did-jwk`](crates/identity/did-methods/did-jwk/CHANGELOG.md)
+> - [`affinidi-did-pkh`](crates/identity/did-methods/did-pkh/CHANGELOG.md)
+> - [`did-scid`](crates/identity/did-methods/did-scid/CHANGELOG.md)
+> - [`affinidi-did-web`](crates/identity/did-methods/did-web/CHANGELOG.md)
+> - [`affinidi-did-webs`](crates/identity/did-methods/did-webs/CHANGELOG.md)
+> - [`agent-names`](crates/identity/shortcuts/agent-names/CHANGELOG.md)
+> - [`affinidi-messaging-core`](crates/messaging/affinidi-messaging-core/CHANGELOG.md)
+> - [`affinidi-messaging-delivery`](crates/messaging/affinidi-messaging-delivery/CHANGELOG.md)
+> - [`affinidi-messaging-didcomm`](crates/messaging/affinidi-messaging-didcomm/CHANGELOG.md)
+> - [`affinidi-messaging-didcomm-service`](crates/messaging/affinidi-messaging-didcomm-service/CHANGELOG.md)
+> - [`affinidi-messaging-didcomm-v1`](crates/messaging/affinidi-messaging-didcomm-v1/CHANGELOG.md)
+> - [`affinidi-messaging-mediator-types`](crates/messaging/affinidi-messaging-mediator-types/CHANGELOG.md)
+> - [`affinidi-messaging-sdk`](crates/messaging/affinidi-messaging-sdk/CHANGELOG.md)
+> - [`affinidi-messaging-text-client`](crates/messaging/affinidi-messaging-text-client/CHANGELOG.md)
+> - [`affinidi-tsp`](crates/messaging/affinidi-tsp/CHANGELOG.md)
+> - [`affinidi-oid4vc-core`](crates/protocols/affinidi-oid4vc-core/CHANGELOG.md)
+> - [`affinidi-openid4vci`](crates/protocols/affinidi-openid4vci/CHANGELOG.md)
+> - [`affinidi-openid4vp`](crates/protocols/affinidi-openid4vp/CHANGELOG.md)
+> - [`affinidi-siopv2`](crates/protocols/affinidi-siopv2/CHANGELOG.md)
+> - [`affinidi-tdk`](crates/tdk/affinidi-tdk/CHANGELOG.md)
+> - [`affinidi-tdk-common`](crates/tdk/affinidi-tdk-common/CHANGELOG.md)
+> - [`affinidi-tdk-test-support`](crates/tdk/affinidi-tdk-test-support/CHANGELOG.md)
+> - [`affinidi-trust-lists`](crates/trust/affinidi-trust-lists/CHANGELOG.md)
+>
+> The mediator crates' changelogs are in
+> [affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator).
 
-Per-crate version history is summarised here; for the full code history see
-`git log`.
+## Workspace rollup, 5th May – 4th November 2026
 
-## [Unreleased]
+Never cut as a release; each item shipped in the per-crate versions it names.
 
 ### Removed
 
@@ -439,16 +493,6 @@ Per-crate version history is summarised here; for the full code history see
   routing" README section. `TestEnvironment::add_user` now mints
   user DIDs whose service URI is the mediator's DID (the routing-2.0
   shape) rather than the mediator's HTTP URL.
-
-## Per-crate changelogs
-
-Some crates maintain their own changelogs alongside their source. Entries below
-this line are workspace-wide rollups; per-crate detail lives in the linked
-files.
-
-- [`crates/tdk/affinidi-tdk-common/CHANGELOG.md`](crates/tdk/affinidi-tdk-common/CHANGELOG.md)
-  — last release: **0.6.0** (2026-05-02, hardening + API tightening,
-  KeyringStore, accessor encapsulation).
 
 ## 2026-04-20 — `did:key` raw-bytes helpers for HPKE / sealed transfer
 
