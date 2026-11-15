@@ -1,6 +1,6 @@
 use crate::{
     SharedData,
-    handlers::{did_within_size_limit, fetch_webvh_log, resolve_with_timeout},
+    handlers::{ClientError, did_within_size_limit, fetch_webvh_log, resolve_with_timeout},
 };
 use affinidi_did_resolver_cache_sdk::DIDMethod;
 use axum::{
@@ -9,7 +9,7 @@ use axum::{
 };
 use http::StatusCode;
 use serde_json::{Value, json};
-use tracing::{debug, error, warn};
+use tracing::debug;
 
 pub async fn resolver_handler(
     State(state): State<SharedData>,
@@ -66,23 +66,25 @@ pub async fn resolver_handler(
                 }
                 Err(e) => {
                     state.stats.lock().await.increment_resolver_error();
-                    error!("Error serializing DID ({}) document: {:?}", did, e);
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({ "error": e.to_string() })),
-                    )
+                    let status = StatusCode::INTERNAL_SERVER_ERROR;
+                    let error = ClientError::new(
+                        status,
+                        &e,
+                        &format!("Error serializing DID ({did}) document"),
+                    );
+                    (status, Json(error.to_json()))
                 }
             }
         }
         Err(e) => {
             state.stats.lock().await.increment_resolver_error();
             let status = e.status_code();
-            if status.is_server_error() {
-                warn!("Error resolving DID ({did}): {e}");
-            } else {
+            if !status.is_server_error() {
                 debug!("Refused DID ({did}): {e}");
             }
-            (status, Json(json!({ "error": e.to_string() })))
+            // Server-side detail is logged (with a reference) inside, not returned.
+            let error = ClientError::new(status, &e, &format!("Error resolving DID ({did})"));
+            (status, Json(error.to_json()))
         }
     }
 }

@@ -69,6 +69,14 @@ names the key and the value.
 | `504` | Resolution took longer than `resolve_timeout`. |
 | `500` | A fault in this server. |
 
+A `4xx` error's message describes what was wrong with the request. A `5xx`
+error carries only a generic message and a `reference`
+(`{"error": "...", "reference": "<id>"}`); the underlying detail (upstream
+URLs, transport errors) is logged at `warn` under that reference rather than
+returned, so the endpoint cannot be used to probe what the server can reach.
+WebSocket error responses follow the same rule, with the reference in the
+error text.
+
 ## WebSocket requests
 
 Requests on one WebSocket connection are resolved concurrently, and each

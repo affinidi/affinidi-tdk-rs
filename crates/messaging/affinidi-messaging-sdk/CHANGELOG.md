@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.49.4] - 2026-11-15
+
+Warn when websocket trust roots are not trusted by the REST client (AgenticSec #531)
+
+- The extra trust roots from `ATMConfigBuilder::with_ssl_certificate_paths`
+  (and the deprecated `with_ssl_certificates`) apply to the mediator websocket
+  only: REST calls, authentication and DID resolution go through the HTTP
+  client of the `TDKSharedState`, which the SDK does not build. `ATM::new` now
+  logs a `warn` when any of those roots is missing from the TDK environment's
+  (`TDKEnvironment::set_ssl_certificate_paths`), and the builder docs say so
+  under a "Websocket only" heading. No change to which roots either channel
+  trusts.
+
 ## [0.49.3] - 2026-11-15
 
 TSP receive runs the shared `affinidi-tsp` receive path (#1141)

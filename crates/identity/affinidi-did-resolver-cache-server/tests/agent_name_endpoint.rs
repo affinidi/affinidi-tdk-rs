@@ -103,6 +103,10 @@ async fn rejects_a_name_without_the_marker() {
 
 /// A name pointing at a loopback address must be refused rather than fetched —
 /// this is the SSRF guard, exercised through the real endpoint.
+///
+/// The refusal's detail (which address was blocked) is logged under a
+/// reference, not returned: echoing it would make the endpoint an oracle for
+/// what the server can and cannot reach.
 #[tokio::test]
 async fn refuses_a_name_resolving_to_a_private_address() {
     let (status, body) = get(app(true).await, "/did/v1/resolve-name/127.0.0.1/@alice").await;
@@ -111,9 +115,14 @@ async fn refuses_a_name_resolving_to_a_private_address() {
         StatusCode::BAD_GATEWAY,
         "a private-address name should fail upstream, got body {body}"
     );
+    let json: serde_json::Value = serde_json::from_str(&body).expect("a JSON error body");
     assert!(
-        body.contains("non-public") || body.contains("127.0.0.1"),
-        "expected a blocked-address error, got {body}"
+        json["reference"].is_string(),
+        "expected a reference, got {body}"
+    );
+    assert!(
+        !body.contains("non-public") && !body.contains("127.0.0.1"),
+        "upstream detail must not reach the client, got {body}"
     );
 }
 

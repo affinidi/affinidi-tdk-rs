@@ -274,6 +274,17 @@ impl DIDAuthentication {
     /// Only errors for which [`DIDAuthError::is_retryable`] holds are retried;
     /// any other is returned at once, from the attempt that hit it.
     ///
+    /// # Unlimited retries (`retry_limit = -1`)
+    ///
+    /// `-1` is an explicit opt-in to retry for as long as the service keeps
+    /// failing retryably. Waits on rate limiters (`429`) stay bounded by
+    /// [`MAX_RATE_LIMIT_WAIT`] in every mode, but a service that keeps answering
+    /// `408`/`5xx` (or keeps timing out) holds the call open indefinitely,
+    /// retrying every 10 s once the backoff has grown. A caller choosing `-1`
+    /// must bound the call itself (for example with `tokio::time::timeout`, as
+    /// the TDK authentication task does); the first retry under `-1` logs a
+    /// warning saying so.
+    ///
     /// # Returns
     /// Ok if successful, Err if failed
     /// AuthorizationTokens are contained in self
@@ -347,6 +358,14 @@ impl DIDAuthentication {
                     // attempt, as it always has.
                     if retry_limit != -1 && i64::from(retry_count) >= i64::from(retry_limit) {
                         return Err(exhausted(err));
+                    }
+                    if retry_limit == -1 && retry_count == 1 {
+                        warn!(
+                            "DID ({}): retry_limit = -1: retrying authentication without an attempt \
+                             limit; only rate-limit waits are bounded, so the caller must bound \
+                             this call with its own timeout",
+                            profile_did
+                        );
                     }
 
                     let Some(delay) = retry_delay(&err, timer, &mut rate_limit_waited) else {
@@ -1421,6 +1440,29 @@ mod tests {
                 DIDAuthError::RetriesExhausted { attempts: 1, .. }
             ));
             assert_eq!(err.http_status().unwrap().retry_after_secs, Some(60));
+        }
+
+        /// `retry_limit = -1` does not lift the rate-limit budget: a 429
+        /// asking for more than [`MAX_RATE_LIMIT_WAIT`] still ends the loop at
+        /// once rather than being retried without end.
+        #[tokio::test]
+        async fn unlimited_retries_still_honour_the_rate_limit_budget() {
+            let (url, served) = serve(
+                "HTTP/1.1 429 Too Many Requests\r\n\
+                 retry-after: 60\r\n\
+                 content-length: 0\r\n\
+                 connection: close\r\n\r\n",
+            )
+            .await;
+
+            let started = Instant::now();
+            let err = authenticate(&url, -1).await;
+            assert!(started.elapsed() < Duration::from_secs(1));
+            assert_eq!(served.load(Ordering::SeqCst), 1);
+            assert!(matches!(
+                err,
+                DIDAuthError::RetriesExhausted { attempts: 1, .. }
+            ));
         }
 
         /// A 429 with no source header (a proxy) is still typed, unattributed.

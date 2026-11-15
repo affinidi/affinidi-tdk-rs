@@ -59,6 +59,65 @@ impl ResolveError {
     }
 }
 
+/// What a client is told about a failure.
+///
+/// A request-side failure (`4xx`) keeps its detail: it describes the caller's
+/// own input and tells them what to fix. A server-side or upstream failure
+/// (`5xx`) does not: its text can carry upstream URLs, transport errors and
+/// resolver internals, which would make this endpoint an oracle for probing
+/// what the server can reach. Those get a generic message and a `reference`
+/// (a random correlation id) instead, and the detail is logged under the same
+/// reference for the operator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClientError {
+    pub(crate) message: String,
+    /// Set for server-side failures: quote it to find the detail in the logs.
+    pub(crate) reference: Option<String>,
+}
+
+impl ClientError {
+    /// Classify `detail` for a response with `status`. `context` names the
+    /// operation in the log line (e.g. the DID being resolved).
+    pub(crate) fn new(status: StatusCode, detail: &dyn std::fmt::Display, context: &str) -> Self {
+        if !status.is_server_error() {
+            return Self {
+                message: detail.to_string(),
+                reference: None,
+            };
+        }
+        let reference = uuid::Uuid::new_v4().simple().to_string();
+        warn!(reference = %reference, status = status.as_u16(), "{context}: {detail}");
+        let message = match status {
+            StatusCode::BAD_GATEWAY => {
+                "The DID's host could not be reached or answered with an error"
+            }
+            StatusCode::GATEWAY_TIMEOUT => "Resolution timed out",
+            StatusCode::SERVICE_UNAVAILABLE => "Service temporarily unavailable",
+            _ => "Internal server error",
+        };
+        Self {
+            message: message.to_string(),
+            reference: Some(reference),
+        }
+    }
+
+    /// The JSON body of an HTTP error response.
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        match &self.reference {
+            Some(reference) => serde_json::json!({ "error": self.message, "reference": reference }),
+            None => serde_json::json!({ "error": self.message }),
+        }
+    }
+
+    /// The single string the WebSocket protocol carries for an error.
+    pub(crate) fn to_text(&self) -> String {
+        match &self.reference {
+            Some(reference) => format!("{} (reference {reference})", self.message),
+            None => self.message.clone(),
+        }
+    }
+}
+
 /// Bound a resolution future by `timeout`, turning a hung upstream into a
 /// distinct [`ResolveError::Timeout`] so the request path returns an error to
 /// the client instead of blocking the connection indefinitely.
@@ -548,6 +607,49 @@ mod tests {
             calls.load(Ordering::SeqCst),
             1,
             "concurrent misses coalesce into one upstream fetch"
+        );
+    }
+    /// A request-side failure keeps its detail; a server-side or upstream one
+    /// returns only a generic message and a correlation reference, never the
+    /// internal error text (upstream URLs, transport errors).
+    #[test]
+    fn client_errors_hide_server_side_detail() {
+        let refused = ResolveError::Resolver(DIDCacheError::DIDError("bad DID".into()));
+        let error = ClientError::new(refused.status_code(), &refused, "test");
+        assert_eq!(error.reference, None);
+        assert!(error.message.contains("bad DID"), "{error:?}");
+        assert_eq!(
+            error.to_json(),
+            serde_json::json!({ "error": error.message })
+        );
+
+        let secret = "http://10.0.0.7:8080/.well-known/did.json connection refused";
+        for e in [
+            ResolveError::Resolver(DIDCacheError::TransportError(secret.into())),
+            ResolveError::Resolver(DIDCacheError::ConfigError(secret.into())),
+            ResolveError::Timeout(30),
+        ] {
+            let status = e.status_code();
+            assert!(status.is_server_error(), "{e}");
+            let error = ClientError::new(status, &e, "test");
+            let reference = error
+                .reference
+                .clone()
+                .expect("a server error has a reference");
+            assert_eq!(reference.len(), 32);
+            let body = error.to_json().to_string();
+            let text = error.to_text();
+            for leaked in [&body, &text] {
+                assert!(!leaked.contains("10.0.0.7"), "{leaked}");
+                assert!(!leaked.contains("30s"), "{leaked}");
+                assert!(leaked.contains(&reference), "{leaked}");
+            }
+        }
+        let a = ClientError::new(StatusCode::INTERNAL_SERVER_ERROR, &"x", "test");
+        let b = ClientError::new(StatusCode::INTERNAL_SERVER_ERROR, &"x", "test");
+        assert_ne!(
+            a.reference, b.reference,
+            "references are unique per failure"
         );
     }
 }

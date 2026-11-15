@@ -382,11 +382,12 @@ impl OfflineSync {
                             // TSP frames are handled in order, one at a time: a
                             // peer's invite must be recorded before its payload.
                             let _permit = self.acquire().await?;
-                            let (listener_id, atm, profile, h) = (
+                            let (listener_id, atm, profile, h, message_id) = (
                                 self.listener_id.clone(),
                                 self.atm.clone(),
                                 self.profile.clone(),
                                 h.clone(),
+                                claim.id().to_string(),
                             );
                             // `false` from the dispatch is a failure that may
                             // clear (an unresolvable sender, unconfirmed key
@@ -399,6 +400,7 @@ impl OfflineSync {
                                         &atm,
                                         &profile,
                                         &h,
+                                        &message_id,
                                         *packed,
                                     )
                                     .await

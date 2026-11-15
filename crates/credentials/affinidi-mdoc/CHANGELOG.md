@@ -1,5 +1,17 @@
 # Affinidi mdoc Changelog
 
+## [0.6.3] - 2026-11-15
+
+Session keys are wiped with `zeroize` (AgenticSec #539)
+
+- `SessionKeys` drops through `zeroize` instead of a hand-rolled volatile-write
+  loop, and implements `Zeroize` and `ZeroizeOnDrop`. The crate no longer has
+  any `#[allow(unsafe_code)]`.
+- `SessionKeys::derive` derives both keys directly into the value it returns,
+  so a failure deriving the second key wipes the first (on drop), and no
+  unwiped temporary copy is left behind.
+- New dependency: `zeroize` (workspace version, already in the tree).
+
 ## [0.6.2] - 2026-11-15
 
 strict Ed25519 verification (#1143)

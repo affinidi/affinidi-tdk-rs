@@ -389,6 +389,20 @@ pub(crate) fn websocket_tls_config(
     Ok(Some(Arc::new(config)))
 }
 
+/// How many of the websocket's extra trust roots (`websocket_roots`) the REST
+/// client does not trust, given the roots it was built with (`rest_roots`).
+/// Compared by DER encoding, so the same certificate loaded from two
+/// different paths counts as present.
+pub(crate) fn roots_missing_from_rest(
+    websocket_roots: &[CertificateDer<'static>],
+    rest_roots: &[CertificateDer<'static>],
+) -> usize {
+    websocket_roots
+        .iter()
+        .filter(|root| !rest_roots.iter().any(|r| r.as_ref() == root.as_ref()))
+        .count()
+}
+
 /// The receiving end of the inbound message channel, taken once.
 pub(crate) type InboundReceiverSlot =
     Arc<std::sync::Mutex<Option<mpsc::Receiver<WebSocketResponses>>>>;
@@ -498,9 +512,17 @@ impl ATMConfigBuilder {
     /// let builder = ATMConfig::builder().with_ssl_certificate_paths(["certs/ca.pem"]);
     /// ```
     ///
-    /// REST calls to the mediator (and DID resolution, authentication) use the
-    /// HTTP client of the `TDKSharedState` passed to [`crate::ATM::new`], so
-    /// their trust comes from the TDK configuration, not from this setting.
+    /// # Websocket only
+    ///
+    /// **These roots are not used for REST.** REST calls to the mediator (and
+    /// DID resolution, authentication) go through the HTTP client of the
+    /// `TDKSharedState` passed to [`crate::ATM::new`]; the SDK never builds an
+    /// HTTP client of its own, so their trust comes from the TDK environment
+    /// (`TDKEnvironment::set_ssl_certificate_paths`, applied when the
+    /// `TDKSharedState` is created), not from this setting. To trust a private
+    /// CA on every channel, configure it in both places. [`crate::ATM::new`]
+    /// logs a warning when a root configured here is missing from the TDK
+    /// environment's.
     pub fn with_ssl_certificate_paths<I, S>(mut self, paths: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -922,6 +944,23 @@ impl ATMConfigBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The divergence check behind `ATM::new`'s warning: a websocket root the
+    /// REST client was not built with counts as missing; one it was built
+    /// with (by DER, whatever its path) does not.
+    #[test]
+    fn websocket_roots_missing_from_rest_are_counted() {
+        let a = CertificateDer::from(vec![1u8, 2, 3]);
+        let b = CertificateDer::from(vec![4u8, 5, 6]);
+        let one_a = std::slice::from_ref(&a);
+        let one_b = std::slice::from_ref(&b);
+        let both = [a.clone(), b.clone()];
+        assert_eq!(roots_missing_from_rest(&[], &[]), 0);
+        assert_eq!(roots_missing_from_rest(one_a, &[]), 1);
+        assert_eq!(roots_missing_from_rest(one_a, one_a), 0);
+        assert_eq!(roots_missing_from_rest(&both, one_b), 1);
+        assert_eq!(roots_missing_from_rest(one_a, &[b.clone(), a.clone()]), 0);
+    }
 
     /// A clock fixed at a chosen instant — proves an injected clock flows
     /// through to the SDK's time reads without pulling the `test-clock` feature.

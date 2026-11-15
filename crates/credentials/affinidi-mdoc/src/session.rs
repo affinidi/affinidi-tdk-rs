@@ -25,6 +25,7 @@
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use hkdf::Hkdf;
 use sha2::Sha256;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::error::{MdocError, Result};
 use crate::session_transcript::SessionTranscript;
@@ -43,10 +44,16 @@ pub fn derive_session_key(
 
 pub(crate) fn hkdf_sha256(ikm: &[u8], salt: &[u8], info: &[u8]) -> Result<[u8; 32]> {
     let mut key = [0u8; 32];
-    Hkdf::<Sha256>::new(Some(salt), ikm)
-        .expand(info, &mut key)
-        .map_err(|e| MdocError::Cose(format!("HKDF expand failed: {e}")))?;
+    hkdf_sha256_into(ikm, salt, info, &mut key)?;
     Ok(key)
+}
+
+/// HKDF-SHA-256 straight into `out`, so a key that must be wiped is derived
+/// in the place that wipes it rather than in a temporary copy.
+fn hkdf_sha256_into(ikm: &[u8], salt: &[u8], info: &[u8], out: &mut [u8; 32]) -> Result<()> {
+    Hkdf::<Sha256>::new(Some(salt), ikm)
+        .expand(info, out)
+        .map_err(|e| MdocError::Cose(format!("HKDF expand failed: {e}")))
 }
 
 /// Encrypt data using AES-256-GCM.
@@ -105,28 +112,33 @@ impl SessionKeys {
     /// SHA-256(SessionTranscriptBytes)).
     pub fn derive(shared_secret: &[u8], session_transcript: &SessionTranscript) -> Result<Self> {
         let salt = session_transcript.hkdf_salt()?;
-        Ok(SessionKeys {
-            sk_device: hkdf_sha256(shared_secret, &salt, b"SKDevice")?,
-            sk_reader: hkdf_sha256(shared_secret, &salt, b"SKReader")?,
-        })
+        // Derive into the value itself: if the second derivation fails, the
+        // first key is wiped when `keys` drops, and no unwiped temporary
+        // copy of either key is left behind.
+        let mut keys = SessionKeys {
+            sk_device: [0u8; 32],
+            sk_reader: [0u8; 32],
+        };
+        hkdf_sha256_into(shared_secret, &salt, b"SKDevice", &mut keys.sk_device)?;
+        hkdf_sha256_into(shared_secret, &salt, b"SKReader", &mut keys.sk_reader)?;
+        Ok(keys)
+    }
+}
+
+impl Zeroize for SessionKeys {
+    fn zeroize(&mut self) {
+        self.sk_device.zeroize();
+        self.sk_reader.zeroize();
     }
 }
 
 impl Drop for SessionKeys {
     fn drop(&mut self) {
-        wipe(&mut self.sk_device);
-        wipe(&mut self.sk_reader);
+        self.zeroize();
     }
 }
 
-#[allow(unsafe_code)] // volatile write so the wipe is not optimised away; SAFETY comment below
-fn wipe(bytes: &mut [u8; 32]) {
-    for byte in bytes.iter_mut() {
-        // SAFETY: `byte` is a valid, aligned, exclusive reference to a u8.
-        unsafe { std::ptr::write_volatile(byte, 0) };
-    }
-    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
-}
+impl ZeroizeOnDrop for SessionKeys {}
 
 /// Which side of a proximity session this is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -328,6 +340,21 @@ mod tests {
             .expand(b"SKDevice", &mut previous)
             .unwrap();
         assert_ne!(keys.sk_device, previous);
+    }
+
+    /// Both keys are cleared by `zeroize`, which `Drop` runs; the type says
+    /// so with `ZeroizeOnDrop`.
+    #[test]
+    fn session_keys_are_zeroized() {
+        fn wipes_on_drop<T: ZeroizeOnDrop>() {}
+        wipes_on_drop::<SessionKeys>();
+
+        let mut keys = SessionKeys::derive(b"secret-1", &transcript(0xbb)).unwrap();
+        assert_ne!(keys.sk_device, [0u8; 32]);
+        assert_ne!(keys.sk_reader, [0u8; 32]);
+        keys.zeroize();
+        assert_eq!(keys.sk_device, [0u8; 32]);
+        assert_eq!(keys.sk_reader, [0u8; 32]);
     }
 
     #[test]

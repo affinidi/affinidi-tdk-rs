@@ -341,6 +341,27 @@ impl ATM {
         // Idempotent, so building several ATMs is fine.
         tasks::declare_extends();
 
+        // The extra trust roots in `ATMConfig` reach only the websocket's TLS:
+        // REST, authentication and DID resolution use the TDK's HTTP client,
+        // built from the TDK environment's roots. Say so when they diverge
+        // rather than leave an operator believing a private CA covers both.
+        if !config.ssl_certificates.is_empty() {
+            let rest_roots = tdk_common
+                .environment()
+                .load_ssl_certificates()
+                .unwrap_or_default();
+            let missing = config::roots_missing_from_rest(&config.ssl_certificates, &rest_roots);
+            if missing > 0 {
+                warn!(
+                    "{missing} of {} extra TLS trust root(s) from ATMConfig (with_ssl_certificate_paths) \
+                     apply to the mediator websocket only: the REST, authentication and DID resolution \
+                     client of TDKSharedState does not trust them. Add the same certificates to the \
+                     TDK environment (TDKEnvironment::set_ssl_certificate_paths) to trust them there too.",
+                    config.ssl_certificates.len()
+                );
+            }
+        }
+
         // Create a new channel with a capacity of at most 32. This communicates from SDK to the deletion handler
         let (sdk_deletion_tx, deletion_sdk_rx) = mpsc::channel::<DeletionHandlerCommands>(32);
 
