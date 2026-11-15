@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased (0.12.10) — per-user state directory; start-up failures exit (#1032)
+
+- **Behaviour:** the state file and log now live in a per-user directory,
+  `$XDG_CONFIG_HOME/affinidi-messaging-text-client/` (else
+  `~/.config/affinidi-messaging-text-client/`; `%APPDATA%` on Windows),
+  created owner-only, so the client finds its identity wherever it is started
+  from. A `config.json` in the current directory is still used when present
+  (earlier versions wrote it there); move it into the per-user directory to
+  stop depending on the working directory.
+- **Behaviour:** `log.txt` is created (or tightened to) mode `0600` on Unix.
+  Inbound messages are no longer dumped whole into the log; only their id and
+  type are logged, at debug.
+- A start-up failure (state file unreadable, ATM or profile activation
+  failing, e.g. mediator unreachable) now stops the UI instead of leaving a
+  screen that cannot be quit, and the reason is printed on stderr after the
+  terminal is restored; the process exits with status 1.
+- A failed save is logged at error level (visible in the UI log pane) once
+  per run of failures; a failed save on exit is reported on stderr.
+- The state is sent to the UI only when something changed (no longer a full
+  copy every second), behind an `Arc`.
+
 ## Unreleased (0.12.9) — affinidi-messaging-sdk 0.49
 
 - Requires `affinidi-messaging-sdk` 0.49 and `affinidi-tdk` 0.47. The inbound

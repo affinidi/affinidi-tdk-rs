@@ -22,7 +22,15 @@ cargo run -p affinidi-messaging-text-client
 ## State file
 
 The client persists its DID, mediator connections, and chat history to a
-JSON state file (`config.json`), written whenever the state changes and again
+JSON state file, `config.json`, in a per-user directory:
+`$XDG_CONFIG_HOME/affinidi-messaging-text-client/` (else
+`~/.config/affinidi-messaging-text-client/`; `%APPDATA%\affinidi-messaging-text-client\`
+on Windows). The debug log, `log.txt` (mode `0600` on Unix), is kept there
+too. For compatibility with versions before 0.12.10, a `config.json` in the
+current directory is used instead when one exists; move it into the per-user
+directory to stop depending on where the client is started.
+
+The state file is written whenever the state changes and again
 on exit. Each write replaces the file atomically (temporary file, sync,
 rename). If the file exists but cannot be parsed, the client exits without
 touching it; fix it or move it aside. **The file contains the

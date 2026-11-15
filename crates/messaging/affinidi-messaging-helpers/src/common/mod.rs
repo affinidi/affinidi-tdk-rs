@@ -1,28 +1,34 @@
-use std::{env, error::Error};
-
 pub mod affinidi_logo;
 pub mod did;
 
-/// Returns the path to the top level directory depending on where you are
-/// Will change path as required
-pub fn check_path() -> Result<bool, Box<dyn Error>> {
-    let cwd = std::env::current_dir()?;
-    let mut path = String::new();
-    let mut found = false;
-    cwd.components().rev().for_each(|dir| {
-        if dir.as_os_str() == "affinidi-messaging" && !found {
-            found = true;
-            path.push_str("./");
-        } else if !found {
-            path.push_str("../");
+/// Finishing an interactive `dialoguer` prompt without panicking.
+///
+/// `dialoguer` returns an error when the user presses Ctrl-C at a prompt, or
+/// when stdin is not a terminal. Either way there is nothing sensible to
+/// continue with, so [`unwrap_or_exit`](PromptResultExt::unwrap_or_exit)
+/// restores the cursor (a prompt hides it), says why, and exits: status 130 for
+/// an interrupt (the shell convention for SIGINT), 1 for anything else.
+pub trait PromptResultExt<T> {
+    /// The prompt's value, or a clean process exit if the prompt failed.
+    fn unwrap_or_exit(self) -> T;
+}
+
+impl<T> PromptResultExt<T> for dialoguer::Result<T> {
+    fn unwrap_or_exit(self) -> T {
+        match self {
+            Ok(value) => value,
+            Err(e) => {
+                let _ = console::Term::stdout().show_cursor();
+                let _ = console::Term::stderr().show_cursor();
+                eprintln!();
+                let dialoguer::Error::IO(io) = &e;
+                if io.kind() == std::io::ErrorKind::Interrupted {
+                    eprintln!("Interrupted, exiting.");
+                    std::process::exit(130);
+                }
+                eprintln!("Prompt failed ({e}); an interactive terminal is required. Exiting.");
+                std::process::exit(1);
+            }
         }
-    });
-
-    if !found {
-        return Err("You are not in the affinidi-messaging repository".into());
     }
-
-    env::set_current_dir(&path)?;
-
-    Ok(true)
 }

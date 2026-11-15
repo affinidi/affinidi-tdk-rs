@@ -1,4 +1,5 @@
 //! UI Related functions
+use affinidi_messaging_helpers::common::PromptResultExt;
 use affinidi_messaging_sdk::errors::ATMError;
 use affinidi_messaging_sdk::tasks::messaging::account;
 use affinidi_messaging_sdk::tasks::messaging::account::list::v0_2::AccountType;
@@ -31,7 +32,7 @@ pub(crate) async fn administration_accounts_menu(
             .default(0)
             .items(&selections[..])
             .interact()
-            .unwrap();
+            .unwrap_or_exit();
 
         match selection {
             0 => {
@@ -116,7 +117,7 @@ pub(crate) async fn add_admin(atm: &ATM, profile: &Arc<ATMProfile>, theme: &Colo
             }
         })
         .interact_text()
-        .unwrap();
+        .unwrap_or_exit();
 
     if input == "exit" {
         return;
@@ -125,7 +126,7 @@ pub(crate) async fn add_admin(atm: &ATM, profile: &Arc<ATMProfile>, theme: &Colo
     if Confirm::with_theme(theme)
         .with_prompt(format!("Do you want to add DID ({})?", &input))
         .interact()
-        .unwrap()
+        .unwrap_or_exit()
     {
         match atm
             .trust_tasks()
@@ -188,7 +189,7 @@ pub(crate) async fn strip_admins(
                 .items(&admins)
                 .report(false)
                 .interact()
-                .unwrap();
+                .unwrap_or_exit();
 
             if dids.is_empty() {
                 println!("{}", style("No Admin DIDs selected").red());
@@ -207,7 +208,7 @@ pub(crate) async fn strip_admins(
             if Confirm::with_theme(theme)
                 .with_prompt("Do you want to strip admin access from the selected DIDs?")
                 .interact()
-                .unwrap()
+                .unwrap_or_exit()
             {
                 let admins = dids
                     .iter()

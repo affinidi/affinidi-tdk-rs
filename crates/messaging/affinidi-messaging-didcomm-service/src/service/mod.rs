@@ -1,3 +1,4 @@
+mod inflight;
 mod listener;
 mod mediator;
 mod restart;
@@ -20,14 +21,26 @@ use crate::handler::{DIDCommHandler, TspHandler};
 use listener::ConnectionHandle;
 
 const EVENT_CHANNEL_CAPACITY: usize = 64;
-const SHUTDOWN_TASK_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
+/// Added to a listener's `shutdown_drain_timeout` when joining its task, for
+/// the websocket teardown that follows the drain.
+const SHUTDOWN_TASK_JOIN_GRACE: Duration = Duration::from_secs(5);
 
 /// Lifecycle events emitted by listeners.
+///
+/// Emitted on every transition, for the life of the listener (R6.2): a
+/// websocket drop that the SDK reconnects by itself produces `Disconnected`
+/// then `Connected`, as does a full restart. Events are broadcast without
+/// replay, so a receiver sees only what happens after it subscribed; use
+/// [`AffinidiMessageService::list_listeners`] for the current state.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ListenerEvent {
-    /// The listener has connected to its mediator.
+    /// The listener is connected to its mediator and can send and receive
+    /// (first connect, websocket reconnect, or restart).
     Connected { listener_id: String },
-    /// The listener has disconnected from its mediator.
+    /// The listener lost its mediator connection: the websocket dropped (the
+    /// SDK is reconnecting), a connect attempt failed, the listener failed, or
+    /// it stopped (`error: None`). Sends return `NotConnected` until the next
+    /// `Connected`.
     Disconnected {
         listener_id: String,
         error: Option<String>,
@@ -67,7 +80,40 @@ struct ListenerHandle {
     token: CancellationToken,
     started_at: Instant,
     restart_count: Arc<std::sync::atomic::AtomicU32>,
+    /// Set by the restart loop when it gives up after a failure.
+    failed: Arc<std::sync::atomic::AtomicBool>,
     connection_rx: watch::Receiver<Option<ConnectionHandle>>,
+    /// How long to wait for the listener task on remove/shutdown before
+    /// aborting it.
+    join_timeout: Duration,
+}
+
+impl ListenerHandle {
+    fn state(&self) -> ListenerState {
+        if self.task.is_finished() {
+            if self.failed.load(std::sync::atomic::Ordering::Acquire) {
+                ListenerState::Failed
+            } else {
+                ListenerState::Stopped
+            }
+        } else if self.connection_rx.borrow().is_some() {
+            ListenerState::Running
+        } else {
+            ListenerState::Connecting
+        }
+    }
+
+    /// Wait for the listener task, aborting it if it outlives its drain.
+    async fn join(mut self) {
+        if tokio::time::timeout(self.join_timeout, &mut self.task)
+            .await
+            .is_err()
+        {
+            tracing::warn!(listener = %self.id, "Listener task did not stop in time; aborting it");
+            self.task.abort();
+            let _ = self.task.await;
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -78,10 +124,19 @@ pub struct ListenerStatus {
     pub uptime: Duration,
 }
 
+/// A listener's state, derived from its live connection and, once its task has
+/// ended, why it ended.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum ListenerState {
+    /// Connected to the mediator.
     Running,
+    /// Not connected, and trying to be: first connect, a websocket reconnect,
+    /// or a restart backoff.
+    Connecting,
+    /// Stopped by shutdown or `remove_listener`.
     Stopped,
+    /// Stopped because its restart policy gave up after a failure.
     Failed,
 }
 
@@ -108,8 +163,10 @@ impl AffinidiMessageService {
     /// Like [`start`](Self::start), but also routes inbound **TSP** frames to
     /// `tsp_handler` on listeners whose `protocols.tsp` is enabled. The TSP
     /// frames ride the same single per-DID websocket as DIDComm (no second
-    /// socket). Routing only takes effect when this crate is built with the
-    /// `tsp` feature; without it the handler is stored but never invoked.
+    /// socket). Requires this crate's `tsp` feature: without it a listener
+    /// that enables TSP is refused with
+    /// [`ConfigError::TspFeatureDisabled`](crate::ConfigError::TspFeatureDisabled),
+    /// and `tsp_handler` is never invoked.
     pub async fn start_with_tsp(
         config: DIDCommServiceConfig,
         handler: impl DIDCommHandler,
@@ -141,6 +198,17 @@ impl AffinidiMessageService {
             shutdown: shutdown.clone(),
             events_tx,
         };
+
+        #[cfg(not(feature = "tsp"))]
+        if service.tsp_handler.is_some() {
+            tracing::warn!(
+                "start_with_tsp: this build has no `tsp` feature; the TSP handler will never be called"
+            );
+        }
+
+        for cfg in &config.listeners {
+            cfg.validate()?;
+        }
 
         // Validate no duplicate listener IDs or DIDs in initial config
         {
@@ -176,6 +244,7 @@ impl AffinidiMessageService {
     }
 
     pub async fn add_listener(&self, config: ListenerConfig) -> Result<(), DIDCommServiceError> {
+        config.validate()?;
         let listeners = self.listeners.read().await;
         if listeners.contains_key(&config.id) {
             return Err(DIDCommServiceError::ListenerAlreadyExists(
@@ -193,6 +262,10 @@ impl AffinidiMessageService {
         self.spawn_listener(config).await
     }
 
+    /// Stop a listener and wait for it: running handlers get the listener's
+    /// `shutdown_drain_timeout` to finish, then are aborted (their messages
+    /// were not acked and are redelivered). Bounded: returns within that
+    /// timeout plus a few seconds.
     pub async fn remove_listener(&self, listener_id: &str) -> Result<(), DIDCommServiceError> {
         let mut listeners = self.listeners.write().await;
         let handle = listeners
@@ -201,7 +274,7 @@ impl AffinidiMessageService {
 
         handle.token.cancel();
         drop(listeners);
-        let _ = handle.task.await;
+        handle.join().await;
         Ok(())
     }
 
@@ -209,20 +282,18 @@ impl AffinidiMessageService {
     /// task's `JoinHandle` so callers know all per-listener work has
     /// actually returned (not merely been signalled to stop).
     ///
-    /// Each task is awaited with a bounded outer timeout so a misbehaving
-    /// listener can't deadlock shutdown — if the timeout fires, the task is
-    /// detached and the runtime drops it on process exit.
+    /// Each listener's handlers get its `shutdown_drain_timeout` to finish;
+    /// a listener task still running after that (plus a short grace) is
+    /// aborted rather than left running detached.
     pub async fn shutdown(&self) {
         self.shutdown.cancel();
         // Drain the map under the write lock so we can join tasks without
         // holding it (joining requires owning the JoinHandle).
-        let handles: Vec<JoinHandle<()>> = {
+        let handles: Vec<ListenerHandle> = {
             let mut listeners = self.listeners.write().await;
-            listeners.drain().map(|(_, h)| h.task).collect()
+            listeners.drain().map(|(_, h)| h).collect()
         };
-        for task in handles {
-            let _ = tokio::time::timeout(SHUTDOWN_TASK_JOIN_TIMEOUT, task).await;
-        }
+        futures_join_all(handles.into_iter().map(ListenerHandle::join)).await;
     }
 
     pub async fn list_listeners(&self) -> Vec<ListenerStatus> {
@@ -230,11 +301,7 @@ impl AffinidiMessageService {
         listeners
             .values()
             .map(|handle| {
-                let state = if handle.task.is_finished() {
-                    ListenerState::Stopped
-                } else {
-                    ListenerState::Running
-                };
+                let state = handle.state();
                 ListenerStatus {
                     id: handle.id.clone(),
                     state,
@@ -484,6 +551,9 @@ impl AffinidiMessageService {
         let tsp_handler = self.tsp_handler.clone();
         let restart_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let restart_count_clone = restart_count.clone();
+        let failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let failed_clone = failed.clone();
+        let join_timeout = config.shutdown_drain_timeout + SHUTDOWN_TASK_JOIN_GRACE;
         let token_clone = listener_token.clone();
         let events_tx = self.events_tx.clone();
 
@@ -498,7 +568,9 @@ impl AffinidiMessageService {
                 connection_tx,
                 events_tx,
             );
-            listener.run_with_restart(restart_count_clone).await;
+            listener
+                .run_with_restart(restart_count_clone, failed_clone)
+                .await;
         });
 
         let handle = ListenerHandle {
@@ -508,12 +580,26 @@ impl AffinidiMessageService {
             token: listener_token,
             started_at: Instant::now(),
             restart_count,
+            failed,
             connection_rx,
+            join_timeout,
         };
 
         self.listeners.write().await.insert(listener_id, handle);
         Ok(())
     }
+}
+
+/// Await all futures concurrently (no `futures` dependency needed).
+async fn futures_join_all<F>(futs: impl IntoIterator<Item = F>)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let mut set = tokio::task::JoinSet::new();
+    for f in futs {
+        set.spawn(f);
+    }
+    while set.join_next().await.is_some() {}
 }
 
 #[cfg(test)]
@@ -584,7 +670,9 @@ mod tests {
             token: CancellationToken::new(),
             started_at: Instant::now(),
             restart_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             connection_rx: rx,
+            join_timeout: Duration::from_secs(1),
         };
         service
             .listeners
@@ -617,7 +705,9 @@ mod tests {
             token: CancellationToken::new(),
             started_at: Instant::now(),
             restart_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             connection_rx: rx,
+            join_timeout: Duration::from_secs(1),
         };
         service
             .listeners
@@ -635,8 +725,7 @@ mod tests {
             auto_delete: true,
             tdk_config: None,
             protocols: Protocols::default(),
-            #[cfg(feature = "tsp")]
-            relationship_store: None,
+            ..Default::default()
         };
 
         let result = service.add_listener(config).await;
@@ -677,7 +766,9 @@ mod tests {
             token: listener_token,
             started_at: Instant::now(),
             restart_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             connection_rx: rx,
+            join_timeout: Duration::from_secs(1),
         };
         service
             .listeners
@@ -704,6 +795,92 @@ mod tests {
             shutdown_elapsed < Duration::from_secs(1),
             "shutdown() should return promptly, took: {shutdown_elapsed:?}"
         );
+    }
+
+    /// #1034: the reported state follows the connection and the restart
+    /// loop's exit reason.
+    #[tokio::test]
+    async fn listener_state_is_derived_from_connection_and_exit_reason() {
+        let finished = tokio::spawn(async {});
+        let _ = tokio::time::timeout(Duration::from_secs(1), async {
+            while !finished.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        let make = |task: JoinHandle<()>, failed: bool| {
+            let (_tx, rx) = watch::channel::<Option<ConnectionHandle>>(None);
+            ListenerHandle {
+                id: "l".into(),
+                did: "did:example:l".into(),
+                task,
+                token: CancellationToken::new(),
+                started_at: Instant::now(),
+                restart_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+                failed: Arc::new(std::sync::atomic::AtomicBool::new(failed)),
+                connection_rx: rx,
+                join_timeout: Duration::from_secs(1),
+            }
+        };
+
+        assert_eq!(make(finished, true).state(), ListenerState::Failed);
+
+        let stopped = tokio::spawn(async {});
+        while !stopped.is_finished() {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(make(stopped, false).state(), ListenerState::Stopped);
+
+        let token = CancellationToken::new();
+        let running = tokio::spawn({
+            let token = token.clone();
+            async move { token.cancelled().await }
+        });
+        let h = make(running, false);
+        assert_eq!(
+            h.state(),
+            ListenerState::Connecting,
+            "alive but not connected"
+        );
+        token.cancel();
+        h.join().await;
+    }
+
+    /// #1030: `remove_listener`/`shutdown` do not wait forever on a listener
+    /// task that ignores its token; it is aborted after its join timeout.
+    #[tokio::test]
+    async fn a_stuck_listener_task_is_aborted_on_join() {
+        let (_tx, rx) = watch::channel::<Option<ConnectionHandle>>(None);
+        let h = ListenerHandle {
+            id: "stuck".into(),
+            did: "did:example:stuck".into(),
+            task: tokio::spawn(std::future::pending::<()>()),
+            token: CancellationToken::new(),
+            started_at: Instant::now(),
+            restart_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            connection_rx: rx,
+            join_timeout: Duration::from_millis(50),
+        };
+        tokio::time::timeout(Duration::from_secs(2), h.join())
+            .await
+            .expect("join is bounded");
+    }
+
+    #[tokio::test]
+    async fn add_listener_validates_the_config() {
+        let service = make_service();
+        let config = ListenerConfig {
+            id: "zero".into(),
+            max_concurrent_handlers: 0,
+            ..Default::default()
+        };
+        assert!(matches!(
+            service.add_listener(config).await,
+            Err(DIDCommServiceError::Config(
+                crate::ConfigError::ZeroHandlerConcurrency { .. }
+            ))
+        ));
     }
 
     #[tokio::test]

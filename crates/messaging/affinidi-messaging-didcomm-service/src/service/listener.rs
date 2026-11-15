@@ -1,13 +1,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use affinidi_messaging_core::ConnState;
 use affinidi_messaging_sdk::config::ATMConfigBuilder;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_tdk_common::TDKSharedState;
 #[cfg(feature = "tsp")]
 use tokio::sync::oneshot;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, broadcast, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -17,6 +18,8 @@ use crate::error::{DIDCommServiceError, StartupError};
 use crate::handler::{DIDCommHandler, HandlerContext, TspHandler};
 use crate::response::DIDCommResponse;
 use crate::service::ListenerEvent;
+use crate::service::inflight::InFlight;
+use crate::service::mediator::OfflineSync;
 use crate::transport;
 #[cfg(feature = "tsp")]
 use crate::utils::new_message_id;
@@ -74,6 +77,11 @@ pub(crate) struct Listener {
     /// Only touched by `process_next_frame`, on the listener loop.
     #[cfg(feature = "tsp")]
     tsp_order: std::sync::Mutex<SenderOrder>,
+    /// Queue ids being handled, shared by the live stream and the offline
+    /// drain so a message is dispatched by one of them only (R1.7).
+    in_flight: Arc<InFlight>,
+    /// Bounds concurrent handler invocations (`max_concurrent_handlers`).
+    handler_permits: Arc<Semaphore>,
 }
 
 impl Listener {
@@ -85,6 +93,7 @@ impl Listener {
         connection_tx: watch::Sender<Option<ConnectionHandle>>,
         events_tx: broadcast::Sender<ListenerEvent>,
     ) -> Self {
+        let handler_permits = Arc::new(Semaphore::new(config.max_concurrent_handlers.max(1)));
         Self {
             config,
             handler,
@@ -96,6 +105,8 @@ impl Listener {
             events_tx,
             #[cfg(feature = "tsp")]
             tsp_order: std::sync::Mutex::new(SenderOrder::default()),
+            in_flight: Arc::new(InFlight::default()),
+            handler_permits,
         }
     }
 
@@ -219,29 +230,50 @@ impl Listener {
 
         let atm = self.atm()?;
         let profile = self.profile()?;
+        let handle = ConnectionHandle {
+            atm: atm.clone(),
+            profile: profile.clone(),
+        };
 
+        // R6.2: follow the transport's own connection state for as long as this
+        // connection lives. The SDK reconnects the websocket privately; without
+        // this, `Connected` and the published handle were boot-time latches and
+        // a dropped socket went unreported. `connect()` published the handle,
+        // so start from "connected" and apply whatever the transport says now.
+        let mut conn_rx = profile.connection_state().await;
+        let mut connected = true;
+        if let Some(rx) = conn_rx.as_mut() {
+            let state = *rx.borrow_and_update();
+            apply_conn_state(
+                state,
+                &mut connected,
+                &handle,
+                &self.connection_tx,
+                &self.events_tx,
+                &self.config.id,
+            );
+        }
+
+        // Stops the offline drain when this connection ends, whether by
+        // shutdown or because the transport went away.
+        let listen_token = self.shutdown.child_token();
         let mut tasks = JoinSet::new();
 
-        // Spawn offline sync as a tracked task
-        let listener_id = self.config.id.clone();
-        let shutdown_clone = self.shutdown.clone();
-        let atm_clone = atm.clone();
-        let profile_clone = profile.clone();
-        let handler_clone = self.handler.clone();
-        let tsp_handler_clone = self.tsp_handler.clone();
-        tasks.spawn(async move {
-            Listener::run_periodic_offline_sync(
-                &listener_id,
-                &atm_clone,
-                &profile_clone,
-                &handler_clone,
-                tsp_handler_clone.as_ref(),
-                &shutdown_clone,
-            )
-            .await;
-        });
+        let sync = OfflineSync {
+            listener_id: self.config.id.clone(),
+            atm: atm.clone(),
+            profile: profile.clone(),
+            handler: self.handler.clone(),
+            tsp_handler: self.tsp_handler.clone(),
+            in_flight: self.in_flight.clone(),
+            permits: self.handler_permits.clone(),
+            auto_delete: self.config.auto_delete,
+            protocols: self.config.protocols,
+        };
+        let sync_token = listen_token.clone();
+        tasks.spawn(async move { sync.run(&sync_token).await });
 
-        loop {
+        let result = loop {
             // Reap completed tasks and log panics
             while let Some(result) = tasks.try_join_next() {
                 if let Err(e) = result
@@ -254,27 +286,70 @@ impl Listener {
             tokio::select! {
                 _ = self.shutdown.cancelled() => {
                     info!(profile = %profile.inner.alias, "Listener received shutdown signal");
-                    break;
+                    break Ok(());
                 }
-                result = self.process_next_message(&mut tasks) => {
+                change = next_conn_change(&mut conn_rx) => match change {
+                    Some(state) => apply_conn_state(
+                        state,
+                        &mut connected,
+                        &handle,
+                        &self.connection_tx,
+                        &self.events_tx,
+                        &self.config.id,
+                    ),
+                    None => {
+                        // The transport task is gone and will not reconnect by
+                        // itself: end this connection so the restart policy
+                        // builds a new one.
+                        let _ = self.connection_tx.send(None);
+                        break Err(DIDCommServiceError::Internal(
+                            "the mediator websocket transport stopped".into(),
+                        ));
+                    }
+                },
+                // While the socket is down there is nothing to pull; wait for
+                // the reconnect instead of spinning on receive errors.
+                result = self.process_next_message(&mut tasks), if connected => {
                     if let Err(e) = result {
                         warn!(profile = %profile.inner.alias, error = %e, "Error processing message");
                     }
                 }
             }
-        }
+        };
 
-        // Drain in-flight tasks on shutdown
-        info!(profile = %profile.inner.alias, count = tasks.len(), "Waiting for in-flight tasks to complete");
-        while let Some(result) = tasks.join_next().await {
-            if let Err(e) = result
-                && e.is_panic()
-            {
-                error!(profile = %profile.inner.alias, error = %e, "Handler task panicked during shutdown");
+        listen_token.cancel();
+        self.drain_tasks(&mut tasks).await;
+        result
+    }
+
+    /// Wait for in-flight handlers (and the offline drain) to finish, for at
+    /// most `shutdown_drain_timeout`, then abort what is left. An aborted
+    /// handler's message was not acked, so the mediator redelivers it.
+    async fn drain_tasks(&self, tasks: &mut JoinSet<()>) {
+        let alias = &self.config.profile.alias;
+        let timeout = self.config.shutdown_drain_timeout;
+        info!(profile = %alias, count = tasks.len(), "Waiting for in-flight tasks to complete");
+        let drained = tokio::time::timeout(timeout, async {
+            while let Some(result) = tasks.join_next().await {
+                if let Err(e) = result
+                    && e.is_panic()
+                {
+                    error!(profile = %alias, error = %e, "Handler task panicked during shutdown");
+                }
             }
+        })
+        .await;
+        if drained.is_err() {
+            warn!(
+                profile = %alias,
+                remaining = tasks.len(),
+                timeout_secs = timeout.as_secs(),
+                "Handlers still running after the drain timeout; aborting them (their messages \
+                 were not acked and will be redelivered)"
+            );
+            tasks.abort_all();
+            while tasks.join_next().await.is_some() {}
         }
-
-        Ok(())
     }
 
     async fn process_next_message(
@@ -285,13 +360,17 @@ impl Listener {
         // socket and route by transport (a node speaks both over a single
         // per-DID websocket — opening a second would be evicted as a duplicate).
         #[cfg(feature = "tsp")]
-        if self.config.protocols.tsp {
+        if self.config.protocols.tsp() {
             return self.process_next_frame(tasks).await;
         }
 
         let wait_duration = Duration::from_secs(self.config.message_wait_duration_secs);
         let atm = self.atm()?;
         let profile = self.profile()?;
+
+        // Bound concurrent handlers: with every permit taken, stop pulling
+        // until one is free. The mediator keeps the rest queued.
+        let permit = self.acquire_permit().await?;
 
         // R1.6/R1.7: pull the message WITHOUT acking it to the mediator
         // (`auto_delete = false`). The mediator keeps its copy until we ack —
@@ -306,6 +385,12 @@ impl Listener {
             .map_err(DIDCommServiceError::ATM)?;
 
         if let Some((message, meta)) = next {
+            // One owner per message (R1.7): the offline drain may already be
+            // handling this one, since it is still queued at the mediator.
+            let Some(claim) = self.in_flight.claim(&meta.sha256_hash) else {
+                debug!(profile = %profile.inner.alias, "Message already being handled; skipped");
+                return Ok(());
+            };
             // The mediator's queue-id (hash) for this frame, used to ack it
             // after handoff. Honour the operator's `auto_delete = false` opt-out
             // by acking only when auto-delete is enabled (the default).
@@ -316,7 +401,8 @@ impl Listener {
             let profile = profile.clone();
             let handler = self.handler.clone();
             tasks.spawn(async move {
-                Self::dispatch_message(
+                let _permit = permit;
+                let acked = Self::dispatch_message(
                     &listener_id,
                     &atm,
                     &profile,
@@ -326,6 +412,7 @@ impl Listener {
                     ack_id,
                 )
                 .await;
+                claim.finish(acked);
             });
         }
 
@@ -342,6 +429,7 @@ impl Listener {
         let auto_delete = self.config.auto_delete;
         let atm = self.atm()?;
         let profile = self.profile()?;
+        let permit = self.acquire_permit().await?;
 
         let next = atm
             .message_pickup()
@@ -350,13 +438,34 @@ impl Listener {
             .map_err(DIDCommServiceError::ATM)?;
 
         match next {
+            Some(InboundFrame::DidComm(_, meta)) if !self.config.protocols.didcomm() => {
+                // A TSP-only listener: ack and skip. With `auto_delete` on the
+                // SDK acked it on receipt; otherwise ack it here so it is not
+                // redelivered forever to a listener that will never take it.
+                debug!(
+                    profile = %profile.inner.alias,
+                    "DIDComm frame on a listener with DIDComm disabled; dropped"
+                );
+                if !auto_delete
+                    && let Err(e) = atm
+                        .delete_message_background(profile, &meta.sha256_hash)
+                        .await
+                {
+                    warn!(profile = %profile.inner.alias, error = %e, "Failed to ack a dropped DIDComm frame");
+                }
+            }
             Some(InboundFrame::DidComm(message, meta)) => {
+                let Some(claim) = self.in_flight.claim(&meta.sha256_hash) else {
+                    debug!(profile = %profile.inner.alias, "Message already being handled; skipped");
+                    return Ok(());
+                };
                 let meta = convert_meta(*meta);
                 let listener_id = self.config.id.clone();
                 let atm = atm.clone();
                 let profile = profile.clone();
                 let handler = self.handler.clone();
                 tasks.spawn(async move {
+                    let _permit = permit;
                     // TSP-multiplexed path (phase 4): still acks on receipt via
                     // `auto_delete` in `live_stream_next_frame`, so no
                     // post-handoff ack here yet.
@@ -370,6 +479,7 @@ impl Listener {
                         None,
                     )
                     .await;
+                    claim.finish(auto_delete);
                 });
             }
             Some(InboundFrame::Tsp(packed)) => {
@@ -411,6 +521,7 @@ impl Listener {
                     let atm = atm.clone();
                     let profile = profile.clone();
                     tasks.spawn(async move {
+                        let _permit = permit;
                         let (prev, done) = match slot {
                             Some((prev, done)) => (prev, Some(done)),
                             None => (None, None),
@@ -694,6 +805,16 @@ impl Listener {
         Ok(())
     }
 
+    async fn acquire_permit(&self) -> Result<OwnedSemaphorePermit, DIDCommServiceError> {
+        self.handler_permits
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| DIDCommServiceError::Internal("handler semaphore closed".into()))
+    }
+
+    /// Hand `message` to the handler, send its reply, then ack `ack_id` if
+    /// given. Returns whether the ack was made.
     pub(crate) async fn dispatch_message(
         listener_id: &str,
         atm: &ATM,
@@ -705,7 +826,7 @@ impl Listener {
         // caller acks elsewhere (the TSP-multiplexed path) or `auto_delete` is
         // off.
         ack_id: Option<String>,
-    ) {
+    ) -> bool {
         let sender_did = crate::handler::authenticated_sender_did(&meta);
         let thread_id = get_thread_id(&message);
         let parent_thread_id = get_parent_thread_id(&message, false);
@@ -746,10 +867,15 @@ impl Listener {
         // message stays queued at the mediator and is redelivered on the next
         // pickup, rather than being lost. A failed ack is non-fatal: the message
         // is redelivered and de-duplicated by the receiver instead.
-        if let Some(sha256_hash) = ack_id
-            && let Err(e) = atm.delete_message_background(profile, &sha256_hash).await
-        {
-            warn!(profile = %profile_alias, error = %e, "Failed to ack (delete) message after handoff");
+        match ack_id {
+            Some(sha256_hash) => match atm.delete_message_background(profile, &sha256_hash).await {
+                Ok(_) => true,
+                Err(e) => {
+                    warn!(profile = %profile_alias, error = %e, "Failed to ack (delete) message after handoff");
+                    false
+                }
+            },
+            None => false,
         }
     }
 
@@ -759,6 +885,54 @@ impl Listener {
     ) -> Result<(), DIDCommServiceError> {
         let message = response.into_message(ctx)?;
         transport::send_response(ctx, message).await
+    }
+}
+
+/// The next connection-state transition, or `None` once the transport has gone
+/// (its sender dropped). Never resolves when there is no websocket transport.
+pub(crate) async fn next_conn_change(
+    rx: &mut Option<watch::Receiver<ConnState>>,
+) -> Option<ConnState> {
+    match rx {
+        None => std::future::pending().await,
+        Some(rx) => match rx.changed().await {
+            Ok(()) => Some(*rx.borrow_and_update()),
+            Err(_) => None,
+        },
+    }
+}
+
+/// Mirror a transport connection-state transition onto the listener's
+/// connection handle and event stream (R6.2): on a drop, withdraw the handle
+/// (so `send_message` returns `NotConnected` and `wait_connected` waits) and
+/// emit `Disconnected`; on a reconnect, republish it and emit `Connected`.
+/// Repeats of the current state are ignored.
+pub(crate) fn apply_conn_state(
+    state: ConnState,
+    connected: &mut bool,
+    handle: &ConnectionHandle,
+    connection_tx: &watch::Sender<Option<ConnectionHandle>>,
+    events_tx: &broadcast::Sender<ListenerEvent>,
+    listener_id: &str,
+) {
+    let up = matches!(state, ConnState::Connected);
+    if up == *connected {
+        return;
+    }
+    *connected = up;
+    if up {
+        info!(listener = %listener_id, "Mediator websocket reconnected");
+        let _ = connection_tx.send(Some(handle.clone()));
+        let _ = events_tx.send(ListenerEvent::Connected {
+            listener_id: listener_id.to_string(),
+        });
+    } else {
+        warn!(listener = %listener_id, state = ?state, "Mediator websocket dropped; reconnecting");
+        let _ = connection_tx.send(None);
+        let _ = events_tx.send(ListenerEvent::Disconnected {
+            listener_id: listener_id.to_string(),
+            error: Some("mediator websocket dropped; reconnecting".into()),
+        });
     }
 }
 
@@ -1010,5 +1184,124 @@ mod reply_tests {
         let ack = DIDCommResponse::new("https://example.com/ack", serde_json::json!({}));
         assert!(reply_allowed("https://example.com/request", &report));
         assert!(reply_allowed(PROBLEM_REPORT_TYPE, &ack));
+    }
+}
+
+#[cfg(test)]
+mod connection_and_dispatch_tests {
+    use super::*;
+    use affinidi_messaging_didcomm::{Message, UnpackMetadata};
+    use async_trait::async_trait;
+    use serde_json::json;
+
+    async fn handle() -> ConnectionHandle {
+        let ctx = crate::handler::test_context().await;
+        ConnectionHandle {
+            atm: ctx.atm,
+            profile: ctx.profile,
+        }
+    }
+
+    /// #1029 (R6.2): a websocket drop and the SDK's private reconnect are
+    /// mirrored onto the connection handle and the event stream, every time.
+    #[tokio::test]
+    async fn a_drop_and_reconnect_are_reported_every_time() {
+        let handle = handle().await;
+        let (conn_tx, conn_rx) = watch::channel(Some(handle.clone()));
+        let (events_tx, mut events) = broadcast::channel(16);
+        let (state_tx, state_rx) = watch::channel(ConnState::Connected);
+        let mut state_rx = Some(state_rx);
+        let mut connected = true;
+
+        for _round in 0..2 {
+            state_tx.send(ConnState::Disconnected).unwrap();
+            let s = next_conn_change(&mut state_rx).await.unwrap();
+            apply_conn_state(s, &mut connected, &handle, &conn_tx, &events_tx, "l1");
+            assert!(conn_rx.borrow().is_none(), "sends must see NotConnected");
+            assert_eq!(
+                events.try_recv().unwrap(),
+                ListenerEvent::Disconnected {
+                    listener_id: "l1".into(),
+                    error: Some("mediator websocket dropped; reconnecting".into()),
+                }
+            );
+
+            // Still reconnecting: no repeat event.
+            state_tx.send(ConnState::Connecting).unwrap();
+            let s = next_conn_change(&mut state_rx).await.unwrap();
+            apply_conn_state(s, &mut connected, &handle, &conn_tx, &events_tx, "l1");
+            assert!(events.try_recv().is_err());
+
+            state_tx.send(ConnState::Connected).unwrap();
+            let s = next_conn_change(&mut state_rx).await.unwrap();
+            apply_conn_state(s, &mut connected, &handle, &conn_tx, &events_tx, "l1");
+            assert!(conn_rx.borrow().is_some(), "handle republished");
+            assert_eq!(
+                events.try_recv().unwrap(),
+                ListenerEvent::Connected {
+                    listener_id: "l1".into()
+                }
+            );
+        }
+
+        // The transport going away ends the watch.
+        drop(state_tx);
+        assert!(next_conn_change(&mut state_rx).await.is_none());
+    }
+
+    struct Capture(tokio::sync::Mutex<Option<HandlerContext>>);
+
+    #[async_trait]
+    impl DIDCommHandler for Arc<Capture> {
+        async fn handle(
+            &self,
+            ctx: HandlerContext,
+            _message: Message,
+            _meta: UnpackMetadata,
+        ) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
+            *self.0.lock().await = Some(ctx);
+            Ok(None)
+        }
+    }
+
+    /// #1028 regression: a request without a `thid` that reaches the handler
+    /// through the offline drain (`ack_id: None`, the drain acks the batch) is
+    /// seen with the sender's id, and the reply threads to it, not to the
+    /// mediator's queue id.
+    #[tokio::test]
+    async fn an_offline_request_without_thid_is_answered_on_its_own_id() {
+        let ctx = crate::handler::test_context().await;
+        let capture = Arc::new(Capture(tokio::sync::Mutex::new(None)));
+        let handler: Arc<dyn DIDCommHandler> = Arc::new(capture.clone());
+        let request = Message::build(
+            "req-1".to_string(),
+            "https://didcomm.org/trust-ping/2.0/ping".to_string(),
+            json!({}),
+        )
+        .from("did:example:peer".to_string())
+        .finalize();
+        let meta = UnpackMetadata {
+            authenticated: true,
+            encrypted: true,
+            encrypted_from_kid: Some("did:example:peer#key-1".into()),
+            ..Default::default()
+        };
+
+        let acked =
+            Listener::dispatch_message("l1", &ctx.atm, &ctx.profile, &handler, request, meta, None)
+                .await;
+        assert!(!acked, "the offline drain acks the batch itself");
+
+        let seen = capture.0.lock().await.take().expect("handler ran");
+        assert_eq!(seen.message_id, "req-1");
+        assert_eq!(seen.thread_id, "req-1");
+        assert_eq!(seen.sender_did.as_deref(), Some("did:example:peer"));
+        let reply = DIDCommResponse::new(
+            "https://didcomm.org/trust-ping/2.0/ping-response",
+            json!({}),
+        )
+        .into_message(&seen)
+        .unwrap();
+        assert_eq!(reply.thid.as_deref(), Some("req-1"));
     }
 }

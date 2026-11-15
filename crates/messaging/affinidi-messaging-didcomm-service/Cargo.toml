@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-didcomm-service"
-version = "0.34.0"
+version = "0.35.0"
 description = "Shared DIDComm service framework for always-online DIDComm client. Manages mediator connection, message lifecycle, and handler dispatch."
 edition.workspace = true
 authors.workspace = true
@@ -30,6 +30,9 @@ affinidi-tdk-common = { version = "0.7", path = "../../tdk/affinidi-tdk-common" 
 # survived the 0.12 move and produced `expected MediatorAcl, found a different
 # MediatorAcl` from inside this workspace.
 affinidi-messaging-sdk = { version = "0.49", path = "../affinidi-messaging-sdk" }
+# `ConnState`, the transport connection state `ATMProfile::connection_state`
+# publishes (followed by the listener, R6.2).
+affinidi-messaging-core = { version = "0.1.13", path = "../affinidi-messaging-core" }
 affinidi-messaging-didcomm = "0.15.9"
 affinidi-secrets-resolver = "0.5"
 ## Reads the cleartext sender VID off a TSP envelope, to keep each peer's

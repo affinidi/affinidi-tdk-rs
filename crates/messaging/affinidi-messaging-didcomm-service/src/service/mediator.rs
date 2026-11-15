@@ -6,14 +6,25 @@ use affinidi_messaging_sdk::protocols::mediator::acls::AccessListModeType;
 use affinidi_messaging_sdk::tasks::messaging::account;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use sha256::digest;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
+use super::inflight::{Claim, InFlight};
 use super::listener::Listener;
+use crate::config::Protocols;
 use crate::error::{DIDCommServiceError, StartupError};
 use crate::handler::{DIDCommHandler, TspHandler};
 
+type SyncError = Box<dyn std::error::Error + Send + Sync>;
+
 const OFFLINE_SYNC_INTERVAL_SECS: u64 = 30;
+/// Messages fetched per delivery request.
+const OFFLINE_BATCH_LIMIT: usize = 100;
+/// Batches fetched back to back in one sync before waiting for the next tick,
+/// so one sync cannot run unbounded against a queue that keeps filling.
+const MAX_BATCHES_PER_SYNC: usize = 50;
 /// Short retry used only when the very first drains can't run yet because the
 /// websocket is still coming up right after connect — so the initial backlog is
 /// fetched within a second or two instead of waiting a full interval.
@@ -56,32 +67,41 @@ impl Listener {
 
         Ok(())
     }
+}
 
-    pub(crate) async fn run_periodic_offline_sync(
-        listener_id: &str,
-        atm: &ATM,
-        profile: &Arc<ATMProfile>,
-        handler: &Arc<dyn DIDCommHandler>,
-        tsp_handler: Option<&Arc<dyn TspHandler>>,
-        shutdown: &CancellationToken,
-    ) {
-        let profile_alias = profile.inner.alias.clone();
+/// The periodic offline drain for one listener connection.
+///
+/// It shares the listener's [`InFlight`] record, so a message the live stream
+/// is handling is skipped here (and the reverse), and its handler permits, so
+/// both paths together run at most `max_concurrent_handlers` handlers.
+pub(crate) struct OfflineSync {
+    pub listener_id: String,
+    pub atm: ATM,
+    pub profile: Arc<ATMProfile>,
+    pub handler: Arc<dyn DIDCommHandler>,
+    // Read only by the TSP-feature drain.
+    #[cfg_attr(not(feature = "tsp"), allow(dead_code))]
+    pub tsp_handler: Option<Arc<dyn TspHandler>>,
+    pub in_flight: Arc<InFlight>,
+    pub permits: Arc<Semaphore>,
+    pub auto_delete: bool,
+    #[cfg_attr(not(feature = "tsp"), allow(dead_code))]
+    pub protocols: Protocols,
+}
+
+/// What one batch did, to decide whether to fetch another straight away.
+struct BatchOutcome {
+    fetched: usize,
+    acked: usize,
+}
+
+impl OfflineSync {
+    pub(crate) async fn run(&self, shutdown: &CancellationToken) {
+        let profile_alias = self.profile.inner.alias.clone();
         loop {
             // Drain the offline/queued backlog at the TOP of the loop, so it runs
             // immediately on connect rather than only after the first interval.
-            // Previously this slept `OFFLINE_SYNC_INTERVAL_SECS` *before* the
-            // first sync, so a message delivered while this listener was offline
-            // (e.g. a membership credential issued before the listener connected)
-            // wasn't picked up for ~30s. Now it arrives in ~1s.
-            let next_delay_secs = match Listener::sync_offline_messages(
-                listener_id,
-                atm,
-                profile,
-                handler,
-                tsp_handler,
-            )
-            .await
-            {
+            let next_delay_secs = match self.sync(shutdown).await {
                 Ok(()) => OFFLINE_SYNC_INTERVAL_SECS,
                 Err(e) => {
                     // A websocket reconnect (e.g. when the mediator closes the
@@ -114,133 +134,228 @@ impl Listener {
         }
     }
 
-    async fn sync_offline_messages(
-        listener_id: &str,
-        atm: &ATM,
-        profile: &Arc<ATMProfile>,
-        handler: &Arc<dyn DIDCommHandler>,
-        tsp_handler: Option<&Arc<dyn TspHandler>>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let wait_for_response = true;
-        let messages_limit = 100;
+    /// Drain the queue: fetch batches back to back while each one comes back
+    /// full and makes progress (some of it was acked), up to
+    /// [`MAX_BATCHES_PER_SYNC`]. With `auto_delete` off nothing is acked, so a
+    /// second fetch would return the same messages and only one batch is taken.
+    async fn sync(&self, shutdown: &CancellationToken) -> Result<(), SyncError> {
+        for _ in 0..MAX_BATCHES_PER_SYNC {
+            if shutdown.is_cancelled() {
+                break;
+            }
+            let outcome = self.sync_batch().await?;
+            if outcome.fetched < OFFLINE_BATCH_LIMIT || outcome.acked == 0 {
+                break;
+            }
+        }
+        Ok(())
+    }
 
-        let status_reply = atm
+    async fn acquire(&self) -> Result<OwnedSemaphorePermit, SyncError> {
+        Ok(self.permits.clone().acquire_owned().await?)
+    }
+
+    /// Run a DIDComm handler on its own task, holding a handler permit.
+    fn spawn_dispatch(
+        &self,
+        set: &mut JoinSet<()>,
+        permit: OwnedSemaphorePermit,
+        message: affinidi_messaging_didcomm::Message,
+        meta: affinidi_messaging_didcomm::UnpackMetadata,
+    ) {
+        let listener_id = self.listener_id.clone();
+        let atm = self.atm.clone();
+        let profile = self.profile.clone();
+        let handler = self.handler.clone();
+        set.spawn(async move {
+            let _permit = permit;
+            // The batch is acked below, once every handler has returned.
+            Listener::dispatch_message(&listener_id, &atm, &profile, &handler, message, meta, None)
+                .await;
+        });
+    }
+
+    async fn join_all(&self, mut set: JoinSet<()>) {
+        while let Some(result) = set.join_next().await {
+            if let Err(e) = result
+                && e.is_panic()
+            {
+                error!(profile = %self.profile.inner.alias, error = %e, "Offline handler task panicked");
+            }
+        }
+    }
+
+    /// Ack the messages this batch handled (only with `auto_delete`) and the
+    /// ones it dropped as undeliverable (always: nobody will ever take them),
+    /// then release their claims.
+    async fn ack(&self, handled: Vec<Claim>, dropped: Vec<Claim>) -> Result<usize, SyncError> {
+        let mut ids: Vec<String> = dropped.iter().map(|c| c.id().to_string()).collect();
+        if self.auto_delete {
+            ids.extend(handled.iter().map(|c| c.id().to_string()));
+        }
+        if ids.is_empty() {
+            for c in handled {
+                c.finish(false);
+            }
+            return Ok(0);
+        }
+
+        // On an error the claims drop unacked: the messages stay queued and the
+        // next sync sees them again.
+        let reply = self
+            .atm
             .message_pickup()
-            .send_status_request(profile, wait_for_response, None)
+            .send_messages_received(&self.profile, &ids, true)
             .await?;
+        if reply.is_none() {
+            warn!(profile = %self.profile.inner.alias, "No status reply for offline messages ack");
+        } else {
+            debug!(profile = %self.profile.inner.alias, count = ids.len(), "Offline messages acknowledged and deleted");
+        }
+        for c in dropped {
+            c.finish(true);
+        }
+        for c in handled {
+            c.finish(self.auto_delete);
+        }
+        Ok(ids.len())
+    }
 
-        let messages_count = status_reply.map(|m| m.message_count).unwrap_or(0);
-        debug!(profile = %profile.inner.alias, count = messages_count, "Offline messages count");
+    async fn queued_count(&self) -> Result<usize, SyncError> {
+        let status_reply = self
+            .atm
+            .message_pickup()
+            .send_status_request(&self.profile, true, None)
+            .await?;
+        let count = status_reply.map(|m| m.message_count).unwrap_or(0);
+        debug!(profile = %self.profile.inner.alias, count, "Offline messages count");
+        Ok(count as usize)
+    }
 
-        if messages_count == 0 {
-            return Ok(());
+    /// TSP-aware drain: fetch the backlog as classified frames so a TSP frame
+    /// goes to the TSP handler (like the live loop) instead of being
+    /// DIDComm-unpacked and left to poison-loop.
+    #[cfg(feature = "tsp")]
+    async fn sync_batch(&self) -> Result<BatchOutcome, SyncError> {
+        use affinidi_messaging_sdk::protocols::message_pickup::InboundFrame;
+
+        if self.queued_count().await? == 0 {
+            return Ok(BatchOutcome {
+                fetched: 0,
+                acked: 0,
+            });
         }
 
-        // TSP-aware drain: fetch the backlog as classified frames so a TSP
-        // frame goes to the TSP handler (like the live loop) instead of being
-        // DIDComm-unpacked and left to poison-loop. Undeliverable frames are
-        // acked too so the mediator stops redelivering them.
-        #[cfg(feature = "tsp")]
-        {
-            use affinidi_messaging_sdk::protocols::message_pickup::InboundFrame;
+        let alias = &self.profile.inner.alias;
+        let frames = self
+            .atm
+            .message_pickup()
+            .send_delivery_request_frames(&self.profile, Some(OFFLINE_BATCH_LIMIT), true)
+            .await?;
+        let fetched = frames.len();
+        debug!(profile = %alias, count = fetched, "Retrieved offline frames");
 
-            let frames = atm
-                .message_pickup()
-                .send_delivery_request_frames(profile, Some(messages_limit), wait_for_response)
-                .await?;
-
-            let ack_ids: Vec<String> = frames.iter().map(|(_, id)| id.clone()).collect();
-            debug!(profile = %profile.inner.alias, count = frames.len(), "Retrieved offline frames");
-
-            for (frame, _id) in frames {
-                match frame {
-                    Some(InboundFrame::DidComm(message, meta)) => {
-                        let meta = super::listener::convert_meta(*meta);
-                        // Offline drain acks the whole batch below via
-                        // `send_messages_received`, so no per-message ack here.
-                        Listener::dispatch_message(
-                            listener_id,
-                            atm,
-                            profile,
-                            handler,
-                            *message,
-                            meta,
-                            None,
-                        )
-                        .await;
-                    }
-                    Some(InboundFrame::Tsp(packed)) => match tsp_handler {
-                        Some(h) => {
-                            Listener::dispatch_tsp(listener_id, atm, profile, h, *packed).await;
+        let mut set = JoinSet::new();
+        let mut handled = Vec::new();
+        let mut dropped = Vec::new();
+        for (frame, id) in frames {
+            // One owner per message (R1.7): skip what the live stream is
+            // handling, or handled and acked a moment ago.
+            let Some(claim) = self.in_flight.claim(&id) else {
+                debug!(profile = %alias, "Offline message already being handled; skipped");
+                continue;
+            };
+            match frame {
+                Some(InboundFrame::DidComm(message, meta)) if self.protocols.didcomm() => {
+                    let permit = self.acquire().await?;
+                    let meta = super::listener::convert_meta(*meta);
+                    self.spawn_dispatch(&mut set, permit, *message, meta);
+                    handled.push(claim);
+                }
+                Some(InboundFrame::DidComm(..)) => {
+                    debug!(profile = %alias, "Offline DIDComm frame on a listener with DIDComm disabled; dropped (acked)");
+                    dropped.push(claim);
+                }
+                Some(InboundFrame::Tsp(packed)) => {
+                    match (&self.tsp_handler, self.protocols.tsp()) {
+                        (Some(h), true) => {
+                            // TSP frames are handled in order, one at a time: a
+                            // peer's invite must be recorded before its payload.
+                            let _permit = self.acquire().await?;
+                            Listener::dispatch_tsp(
+                                &self.listener_id,
+                                &self.atm,
+                                &self.profile,
+                                h,
+                                *packed,
+                            )
+                            .await;
+                            handled.push(claim);
                         }
-                        None => warn!(
-                            profile = %profile.inner.alias,
-                            "Offline TSP frame but no TSP handler configured — dropping (acked)"
-                        ),
-                    },
-                    // `InboundFrame` is `#[non_exhaustive]`.
-                    Some(_) => warn!(
-                        profile = %profile.inner.alias,
-                        "Unrecognised offline frame kind — dropping (acked)"
-                    ),
-                    // Undeliverable (bad encoding / DIDComm unpack failure): drop
-                    // it; it's in `ack_ids` so the mediator stops redelivering.
-                    None => {}
+                        (_, false) => {
+                            debug!(profile = %alias, "Offline TSP frame on a listener with TSP disabled; dropped (acked)");
+                            dropped.push(claim);
+                        }
+                        (None, true) => {
+                            warn!(profile = %alias, "Offline TSP frame but no TSP handler configured — dropping (acked)");
+                            dropped.push(claim);
+                        }
+                    }
                 }
-            }
-
-            if !ack_ids.is_empty() {
-                let delete_result = atm
-                    .message_pickup()
-                    .send_messages_received(profile, &ack_ids, wait_for_response)
-                    .await?;
-                if delete_result.is_none() {
-                    warn!(profile = %profile.inner.alias, "No status reply for offline messages ack");
+                // `InboundFrame` is `#[non_exhaustive]`.
+                Some(_) => {
+                    warn!(profile = %alias, "Unrecognised offline frame kind — dropping (acked)");
+                    dropped.push(claim);
                 }
+                // Undeliverable (bad encoding / DIDComm unpack failure): drop it
+                // and ack it so the mediator stops redelivering.
+                None => dropped.push(claim),
             }
-
-            Ok(())
         }
 
-        #[cfg(not(feature = "tsp"))]
-        {
-            let _ = tsp_handler;
+        self.join_all(set).await;
+        let acked = self.ack(handled, dropped).await?;
+        Ok(BatchOutcome { fetched, acked })
+    }
 
-            let offline_messages = atm
-                .message_pickup()
-                .send_delivery_request(profile, Some(messages_limit), wait_for_response)
-                .await?;
-
-            // Ack by the mediator's id for each message (`sha256_hash`, the
-            // delivery attachment id). `m.id` is the sender's DIDComm id, which
-            // the SDK no longer overwrites with the mediator's.
-            let message_ids: Vec<_> = offline_messages
-                .iter()
-                .map(|(_, meta)| meta.sha256_hash.clone())
-                .collect();
-
-            debug!(profile = %profile.inner.alias, count = offline_messages.len(), "Retrieved offline messages");
-
-            for (message, meta) in offline_messages {
-                let meta = super::listener::convert_meta(meta);
-                // Offline drain acks the whole batch below via
-                // `send_messages_received`, so no per-message ack here.
-                Listener::dispatch_message(listener_id, atm, profile, handler, message, meta, None)
-                    .await;
-            }
-
-            let delete_result = atm
-                .message_pickup()
-                .send_messages_received(profile, &message_ids, wait_for_response)
-                .await?;
-
-            if delete_result.is_some() {
-                debug!(profile = %profile.inner.alias, "Offline messages acknowledged and deleted");
-            } else {
-                warn!(profile = %profile.inner.alias, "No status reply for offline messages ack");
-            }
-
-            Ok(())
+    #[cfg(not(feature = "tsp"))]
+    async fn sync_batch(&self) -> Result<BatchOutcome, SyncError> {
+        // Without the `tsp` feature a listener cannot enable TSP (refused at
+        // start), so DIDComm is always on here.
+        if self.queued_count().await? == 0 {
+            return Ok(BatchOutcome {
+                fetched: 0,
+                acked: 0,
+            });
         }
+
+        let alias = &self.profile.inner.alias;
+        let offline_messages = self
+            .atm
+            .message_pickup()
+            .send_delivery_request(&self.profile, Some(OFFLINE_BATCH_LIMIT), true)
+            .await?;
+        let fetched = offline_messages.len();
+        debug!(profile = %alias, count = fetched, "Retrieved offline messages");
+
+        let mut set = JoinSet::new();
+        let mut handled = Vec::new();
+        for (message, meta) in offline_messages {
+            // Claim by the mediator's id for the message (`sha256_hash`, the
+            // delivery attachment id), which is also what it is acked by. The
+            // message keeps its sender's `id`, so a reply threads to it.
+            let Some(claim) = self.in_flight.claim(&meta.sha256_hash) else {
+                debug!(profile = %alias, "Offline message already being handled; skipped");
+                continue;
+            };
+            let permit = self.acquire().await?;
+            let meta = super::listener::convert_meta(meta);
+            self.spawn_dispatch(&mut set, permit, message, meta);
+            handled.push(claim);
+        }
+
+        self.join_all(set).await;
+        let acked = self.ack(handled, Vec::new()).await?;
+        Ok(BatchOutcome { fetched, acked })
     }
 }

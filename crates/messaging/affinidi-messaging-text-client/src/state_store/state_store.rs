@@ -14,22 +14,20 @@ use affinidi_messaging_sdk::{
     ATM, config::ATMConfigBuilder, profiles::ATMProfile, transports::websockets::WebSocketResponses,
 };
 use affinidi_tdk::{common::TDKSharedState, secrets_resolver::SecretsResolver};
-use std::{sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::{
     broadcast,
     mpsc::{self, UnboundedReceiver, UnboundedSender},
 };
 use tracing::{debug, error, info, warn};
 
-const STATE_FILE: &str = "config.json";
-
 pub struct StateStore {
-    state_tx: UnboundedSender<State>,
+    state_tx: UnboundedSender<Arc<State>>,
 }
 
 impl StateStore {
-    pub fn new() -> (Self, UnboundedReceiver<State>) {
-        let (state_tx, state_rx) = mpsc::unbounded_channel::<State>();
+    pub fn new() -> (Self, UnboundedReceiver<Arc<State>>) {
+        let (state_tx, state_rx) = mpsc::unbounded_channel::<Arc<State>>();
 
         (StateStore { state_tx }, state_rx)
     }
@@ -42,37 +40,43 @@ impl StateStore {
         mut action_rx: UnboundedReceiver<Action>,
         mut interrupt_rx: broadcast::Receiver<Interrupted>,
         tdk: Arc<TDKSharedState>,
+        state_file: PathBuf,
     ) -> anyhow::Result<Interrupted> {
+        // Every early return goes through here: the UI loop only stops on an
+        // interrupt (or the end of the key stream), so without this a failed
+        // start leaves a live UI that cannot quit. The reason is printed by
+        // `main` once the terminal has been restored.
+        let mut fail = |reason: String| -> anyhow::Result<Interrupted> {
+            error!("{}", reason);
+            let interrupted = Interrupted::SystemError(reason);
+            let _ = terminator.terminate(interrupted.clone());
+            Ok(interrupted)
+        };
+
         // Setup the initial state
-        let atm = match ATM::new(
-            ATMConfigBuilder::default()
-                .with_inbound_message_channel(100)
-                .build()?,
-            tdk.clone(),
-        )
-        .await
+        let atm_config = match ATMConfigBuilder::default()
+            .with_inbound_message_channel(100)
+            .build()
         {
+            Ok(config) => config,
+            Err(e) => return fail(format!("Failed to build the ATM config: {e}")),
+        };
+        let atm = match ATM::new(atm_config, tdk.clone()).await {
             Ok(atm) => atm,
-            Err(e) => {
-                warn!("Failed to initialize ATM: {}", e);
-                return Ok(Interrupted::SystemError);
-            }
+            Err(e) => return fail(format!("Failed to initialize ATM: {e}")),
         };
 
         // Load any profiles from existing chats.
-        let mut state = match State::load(STATE_FILE) {
+        let mut state = match State::load(&state_file) {
             Ok(state) => state,
             Err(e) => {
-                error!(
-                    "Cannot read {}: {}. Fix or move the file aside; it is not overwritten",
-                    STATE_FILE, e
-                );
-                eprintln!(
-                    "Cannot read {STATE_FILE}: {e}. Fix or move the file aside; it is not overwritten"
-                );
-                return Ok(Interrupted::SystemError);
+                return fail(format!(
+                    "Cannot read {}: {e}. Fix or move the file aside; it is not overwritten",
+                    state_file.display()
+                ));
             }
         };
+        info!("State file: {}", state_file.display());
         state.initialization = true;
 
         tdk.secrets_resolver().insert_vec(&state.secrets).await;
@@ -83,15 +87,17 @@ impl StateStore {
         }
 
         // Send the initial state once
-        self.state_tx.send(state.clone())?;
+        self.state_tx.send(Arc::new(state.clone()))?;
 
         info!("Activating ({}) profiles", state.chat_list.chats.len());
         for chat in state.chat_list.chats.values() {
             let profile = match ATMProfile::from_tdk_profile(&atm, &chat.our_profile).await {
                 Ok(profile) => profile,
                 Err(e) => {
-                    warn!("Failed to load profile for chat {}: {}", chat.name, e);
-                    return Ok(Interrupted::SystemError);
+                    return fail(format!(
+                        "Failed to load profile for chat {}: {e}",
+                        chat.name
+                    ));
                 }
             };
             match atm.profile_add(&profile, true).await {
@@ -100,8 +106,10 @@ impl StateStore {
                     profile.inner.alias, chat.name
                 ),
                 Err(e) => {
-                    warn!("Failed to add profile for chat {}: {}", chat.name, e);
-                    return Ok(Interrupted::SystemError);
+                    return fail(format!(
+                        "Failed to add profile for chat {} (is the mediator reachable?): {e}",
+                        chat.name
+                    ));
                 }
             }
         }
@@ -110,14 +118,12 @@ impl StateStore {
 
         let mut inbound_message_channel = match atm.get_inbound_channel() {
             Some(channel) => channel,
-            _ => {
-                warn!("Failed to get inbound channel");
-                return Ok(Interrupted::SystemError);
-            }
+            _ => return fail("Failed to get the inbound message channel".to_string()),
         };
 
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
         let mut last_saved = None;
+        let mut save_failed = false;
 
         let result = loop {
             tokio::select! {
@@ -240,21 +246,45 @@ impl StateStore {
                     }
                 },
                 // Tick to terminate the select every N milliseconds
-                _ = ticker.tick() => {
-                    // Do nothing
-                },
+                // Nothing changed: no save, no state sent to the UI.
+                _ = ticker.tick() => continue,
                 // Catch and handle interrupt signal to gracefully shutdown
                 Ok(interrupted) = interrupt_rx.recv() => {
                     break interrupted;
                 }
+                // The UI loop ended on its own (end of the key stream, or a
+                // render error). State is no longer sent every tick, so a
+                // failed send cannot be relied on to notice; stop here.
+                _ = self.state_tx.closed() => {
+                    break Interrupted::UserInt;
+                }
             }
-            if let Err(e) = state.save_if_changed(STATE_FILE, &mut last_saved) {
-                warn!("Failed to save state to {}: {}", STATE_FILE, e);
+            match state.save_if_changed(&state_file, &mut last_saved) {
+                Ok(()) => save_failed = false,
+                Err(e) => {
+                    // Shown in the UI's log pane; reported once per run of
+                    // failures rather than on every change.
+                    if !save_failed {
+                        error!(
+                            "Failed to save state to {}: {e}. Changes are not on disk",
+                            state_file.display()
+                        );
+                    }
+                    save_failed = true;
+                }
             }
-            self.state_tx.send(state.clone())?;
+            self.state_tx.send(Arc::new(state.clone()))?;
         };
 
-        let _ = state.save_to_file(STATE_FILE);
+        if let Err(e) = state.save_to_file(&state_file) {
+            error!("Failed to save state to {}: {e}", state_file.display());
+            if !matches!(result, Interrupted::SystemError(_)) {
+                return Ok(Interrupted::SystemError(format!(
+                    "Failed to save state to {} on exit: {e}",
+                    state_file.display()
+                )));
+            }
+        }
 
         Ok(result)
     }

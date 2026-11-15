@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-helpers"
-version = "0.13.4"
+version = "0.13.5"
 description = "CLI tools for Affinidi Messaging (mediator administration)"
 edition.workspace = true
 authors.workspace = true
