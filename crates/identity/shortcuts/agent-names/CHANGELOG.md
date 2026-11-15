@@ -4,6 +4,19 @@ All notable changes to `agent-names` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this crate follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-11-15
+
+Workspace lint and dependency housekeeping. No API or behaviour change.
+
+- Dependency versions now come from the root `[workspace.dependencies]`
+  for the external crates shared by five or more workspace members
+  (#1070). The published manifest still names concrete requirements; the
+  resolved dependency graph and every feature selection are unchanged.
+- Workspace lints now include `unsafe_code = "deny"` (#1064).
+- Minimum dependency requirements raised to versions already in use across the
+  workspace (no new major/minor, Cargo.lock unchanged): `affinidi-did-common`
+  0.4 -> 0.4.8, `url` 2 -> 2.5.
+
 ## [0.1.4] - 2026-11-11
 
 ### Changed

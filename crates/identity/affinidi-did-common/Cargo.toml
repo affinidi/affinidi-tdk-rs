@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-common"
-version = "0.4.8"
+version = "0.4.9"
 description = "Affinidi DID Library"
 edition.workspace = true
 authors.workspace = true
@@ -24,17 +24,17 @@ k256 = ["affinidi-crypto/k256"]
 key-agreement = ["affinidi-crypto/jose"]
 
 [dependencies]
-affinidi-crypto = "0.3"
+affinidi-crypto = "0.3.2"
 affinidi-encoding = "0.1.7"
 
 # External Crates
-base64 = "0.23"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-url = { version = "2", features = ["serde"] }
-x25519-dalek = { version = "3", features = ["static_secrets"] }
-zeroize = { version = "1", features = ["derive"] }
+base64.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+url = { workspace = true, features = ["serde"] }
+x25519-dalek = { workspace = true, features = ["static_secrets"] }
+zeroize = { workspace = true, features = ["derive"] }
 
 [lints]
 workspace = true

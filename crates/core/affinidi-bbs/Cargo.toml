@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-bbs"
 description = "BBS Signatures (IETF draft-irtf-cfrg-bbs-signatures) implementation over BLS12-381."
-version = "0.4.3"
+version = "0.4.4"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -30,15 +30,18 @@ path = "examples/bbs_selective_disclosure.rs"
 # Taking the types from the crate whose functions consume them makes the match
 # structural. See #775.
 bls12_381_plus = { version = "0.9", features = ["alloc"] }
-hex = "0.4"
-rand = "0.10"
+hex.workspace = true
+rand.workspace = true
 sha2 = "0.10"
-thiserror = "2"
-zeroize = "1"
+thiserror.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
-serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 ## TI7: shared test-vector loader. Path-only (no version) dev-dep — dropped
 ## from the published manifest, so this never reaches crates.io.
 affinidi-tdk-test-support = { path = "../../tdk/affinidi-tdk-test-support" }
+
+[lints]
+workspace = true

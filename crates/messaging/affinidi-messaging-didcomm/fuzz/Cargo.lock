@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-crypto"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -65,7 +65,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-encoding"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "bs58",
  "serde",
@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm"
-version = "0.15.15"
+version = "0.15.16"
 dependencies = [
  "affinidi-crypto",
  "arbitrary",

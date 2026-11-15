@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-trust-lists"
 description = "EU Trusted Lists (ETSI TS 119 612) for eIDAS 2.0 trust infrastructure."
-version = "0.2.1"
+version = "0.2.2"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -21,16 +21,19 @@ name = "browse_trust_list"
 path = "examples/browse_trust_list.rs"
 
 [dependencies]
-base64 = "0.23"
-chrono = { version = "0.4", features = ["serde"] }
+base64.workspace = true
+chrono = { workspace = true, features = ["default", "serde"] }
 quick-xml = { version = "0.42", features = ["serialize"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.11"
-thiserror = "2"
-tracing = "0.1"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
 x509-parser = { version = "0.18", features = ["verify-aws"] }
 
 [dev-dependencies]
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

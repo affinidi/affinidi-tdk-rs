@@ -1,5 +1,19 @@
 # Affinidi mdoc Changelog
 
+## [0.6.1] - 2026-11-15
+
+Workspace lint and dependency housekeeping. No API or behaviour change.
+
+- Dependency versions now come from the root `[workspace.dependencies]`
+  for the external crates shared by five or more workspace members
+  (#1070). The published manifest still names concrete requirements; the
+  resolved dependency graph and every feature selection are unchanged.
+- Now inherits the workspace lints (`[lints] workspace = true`, #1064):
+  `unsafe_code` is denied and the workspace clippy lints apply.
+- The volatile key wipe behind `SessionKeys`'s `Drop` carries a scoped
+  `#[allow(unsafe_code)]` beside its SAFETY comment. No code change.
+- Examples: format arguments inlined (clippy `uninlined_format_args`).
+
 ## [0.6.0] - 2026-11-12
 
 ISO session keys; `MdocBuilder` needs a device key and validity

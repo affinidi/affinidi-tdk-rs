@@ -26,6 +26,10 @@ name: release-guards
 #      `tree/main` / `blob/main`, in tracked Markdown must resolve in the
 #      checkout (#1063). Offline: no network, no build.
 #
+#   6. workspace-lints — every workspace member must inherit `[workspace.lints]`
+#      (`[lints] workspace = true`), so the `unsafe_code = "deny"` policy and the
+#      workspace clippy lints cannot be skipped by omission (#1064).
+#
 # Deliberately standalone and outside the shared affinidi/pipeline-rust workflow
 # (those are org-owned). Pure bash + git + jq + python3 + `cargo metadata`; no
 # Rust build.
@@ -83,3 +87,6 @@ jobs:
 
       - name: Markdown link check (offline)
         run: python3 scripts/check-md-links.py
+
+      - name: Workspace lints guard (every member inherits [workspace.lints])
+        run: bash scripts/check-workspace-lints.sh

@@ -142,7 +142,7 @@ impl ATM {
         let res = self
             .rest_request(reqwest::Method::DELETE, [mediator_url, "/delete"].concat())
             .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Authorization", format!("Bearer {access_token}"))
             .body(msg)
             .send()
             .await

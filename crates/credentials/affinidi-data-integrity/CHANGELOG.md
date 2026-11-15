@@ -1,5 +1,19 @@
 # Affinidi Data Integrity Changelog
 
+## [0.8.10] - 2026-11-15
+
+Workspace lint and dependency housekeeping. No API or behaviour change.
+
+- Dependency versions now come from the root `[workspace.dependencies]`
+  for the external crates shared by five or more workspace members
+  (#1070). The published manifest still names concrete requirements; the
+  resolved dependency graph and every feature selection are unchanged.
+- Now inherits the workspace lints (`[lints] workspace = true`, #1064):
+  `unsafe_code` is denied and the workspace clippy lints apply.
+- Minimum dependency requirements raised to versions already in use across the
+  workspace (no new major/minor, Cargo.lock unchanged): `affinidi-crypto` 0.3
+  -> 0.3.2, `affinidi-did-common` 0.4.7 -> 0.4.8.
+
 ## [0.8.9] - 2026-11-15
 
 `verify_multi` hashes the document once

@@ -1,5 +1,16 @@
 # Affinidi SD-JWT Changelog
 
+## [0.2.2] - 2026-11-15
+
+Workspace lint and dependency housekeeping. No API or behaviour change.
+
+- Dependency versions now come from the root `[workspace.dependencies]`
+  for the external crates shared by five or more workspace members
+  (#1070). The published manifest still names concrete requirements; the
+  resolved dependency graph and every feature selection are unchanged.
+- Now inherits the workspace lints (`[lints] workspace = true`, #1064):
+  `unsafe_code` is denied and the workspace clippy lints apply.
+
 ## [0.2.1] - 2026-11-15
 
 one compact-JWS header decoder

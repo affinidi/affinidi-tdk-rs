@@ -1,6 +1,6 @@
 [package]
 name = "did-ebsi"
-version = "0.1.8"
+version = "0.1.9"
 description = "Implementation of did:ebsi (EBSI DID method for legal entities) in Rust"
 repository.workspace = true
 edition.workspace = true
@@ -19,12 +19,15 @@ crate-type = ["cdylib", "rlib"]
 # 0.4.8: `NetworkError` and `Document::from_json_slice`.
 affinidi-did-common = "0.4.8"
 bs58 = "0.5"
-rand = "0.10"
-reqwest = { version = "0.13", features = ["rustls", "json"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-tracing = "0.1"
+rand.workspace = true
+reqwest = { workspace = true, features = ["default", "rustls", "json"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
+
+[lints]
+workspace = true

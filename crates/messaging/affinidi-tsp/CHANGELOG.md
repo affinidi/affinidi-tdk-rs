@@ -1,5 +1,19 @@
 # Affinidi TSP Changelog
 
+## [0.4.1] - 2026-11-15
+
+Workspace lint and dependency housekeeping. No API or behaviour change.
+
+- Dependency versions now come from the root `[workspace.dependencies]`
+  for the external crates shared by five or more workspace members
+  (#1070). The published manifest still names concrete requirements; the
+  resolved dependency graph and every feature selection are unchanged.
+- Workspace lints now include `unsafe_code = "deny"` (#1064).
+- Minimum dependency requirements raised to versions already in use across the
+  workspace (no new major/minor, Cargo.lock unchanged): `affinidi-did-common`
+  0.4 -> 0.4.8, `affinidi-did-resolver-cache-sdk` 0.8 -> 0.8.55,
+  `affinidi-encoding` 0.1 -> 0.1.7, `url` 2 -> 2.5, `zeroize` 1 -> 1.8.
+
 ## [0.4.0] - 2026-11-15
 
 received messages say whether they were sealed; the adapter's relationship calls return what to send

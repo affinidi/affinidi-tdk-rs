@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.49.0"
+version = "0.49.1"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -30,12 +30,12 @@ trust-tasks-build = "0.1.2"
 
 [dependencies]
 # Affinidi Crates
-affinidi-tdk-common = { version = "0.7", path = "../../tdk/affinidi-tdk-common" }
-affinidi-crypto = { version = "0.3", features = ["jose"] }
-affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15.14" }
+affinidi-tdk-common = { version = "0.7.2", path = "../../tdk/affinidi-tdk-common" }
+affinidi-crypto = { version = "0.3.2", features = ["jose"] }
+affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15.15" }
 # Protocol-agnostic messaging vocabulary (ConnState, the future MessageTransport
 # trait). The websocket transport publishes ConnState over a watch channel.
-affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.12" }
+affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.13" }
 ## The delivery layer's receipt contract (`ReceiptPacker`), which
 ## `delivery::AtmReceiptPacker` implements over this SDK.
 affinidi-messaging-delivery = { path = "../affinidi-messaging-delivery", version = "0.3" }
@@ -46,46 +46,40 @@ trust-tasks-rs = { version = "0.39", default-features = false }
 # Signs every outgoing Trust Task (eddsa-jcs-2022 Data Integrity proof) — the
 # sign-side counterpart of the verifier consumers run.
 trust-tasks-proof = { version = "0.39", default-features = false, features = ["affinidi"] }
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { workspace = true, features = ["clock"] }
 ## Optional: Trust Spanning Protocol (activated by the `tsp` feature)
 affinidi-tsp = { path = "../affinidi-tsp", version = "0.4", optional = true }
 ## Async trait support for the pluggable TSP `RelationshipStore` (tsp feature only).
-async-trait = "0.1"
+async-trait.workspace = true
 ## Pure-TSP auth handler needs the resolver-cache types named by the
 ## `CustomAuthHandler` trait it implements (tsp feature only).
-affinidi-did-resolver-cache-sdk = { version = "0.8.53", path = "../../identity/affinidi-did-resolver-cache-sdk", optional = true }
+affinidi-did-resolver-cache-sdk = { version = "0.8.55", path = "../../identity/affinidi-did-resolver-cache-sdk", optional = true }
 ## The HTTP client type `affinidi-tdk-common` hands out. Named directly so a
 ## non-success response can be read into `HttpStatusError` with its headers.
 ## Named only to recognise hyper's `IncompleteMessage` / closed-connection
 ## errors inside a failed reqwest send (TSP `/inbound` retry). Already in the
 ## graph via reqwest; no features.
 hyper = { version = "1", default-features = false, optional = true }
-reqwest = { version = "0.13", features = [
-  "rustls",
-  "json",
-] }
+reqwest = { workspace = true, features = ["default", "rustls", "json"] }
 ## Source of truth for the mediator protocol vocabulary (ACLs, accounts,
 ## message types, problem reports). The SDK re-exports these so existing
 ## call sites continue to resolve their old paths. A crate of its own so the
 ## SDK depends on nothing from the mediator.
 affinidi-messaging-mediator-types = { path = "../affinidi-messaging-mediator-types", version = "0.1" }
-affinidi-did-authentication = { version = "0.3.16", path = "../../identity/affinidi-did-authentication" }
-affinidi-did-common = { version = "0.4.7", path = "../../identity/affinidi-did-common", features = ["key-agreement"] }
-affinidi-encoding = "0.1"
-affinidi-secrets-resolver = { version = "0.5.18", path = "../../core/affinidi-secrets-resolver" }
+affinidi-did-authentication = { version = "0.3.17", path = "../../identity/affinidi-did-authentication" }
+affinidi-did-common = { version = "0.4.8", path = "../../identity/affinidi-did-common", features = ["key-agreement"] }
+affinidi-encoding = "0.1.7"
+affinidi-secrets-resolver = { version = "0.5.19", path = "../../core/affinidi-secrets-resolver" }
 ## Shared background-task supervision (delete-handler restart + health)
 affinidi-task-utils = "0.1"
 
 # External Crates
-ahash = { version = "0.8", features = ["serde"] }
-base64 = "0.23"
-futures-util = "0.3"
+ahash = { workspace = true, features = ["serde"] }
+base64.workspace = true
+futures-util = { workspace = true, features = ["default"] }
 # Non-cryptographic jitter for WebSocket reconnect backoff (anti-thundering-herd)
-rand = "0.10"
-rustls = { version = "0.23", default-features = false, features = [
-  "aws_lc_rs",
-  "tls12",
-] }
+rand.workspace = true
+rustls = { workspace = true, features = ["aws_lc_rs", "tls12"] }
 # The platform's trust roots, for a websocket TLS config that adds
 # `with_ssl_certificates` roots to them (the same source tokio-tungstenite's
 # `rustls-tls-native-roots` default connector uses; already in the graph).
@@ -94,21 +88,21 @@ rustls-native-certs = "0.8"
 # `rustls::pki_types`) rather than rustls-pemfile: that crate is archived and
 # unmaintained (RUSTSEC-2025-0134), and its final release is a thin wrapper
 # over exactly this code. No replacement dependency is needed.
-serde = { version = "1", features = ["derive", "rc"] }
-serde_json = "1"
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json.workspace = true
 sha256 = "1"
-thiserror = "2"
+thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
-tracing = { version = "0.1", features = ["valuable"] }
-uuid = { version = "1", features = ["v4", "fast-rng"] }
+tracing = { workspace = true, features = ["valuable"] }
+uuid = { workspace = true, features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["net", "io-util", "test-util"] }
 # A did:scid sender, from a signed did:webvh log served on loopback.
-didwebvh-rs = "0.8"
-affinidi-did-resolver-cache-sdk = { version = "0.8.53", path = "../../identity/affinidi-did-resolver-cache-sdk" }
-clap = { version = "4", features = ["derive"] }
+didwebvh-rs = "0.8.1"
+affinidi-did-resolver-cache-sdk = { version = "0.8.55", path = "../../identity/affinidi-did-resolver-cache-sdk" }
+clap = { workspace = true, features = ["derive"] }
 console = "0.16"
 dialoguer = "0.12"
 rcgen = { version = "0.14", default-features = false, features = [
@@ -120,3 +114,6 @@ time = "0.3"
 # A TLS websocket server on loopback, to prove `with_ssl_certificates` roots
 # reach the websocket connector.
 tokio-rustls = "0.26"
+
+[lints]
+workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-traits"
-version = "0.1.5"
+version = "0.1.6"
 description = "Resolver traits for pluggable DID resolution"
 edition.workspace = true
 authors.workspace = true
@@ -15,10 +15,10 @@ rust-version.workspace = true
 [dependencies]
 # 0.4.8: `NetworkError`, which `NetworkFetchError` converts from.
 affinidi-did-common = "0.4.8"
-thiserror = "2"
+thiserror.workspace = true
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true

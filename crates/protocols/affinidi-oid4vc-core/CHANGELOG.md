@@ -1,5 +1,19 @@
 # Affinidi OID4VC Core Changelog
 
+## [0.1.13] - 2026-11-15
+
+Workspace lint and dependency housekeeping. No API or behaviour change.
+
+- Dependency versions now come from the root `[workspace.dependencies]`
+  for the external crates shared by five or more workspace members
+  (#1070). The published manifest still names concrete requirements; the
+  resolved dependency graph and every feature selection are unchanged.
+- Now inherits the workspace lints (`[lints] workspace = true`, #1064):
+  `unsafe_code` is denied and the workspace clippy lints apply.
+- Minimum dependency requirements raised to versions already in use across the
+  workspace (no new major/minor, Cargo.lock unchanged): `affinidi-crypto` 0.3
+  -> 0.3.2, `url` 2 -> 2.5, `zeroize` 1 -> 1.8.
+
 ## [0.1.12] - 2026-11-15
 
 SD-JWT adapters for the raw-bytes signer/verifier

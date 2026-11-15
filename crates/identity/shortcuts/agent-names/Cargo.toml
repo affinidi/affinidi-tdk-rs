@@ -1,6 +1,6 @@
 [package]
 name = "agent-names"
-version = "0.1.4"
+version = "0.1.5"
 description = "Agent Name (DID shortcut) parsing, resolution and verification for the Affinidi TDK"
 repository.workspace = true
 edition.workspace = true
@@ -16,21 +16,16 @@ rust-version.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-affinidi-did-common = "0.4"
+affinidi-did-common = "0.4.8"
 affinidi-net-guard = "0.1.1"
-reqwest = { version = "0.13", default-features = false, features = [
-  "rustls",
-  "charset",
-  "http2",
-  "json",
-] }
-serde_json = "1"
-thiserror = "2"
-tracing = "0.1"
-url = "2"
+reqwest = { workspace = true, features = ["rustls", "charset", "http2", "json"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+url.workspace = true
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wiremock = "0.6"
 
 [lints]

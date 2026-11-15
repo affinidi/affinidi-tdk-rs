@@ -146,9 +146,9 @@ fn generate_did_peer() -> Result<(String, Vec<Secret>), Box<dyn std::error::Erro
     let (did_peer, _) = DIDCommon::generate_peer(&keys, None)?;
     let did_str = did_peer.to_string();
 
-    v_key.id = format!("{}#key-1", did_str);
-    e_secp256k1.id = format!("{}#key-2", did_str);
-    e_p256.id = format!("{}#key-3", did_str);
+    v_key.id = format!("{did_str}#key-1");
+    e_secp256k1.id = format!("{did_str}#key-2");
+    e_p256.id = format!("{did_str}#key-3");
 
     Ok((did_str, vec![v_key, e_secp256k1, e_p256]))
 }

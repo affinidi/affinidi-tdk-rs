@@ -530,6 +530,7 @@ mod tests {
     // SAFETY: env::set_var/remove_var are unsafe in Rust 2024 because env vars are
     // process-global shared state. We serialize access via ENV_MUTEX so no concurrent
     // reads can race with our modifications.
+    #[allow(unsafe_code)]
     fn clear_proxy_env() {
         for var in [
             "HTTPS_PROXY",
@@ -545,6 +546,8 @@ mod tests {
         }
     }
 
+    // SAFETY: as for `clear_proxy_env`; callers hold ENV_MUTEX.
+    #[allow(unsafe_code)]
     fn set_env(key: &str, val: &str) {
         unsafe {
             env::set_var(key, val);

@@ -1,5 +1,20 @@
 # Affinidi DID Resolver Cache Server
 
+## [0.11.1] - 2026-11-15
+
+Workspace lint and dependency housekeeping. No API or behaviour change.
+
+- Dependency versions now come from the root `[workspace.dependencies]`
+  for the external crates shared by five or more workspace members
+  (#1070). The published manifest still names concrete requirements; the
+  resolved dependency graph and every feature selection are unchanged.
+- Workspace lints now include `unsafe_code = "deny"` (#1064).
+- Minimum dependency requirements raised to versions already in use across the
+  workspace (no new major/minor, Cargo.lock unchanged): `affinidi-did-common`
+  0.4 -> 0.4.8, `affinidi-did-resolver-cache-sdk` 0.8.47 -> 0.8.55,
+  `affinidi-secrets-resolver` 0.5 -> 0.5.19, `agent-names` 0.1.2 -> 0.1.4,
+  `didwebvh-rs` 0.8 -> 0.8.1.
+
 ## [0.11.0] - 2026-11-15
 
 concurrent WebSocket requests; strict config values; HTTP statuses

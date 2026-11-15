@@ -1,5 +1,17 @@
 # Affinidi Crypto Changelog
 
+## [0.3.3] - 2026-11-15
+
+Workspace lint and dependency housekeeping. No API or behaviour change.
+
+- Dependency versions now come from the root `[workspace.dependencies]`
+  for the external crates shared by five or more workspace members
+  (#1070). The published manifest still names concrete requirements; the
+  resolved dependency graph and every feature selection are unchanged.
+- Workspace lints now include `unsafe_code = "deny"` (#1064).
+- Minimum dependency requirements raised to versions already in use across the
+  workspace (no new major/minor, Cargo.lock unchanged): `zeroize` 1 -> 1.8.
+
 ## [0.3.2] - 2026-11-15
 
 public JWKs drop `"d": null`; multikeys are length-checked
