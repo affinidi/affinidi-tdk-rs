@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.33.0 — affinidi-messaging-sdk 0.48 and affinidi-tsp 0.4
+
+- **Changed (breaking):** requires `affinidi-messaging-sdk` 0.48 and
+  `affinidi-tsp` 0.4, whose types it re-exports. No source change.
+
+
 ## Unreleased (0.32.0) — affinidi-messaging-sdk 0.47
 
 - **Changed (breaking):** requires `affinidi-messaging-sdk` 0.47

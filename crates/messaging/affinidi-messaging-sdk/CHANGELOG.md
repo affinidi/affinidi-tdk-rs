@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.48.0 — affinidi-tsp 0.4 and affinidi-messaging-delivery 0.3
+
+- **Changed (breaking):** requires `affinidi-tsp` 0.4, whose types it
+  re-exports (`RelationshipState`, `ControlMessage`), and
+  `affinidi-messaging-delivery` 0.3, whose `ReceiptPacker` it implements. No
+  source change in this crate.
+- **Behaviour notes (R3.6), from the dependencies:** a TSP `ReceivedMessage`
+  now carries `confidential`; the delivery layer's `Guaranteed` sends are
+  idempotent on their key, `subscribe()` applies backpressure instead of
+  dropping acked messages, and outbox transitions are guarded. See those
+  crates' changelogs.
+
+
 ## 0.47.2 — `queue/purge` confirms a dry run by when it was taken (`storedBefore`, `selectedAt`)
 
 - The vendored `messaging/queue/purge` 0.1 bundle is refreshed to the

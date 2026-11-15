@@ -112,9 +112,11 @@ impl MessagingProtocol for DIDCommAdapter {
                 authenticated,
                 sender_kid,
                 recipient_kid,
-                // New fields (non_repudiation /
-                // signer_kid) aren't surfaced through this adapter yet —
-                // adopting non-repudiation here is follow-up work.
+                // `non_repudiation` / `signer_kid` have no slot in the
+                // protocol-agnostic `ReceivedMessage`. A sign-then-encrypt
+                // message still unpacks here: `DIDCommAgent::unpack` verifies
+                // the inner JWS against the sender's signing key. Callers that
+                // need the non-repudiation fact use the agent directly.
                 ..
             } => {
                 // Extract payload from message body
@@ -203,13 +205,17 @@ impl MessagingProtocol for DIDCommAdapter {
         &self,
         packed: &[u8],
         next_hop: &str,
-        _final_recipient: &str,
+        final_recipient: &str,
     ) -> Result<Vec<u8>, MessagingError> {
         let packed_str = std::str::from_utf8(packed)
             .map_err(|e| MessagingError::Pack(format!("invalid UTF-8: {e}")))?;
 
         // Wrap in a forward message
-        let forward_msg = forward::wrap_in_forward(next_hop, packed_str)
+        // The forward's `next` names where the relay should deliver the inner
+        // message — the final recipient — while the forward itself is
+        // encrypted to the relay (`next_hop`). Putting `next_hop` in `next`
+        // told the mediator to deliver the message to itself (#1031).
+        let forward_msg = forward::wrap_in_forward(final_recipient, packed_str)
             .map_err(|e| MessagingError::Pack(e.to_string()))?;
 
         // Encrypt the forward message for the next hop (anoncrypt)
@@ -448,6 +454,40 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(state, RelationshipState::Bidirectional);
+    }
+
+    /// #1031: the forward is encrypted to the relay but its `next` names the
+    /// final recipient, and the inner message opens for that recipient.
+    #[tokio::test]
+    async fn wrap_for_relay_addresses_the_final_recipient() {
+        let (mut alice, bob) = setup();
+        let mediator = PrivateIdentity::generate("did:example:mediator");
+        alice.agent_mut().add_peer(mediator.to_resolved());
+        let mut mediator_agent = DIDCommAgent::new();
+        mediator_agent.add_identity(mediator);
+
+        let packed = alice
+            .pack(b"via the relay", "did:example:alice", "did:example:bob")
+            .await
+            .unwrap();
+        let relayed = alice
+            .wrap_for_relay(&packed, "did:example:mediator", "did:example:bob")
+            .await
+            .unwrap();
+
+        let opened = mediator_agent
+            .unpack(std::str::from_utf8(&relayed).unwrap(), None)
+            .unwrap();
+        let forward_msg = match opened {
+            UnpackResult::Encrypted { message, .. } => message,
+            _ => panic!("expected the relay to receive an encrypted forward"),
+        };
+        let (next, inner) = forward::unwrap_forward(&forward_msg).unwrap();
+        assert_eq!(next, "did:example:bob");
+
+        let received = bob.unpack(inner.as_bytes()).await.unwrap();
+        assert_eq!(received.payload, b"via the relay");
+        assert_eq!(received.sender.as_deref(), Some("did:example:alice"));
     }
 
     #[tokio::test]

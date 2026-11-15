@@ -113,6 +113,7 @@ impl Display for AccessListModeType {
 /// ```
 ///
 /// Bits 19-63 are unassigned and must stay zero.
+/// [`MediatorACLSet::from_u64`] clears them.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct MediatorACLSet {
     access_list_mode: AccessListModeType,
@@ -143,6 +144,9 @@ impl PartialEq for MediatorACLSet {
         self.acl == other.acl
     }
 }
+
+/// The ACL bits that carry meaning (0-18); see [`MediatorACLSet`].
+const ASSIGNED_ACL_BITS: u64 = (1 << 19) - 1;
 
 impl MediatorACLSet {
     /// Takes a comma separated string of ACL rules and converts it to an ACLSet
@@ -381,9 +385,13 @@ impl MediatorACLSet {
     }
 
     /// Loads u64 integer and ensures it is in little endian format
+    ///
+    /// Bits 19-63 are unassigned and are cleared: a value carrying them (from
+    /// a newer mediator, or a corrupted record) is read as its assigned bits
+    /// only, so it compares equal to, and round-trips as, the ACL it enforces.
     pub fn from_u64(acl: u64) -> MediatorACLSet {
         let mut acls = MediatorACLSet {
-            acl: acl.to_le(),
+            acl: (acl & ASSIGNED_ACL_BITS).to_le(),
             ..Default::default()
         };
 
@@ -1436,5 +1444,17 @@ mod tests {
                 bits.count_ones()
             );
         }
+    }
+
+    #[test]
+    fn from_u64_clears_unassigned_bits() {
+        let assigned = MediatorACLSet::from_u64(0b101);
+        let with_junk = MediatorACLSet::from_u64(0b101 | (1 << 19) | (1 << 63));
+        assert_eq!(with_junk.to_u64(), 0b101);
+        assert_eq!(with_junk, assigned);
+        assert_eq!(
+            MediatorACLSet::from_u64(u64::MAX).to_u64(),
+            ASSIGNED_ACL_BITS
+        );
     }
 }

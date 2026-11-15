@@ -10,17 +10,18 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use affinidi_messaging_core::{
     ConnState, DeliveryScope, Inbound, InboundAck, MessageTransport, MessagingError, OutboxStatus,
     ReceivedMessage, SendReceipt, TransportKind,
 };
 use futures_util::stream::{self, BoxStream, StreamExt};
-use tokio::sync::{broadcast, mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::ack::{AckQueue, AckStats};
+use crate::clock::now_unix_ms;
 use crate::confirm::confirm_delivered_by;
 use crate::outbox::{Key, OutboxEntry, OutboxState, OutboxStore};
 use crate::reach::ReceiptReach;
@@ -37,9 +38,13 @@ pub enum Delivery {
     /// the window expires. For credential issuance, consent/step-up pushes,
     /// registry writes, webvh publishes.
     Guaranteed {
-        /// Dedup anchor; `None` derives a unique key from the destination.
+        /// Dedup anchor: a send under a key that already has an outbox entry
+        /// enqueues and transmits nothing, and reports that entry's state.
+        /// `None` derives a unique key, returned in
+        /// [`Sent::Accepted::idempotency_key`](Sent::Accepted).
         idempotency_key: Option<Key>,
-        /// `None` = drain in parallel; `Some(k)` = per-`k` FIFO.
+        /// `None` = no ordering constraint; `Some(k)` = per-`k` FIFO of
+        /// hop-acceptance (see [`OutboxEntry::ordering_key`]).
         ordering_key: Option<Key>,
         /// The delivery window — the acceptable recovery time before the entry
         /// settles visibly (never a silent success).
@@ -49,18 +54,66 @@ pub enum Delivery {
 
 /// The outcome of a send. Distinguishes handed-off from confirmed, so a caller
 /// can no longer log a merely-queued message as "delivered".
+///
+/// A `Guaranteed` send always names its idempotency key — the one the caller
+/// supplied, or the one generated for it — so the caller can follow the
+/// delivery with [`MessagingService::delivery_state`]. A `Guaranteed` send
+/// under a key that already has an outbox entry reports that entry's state
+/// rather than enqueueing it again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Sent {
-    /// Hop-accepted (`BestEffort`) or durably queued (`Guaranteed`) — handed
-    /// off, **not** confirmed delivered.
-    Accepted,
-    /// Positive end-to-end evidence received. Emitted once §5a confirmation
-    /// lands; a `Guaranteed` send returns `Accepted` until then.
-    Delivered,
-    /// The delivery window passed with no evidence possible — a truthful "we
-    /// can't know".
-    Unconfirmed,
+    /// Hop-accepted (`BestEffort`, `idempotency_key: None`), or held in the
+    /// outbox and not yet settled (`Guaranteed`: queued, or already `Sent`) —
+    /// handed off, **not** confirmed delivered.
+    Accepted {
+        /// The outbox key of a `Guaranteed` send; `None` for `BestEffort`.
+        idempotency_key: Option<Key>,
+    },
+    /// A `Guaranteed` send whose key already settled `Delivered`: positive
+    /// end-to-end evidence was received. Nothing was sent again.
+    Delivered {
+        /// The outbox key.
+        idempotency_key: Key,
+    },
+    /// A `Guaranteed` send whose key already settled `Unconfirmed`: the window
+    /// passed with no evidence — a truthful "we can't know". Nothing was sent
+    /// again; [`MessagingService::retry`] re-queues it.
+    Unconfirmed {
+        /// The outbox key.
+        idempotency_key: Key,
+    },
+    /// A `Guaranteed` send whose key already settled `Failed`. Nothing was sent
+    /// again; [`MessagingService::retry`] re-queues it.
+    Failed {
+        /// The outbox key.
+        idempotency_key: Key,
+    },
+}
+
+impl Sent {
+    /// The outbox idempotency key, for a `Guaranteed` send.
+    pub fn idempotency_key(&self) -> Option<&str> {
+        match self {
+            Sent::Accepted { idempotency_key } => idempotency_key.as_deref(),
+            Sent::Delivered { idempotency_key }
+            | Sent::Unconfirmed { idempotency_key }
+            | Sent::Failed { idempotency_key } => Some(idempotency_key),
+        }
+    }
+
+    /// The outcome a `Guaranteed` send reports for an entry in `state`.
+    fn of_entry(idempotency_key: Key, state: OutboxState) -> Self {
+        match state {
+            OutboxState::Delivered => Sent::Delivered { idempotency_key },
+            OutboxState::Unconfirmed => Sent::Unconfirmed { idempotency_key },
+            OutboxState::Failed => Sent::Failed { idempotency_key },
+            // Queued, Sent, or a state added later: held, not settled.
+            _ => Sent::Accepted {
+                idempotency_key: Some(idempotency_key),
+            },
+        }
+    }
 }
 
 /// Aggregated messaging connectivity for a health endpoint — read off each
@@ -90,19 +143,26 @@ struct Waiter {
 
 type WaiterMap = Arc<Mutex<HashMap<String, Waiter>>>;
 
-/// Buffered unsolicited inbound messages per subscriber before a slow consumer
-/// starts lagging.
+/// Unsolicited inbound messages buffered per subscriber.
 ///
-/// A lagging consumer loses the **oldest** buffered messages, and loses them for
-/// good: the dispatcher acks each message once it has been handed to this
-/// buffer, and an ack is a delete at the mediator, so an overwritten entry
-/// exists nowhere else. The old note here claimed "at-least-once, dedup on the
-/// key" — that is true of redelivery *before* an ack, and this is after one.
+/// Each subscriber has its own bounded queue. When one is full the dispatcher
+/// waits, up to [`SUBSCRIBER_SEND_TIMEOUT`], for that subscriber to make room:
+/// backpressure, not loss. A message is acked (deleted at the mediator), and
+/// receipted, only once every live subscriber has taken it into its queue;
+/// one that a subscriber could not take in time is left unacked, so the
+/// mediator offers it again. (This replaced a `broadcast` ring that overwrote
+/// the oldest message of a slow subscriber *after* it had been acked.)
 ///
-/// So this is the one lossy step left in the inbound path, and the only defence
-/// is a consumer that drains promptly. `subscribe()` logs at `error!` when it
-/// happens rather than skipping the gap in silence.
+/// Taken into a queue is not processed: a message buffered here when the
+/// process stops is gone, ack and receipt already sent. Durable handoff — an
+/// inbox store, or an ack the application gives after its own persist — is
+/// not built yet.
 const SUBSCRIBE_BUFFER: usize = 256;
+
+/// How long the dispatcher waits for a full subscriber queue before leaving
+/// the message unacked for redelivery. While it waits, nothing else is
+/// dispatched — the cost of not dropping messages a slow consumer has not read.
+pub(crate) const SUBSCRIBER_SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Inbound messages queued between the transports and the dispatcher.
 ///
@@ -134,7 +194,9 @@ struct ServiceInner {
     primary: Mutex<Option<TransportId>>,
     outbox: Arc<dyn OutboxStore>,
     waiters: WaiterMap,
-    subscribers: broadcast::Sender<Inbound>,
+    /// One bounded queue per `subscribe()` stream; closed ones are pruned as
+    /// they are found.
+    subscribers: Mutex<Vec<mpsc::Sender<Inbound>>>,
     receipt_packer: Option<Arc<dyn ReceiptPacker>>,
     /// Recipients whose receipts have settled one of this service's deliveries
     /// — the recipients known to send receipts (VTI-TRN-064 item 1).
@@ -337,9 +399,14 @@ impl MessagingService {
     /// Installs `transport` as the `"default"` primary.
     ///
     /// A receipt is sent only for a message that asked, only to the sender the
-    /// transport authenticated, only once the message has been handed off, and
-    /// over the transport it arrived on (VTI-TRN-061). A message that did not
-    /// ask gets nothing.
+    /// transport authenticated, only once the message has been handed off — to
+    /// a `request` waiter, or into every subscriber's queue — and over the
+    /// transport it arrived on (VTI-TRN-061). A message that did not ask gets
+    /// nothing; one that nobody took is left unacked and gets no receipt.
+    ///
+    /// Handed off is not persisted: the receipt says the message reached this
+    /// process's consumer queue, not that the application has stored it. See
+    /// [`subscribe`](Self::subscribe).
     pub fn with_receipts(
         transport: Arc<dyn MessageTransport>,
         outbox: Arc<dyn OutboxStore>,
@@ -364,7 +431,6 @@ impl MessagingService {
         receipt_packer: Option<Arc<dyn ReceiptPacker>>,
     ) -> Self {
         let waiters: WaiterMap = Arc::new(Mutex::new(HashMap::new()));
-        let (subscribers, _) = broadcast::channel(SUBSCRIBE_BUFFER);
         let (inbound_tx, inbound_rx) = mpsc::channel(INBOUND_BUFFER);
         let (fallback_conn, _) = watch::channel(ConnState::Disconnected);
 
@@ -373,7 +439,7 @@ impl MessagingService {
             primary: Mutex::new(None),
             outbox,
             waiters,
-            subscribers,
+            subscribers: Mutex::new(Vec::new()),
             receipt_packer,
             reach: Arc::new(ReceiptReach::new()),
             inbound_tx,
@@ -461,9 +527,20 @@ impl MessagingService {
     /// - `BestEffort`: one truthful `transport.send()` over the primary;
     ///   `Ok(Accepted)` on hop-accept, `Err` if the frame wasn't transmitted (or
     ///   there is no primary). No outbox row.
-    /// - `Guaranteed`: enqueue a durable outbox entry (the drain sends + retries)
-    ///   and return `Accepted` (queued). Confirmation upgrades it to `Delivered`
-    ///   via the outbox once §5a lands.
+    /// - `Guaranteed`: enqueue a durable outbox entry and return
+    ///   `Accepted { idempotency_key }`. **Nothing is transmitted here**: the
+    ///   host must run [`drain_loop`](crate::drain_loop) over
+    ///   [`primary_handle`](Self::primary_handle) (or
+    ///   [`drain_loop_via`](crate::drain_loop_via) for `send_via`), and settles
+    ///   entries with the confirmation, outbox-drain and reap loops — see the
+    ///   crate docs for the wiring. Follow the outcome with
+    ///   [`delivery_state`](Self::delivery_state).
+    ///
+    ///   If the key already has an entry, nothing is enqueued or sent again:
+    ///   the existing entry's state is returned (`Accepted` while it is queued
+    ///   or awaiting evidence, else `Delivered` / `Unconfirmed` / `Failed`).
+    ///   To send a settled `Unconfirmed` or `Failed` entry again, use
+    ///   [`retry`](Self::retry).
     pub async fn send(
         &self,
         to: &str,
@@ -477,27 +554,17 @@ impl MessagingService {
                     .primary_transport()
                     .ok_or_else(|| MessagingError::Transport("no primary transport".into()))?;
                 transport.send(to, packed).await?;
-                Ok(Sent::Accepted)
+                Ok(Sent::Accepted {
+                    idempotency_key: None,
+                })
             }
             Delivery::Guaranteed {
                 idempotency_key,
                 ordering_key,
                 deliver_by,
             } => {
-                let now = now_unix_ms();
-                let key = idempotency_key.unwrap_or_else(|| default_key(to, now));
-                let mut entry = OutboxEntry::new(
-                    key,
-                    to,
-                    packed,
-                    now,
-                    now.saturating_add(deliver_by.as_millis() as u64),
-                );
-                entry.ordering_key = ordering_key;
-                self.inner.outbox.put(entry).await.map_err(|e| {
-                    MessagingError::Transport(format!("outbox enqueue failed: {e}"))
-                })?;
-                Ok(Sent::Accepted)
+                self.enqueue(to, packed, idempotency_key, ordering_key, deliver_by, None)
+                    .await
             }
         }
     }
@@ -533,30 +600,113 @@ impl MessagingService {
         match delivery {
             Delivery::BestEffort => {
                 transport.send(to, packed).await?;
-                Ok(Sent::Accepted)
+                Ok(Sent::Accepted {
+                    idempotency_key: None,
+                })
             }
             Delivery::Guaranteed {
                 idempotency_key,
                 ordering_key,
                 deliver_by,
             } => {
-                let now = now_unix_ms();
-                let key = idempotency_key.unwrap_or_else(|| default_key(to, now));
-                let mut entry = OutboxEntry::new(
-                    key,
+                self.enqueue(
                     to,
                     packed,
-                    now,
-                    now.saturating_add(deliver_by.as_millis() as u64),
-                );
-                entry.ordering_key = ordering_key;
-                entry.via = Some(transport_id.to_string());
-                self.inner.outbox.put(entry).await.map_err(|e| {
-                    MessagingError::Transport(format!("outbox enqueue failed: {e}"))
-                })?;
-                Ok(Sent::Accepted)
+                    idempotency_key,
+                    ordering_key,
+                    deliver_by,
+                    Some(transport_id),
+                )
+                .await
             }
         }
+    }
+
+    /// The `Guaranteed` half of [`send`](Self::send) and
+    /// [`send_via`](Self::send_via): insert the entry unless its key exists,
+    /// and report the outcome.
+    async fn enqueue(
+        &self,
+        to: &str,
+        packed: Vec<u8>,
+        idempotency_key: Option<Key>,
+        ordering_key: Option<Key>,
+        deliver_by: Duration,
+        via: Option<&str>,
+    ) -> Result<Sent, MessagingError> {
+        let now = now_unix_ms().ok_or_else(|| {
+            MessagingError::Transport(
+                "system clock is before the unix epoch; refusing to enqueue with a bogus \
+                 delivery window"
+                    .into(),
+            )
+        })?;
+        let key = idempotency_key.unwrap_or_else(|| default_key(to, now));
+        let mut entry = OutboxEntry::new(
+            key.clone(),
+            to,
+            packed,
+            now,
+            now.saturating_add(deliver_by.as_millis().min(u64::MAX as u128) as u64),
+        );
+        entry.ordering_key = ordering_key;
+        entry.via = via.map(str::to_string);
+        let existing = self
+            .inner
+            .outbox
+            .insert_if_absent(entry)
+            .await
+            .map_err(|e| MessagingError::Transport(format!("outbox enqueue failed: {e}")))?;
+        Ok(match existing {
+            None => Sent::Accepted {
+                idempotency_key: Some(key),
+            },
+            Some(existing) => {
+                tracing::debug!(
+                    idempotency_key = %key,
+                    state = ?existing.state,
+                    "Guaranteed send under an existing idempotency key; not enqueued again"
+                );
+                Sent::of_entry(key, existing.state)
+            }
+        })
+    }
+
+    /// Send a settled `Unconfirmed` or `Failed` `Guaranteed` entry again, with
+    /// a fresh delivery window of `deliver_by` from now: it returns to
+    /// `Queued` with its attempts and evidence reset, and the drain sends it
+    /// under the same idempotency key.
+    ///
+    /// `Ok(false)` if there is no such entry or it is in any other state — in
+    /// flight, or `Delivered` — which is left untouched. The explicit retry
+    /// that [`send`](Self::send) no longer performs by overwriting an entry.
+    pub async fn retry(
+        &self,
+        idempotency_key: &str,
+        deliver_by: Duration,
+    ) -> Result<bool, MessagingError> {
+        let now = now_unix_ms().ok_or_else(|| {
+            MessagingError::Transport("system clock is before the unix epoch".into())
+        })?;
+        let deliver_by_ms = now.saturating_add(deliver_by.as_millis().min(u64::MAX as u128) as u64);
+        self.inner
+            .outbox
+            .transition(
+                idempotency_key,
+                &[OutboxState::Unconfirmed, OutboxState::Failed],
+                Box::new(move |e| {
+                    e.state = OutboxState::Queued;
+                    e.attempts = 0;
+                    e.next_attempt_at_ms = now;
+                    e.deliver_by_ms = deliver_by_ms;
+                    e.hop_id = None;
+                    e.outbox_observed = false;
+                    e.unconfirmed_reason = None;
+                    e.settled_at_ms = None;
+                }),
+            )
+            .await
+            .map_err(|e| MessagingError::Transport(format!("outbox retry failed: {e}")))
     }
 
     /// Send `packed` over the primary and await a reply correlated by
@@ -662,39 +812,31 @@ impl MessagingService {
 
     /// Subscribe to inbound messages NOT claimed by a `request` waiter
     /// (unsolicited pushes, server-initiated requests), merged across **all**
-    /// installed transports. Each subscriber gets its own stream. Delivery is
-    /// at-least-once — a consumer must dedup on the message's idempotency key.
+    /// installed transports. Each subscriber gets its own stream and its own
+    /// bounded queue, and sees every such message.
+    ///
+    /// The dispatcher acks a message — deleting it at the mediator — and sends
+    /// any receipt it asked for once every live subscriber's queue has taken
+    /// it. A subscriber that stops reading holds the dispatcher back (up to
+    /// [`SUBSCRIBER_SEND_TIMEOUT`] per message, after which the message is left
+    /// unacked for the mediator to redeliver) rather than losing messages.
+    /// Drop the stream to unsubscribe.
+    ///
+    /// Delivery to a subscriber is at-least-once: a message left unacked is
+    /// offered again, and may already have reached a subscriber that did take
+    /// it. The layer does not deduplicate inbound messages; a consumer that
+    /// must act once deduplicates on an identifier in the message itself. A
+    /// message still in a subscriber's queue when the process stops was
+    /// already acked and is lost — durable handoff is not built yet.
     pub fn subscribe(&self) -> BoxStream<'static, Inbound> {
-        let rx = self.inner.subscribers.subscribe();
+        let (tx, rx) = mpsc::channel(SUBSCRIBE_BUFFER);
+        self.inner
+            .subscribers
+            .lock()
+            .expect("subscribers mutex")
+            .push(tx);
         Box::pin(stream::unfold(rx, |mut rx| async move {
-            loop {
-                match rx.recv().await {
-                    Ok(item) => return Some((item, rx)),
-                    // A slow subscriber that fell behind. The gap is skipped —
-                    // `broadcast` has already overwritten those messages and
-                    // there is no way to get them back from here.
-                    //
-                    // Reported, not swallowed. This used to `continue` in
-                    // silence, which made the one unrecoverable loss in the
-                    // inbound path also the only one with no trace: the
-                    // dispatcher had already acked (deleted) each of those
-                    // messages at the mediator, so `skipped` is a count of
-                    // application messages that no longer exist anywhere. An
-                    // operator seeing this should make the consumer drain
-                    // faster or raise `SUBSCRIBE_BUFFER`.
-                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                        tracing::error!(
-                            skipped,
-                            buffer = SUBSCRIBE_BUFFER,
-                            "subscriber fell behind: {skipped} inbound message(s) were \
-                             overwritten and are unrecoverable — this consumer is not \
-                             draining fast enough"
-                        );
-                        continue;
-                    }
-                    Err(broadcast::error::RecvError::Closed) => return None,
-                }
-            }
+            rx.recv().await.map(|item| (item, rx))
         }))
     }
 
@@ -943,8 +1085,8 @@ async fn run_dispatcher(inner: Arc<ServiceInner>, mut rx: mpsc::Receiver<(Transp
                 Ok(true) => {
                     // The receipt named a delivery addressed to its sender and
                     // settled it (VTI-TRN-062): that recipient sends receipts.
-                    if let Some(peer) = sender.as_deref() {
-                        inner.reach.record(peer, now_unix_ms());
+                    if let (Some(peer), Some(now)) = (sender.as_deref(), now_unix_ms()) {
+                        inner.reach.record(peer, now);
                     }
                     tracing::debug!(idempotency_key = %key, "receipt confirmed delivery")
                 }
@@ -997,9 +1139,9 @@ async fn run_dispatcher(inner: Arc<ServiceInner>, mut rx: mpsc::Receiver<(Transp
             // delivering to whoever else is listening rather than discarding.
             Some(tx) => match tx.send(item.message.clone()) {
                 Ok(()) => true,
-                Err(_) => deliver_unsolicited(&inner, item),
+                Err(_) => deliver_unsolicited(&inner, item).await,
             },
-            None => deliver_unsolicited(&inner, item),
+            None => deliver_unsolicited(&inner, item).await,
         };
 
         // Ack once, HERE, after handoff — over the transport the message arrived
@@ -1009,10 +1151,11 @@ async fn run_dispatcher(inner: Arc<ServiceInner>, mut rx: mpsc::Receiver<(Transp
         // unconditionally, which broke the contract `Inbound` states and the
         // transport adapter sets `auto_delete = false` to honour: an ack is a
         // delete at the mediator, so acking a message nobody received destroys
-        // it. The `send` above returns `Err` precisely when there was no
-        // consumer — no subscriber installed yet at startup, or the host on its
-        // way down — and those are the moments a client is most likely to be
-        // handed a membership credential it will never see again.
+        // it. Handoff fails precisely when there was no consumer — no
+        // subscriber installed yet at startup, or the host on its way down — or
+        // a subscriber could not take it in time, and those are the moments a
+        // client is most likely to be handed a membership credential it will
+        // never see again.
         //
         // Leaving it unacked is the whole point of the contract: the mediator
         // keeps its copy and offers it again on the next pickup, where a
@@ -1068,13 +1211,40 @@ fn take_waiter(
     }
 }
 
-/// Offer an unsolicited inbound to `subscribe()` consumers.
+/// Offer an unsolicited inbound to every `subscribe()` consumer.
 ///
-/// Returns whether anyone actually received it — `broadcast::send` reports `Err`
-/// when there are no subscribers, and that is the signal
-/// [`run_dispatcher`] needs to decide whether acking would be honest.
-fn deliver_unsolicited(inner: &Arc<ServiceInner>, item: Inbound) -> bool {
-    inner.subscribers.send(item).is_ok()
+/// Returns whether it was handed off: at least one live subscriber, and every
+/// live subscriber's queue took it. A full queue is waited on for up to
+/// [`SUBSCRIBER_SEND_TIMEOUT`]; a subscriber that still has no room fails the
+/// handoff, and [`run_dispatcher`] then leaves the message unacked. A
+/// subscriber that took it gets it again on redelivery — duplicates rather than
+/// loss. Subscribers whose stream was dropped are pruned.
+async fn deliver_unsolicited(inner: &Arc<ServiceInner>, item: Inbound) -> bool {
+    let subscribers: Vec<mpsc::Sender<Inbound>> = {
+        let mut subscribers = inner.subscribers.lock().expect("subscribers mutex");
+        subscribers.retain(|tx| !tx.is_closed());
+        subscribers.clone()
+    };
+    let mut taken = 0usize;
+    let mut refused = 0usize;
+    for tx in &subscribers {
+        match tokio::time::timeout(SUBSCRIBER_SEND_TIMEOUT, tx.send(item.clone())).await {
+            Ok(Ok(())) => taken += 1,
+            // Dropped since the snapshot: no longer a subscriber.
+            Ok(Err(_closed)) => {}
+            Err(_elapsed) => refused += 1,
+        }
+    }
+    if refused > 0 {
+        tracing::error!(
+            refused,
+            taken,
+            buffer = SUBSCRIBE_BUFFER,
+            "a subscriber's queue stayed full for {SUBSCRIBER_SEND_TIMEOUT:?}; leaving the \
+             message unacked for redelivery — a consumer is not draining its subscribe() stream"
+        );
+    }
+    taken > 0 && refused == 0
 }
 
 /// The receipt `item` asks for, if it asks for one and can have one.
@@ -1212,9 +1382,13 @@ async fn run_ack_retry(inner: Arc<ServiceInner>) {
 ///
 /// It goes back over the transport the receipted message arrived on (the
 /// binding it came by, `messaging/receipt` producer rule 4), or the current
-/// primary if that transport has since been removed. A failure is only logged:
-/// a lost receipt costs the sender one re-send, which is received as a
-/// duplicate and receipted again.
+/// primary if that transport has since been removed. A failure is only logged.
+/// A lost receipt is not recovered by this layer: the sender's entry settles by
+/// its window (`Unconfirmed`, or whatever its [`ExpiryEscalator`] decides), and
+/// only an escalator that re-sends produces a duplicate that is receipted
+/// again.
+///
+/// [`ExpiryEscalator`]: crate::ExpiryEscalator
 fn spawn_receipt(
     inner: &Arc<ServiceInner>,
     packer: Arc<dyn ReceiptPacker>,
@@ -1245,14 +1419,6 @@ fn spawn_receipt(
 fn default_key(to: &str, now_ms: u64) -> Key {
     let seq = KEY_SEQ.fetch_add(1, Ordering::Relaxed);
     format!("{to}:{now_ms}:{seq}")
-}
-
-/// Current wall-clock time in Unix milliseconds.
-fn now_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -1542,7 +1708,12 @@ mod tests {
             .send("did:example:bob", b"packed".to_vec(), Delivery::BestEffort)
             .await
             .unwrap();
-        assert_eq!(sent, Sent::Accepted);
+        assert_eq!(
+            sent,
+            Sent::Accepted {
+                idempotency_key: None
+            }
+        );
         assert_eq!(h.transport.sent.lock().unwrap().len(), 1);
     }
 
@@ -1564,7 +1735,12 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(sent, Sent::Accepted);
+        assert_eq!(
+            sent,
+            Sent::Accepted {
+                idempotency_key: Some("k-1".to_string())
+            }
+        );
         // Enqueued, not sent directly (the drain owns sending).
         assert!(h.transport.sent.lock().unwrap().is_empty());
         let entry = outbox.get("k-1").await.unwrap().unwrap();
@@ -1917,7 +2093,10 @@ mod tests {
         sent_entry(&outbox, "k").await;
         let svc = MessagingService::new(h.transport.clone(), outbox.clone());
         let _sub = svc.subscribe();
-        assert!(!svc.receipt_reach().sends_receipts(ALICE, now_unix_ms()));
+        assert!(
+            !svc.receipt_reach()
+                .sends_receipts(ALICE, now_unix_ms().unwrap())
+        );
 
         h.inbound_tx
             .send(inbound_task_receipt("k", "q-receipt"))
@@ -1928,7 +2107,10 @@ mod tests {
             outbox.get("k").await.unwrap().unwrap().state,
             OutboxState::Delivered
         );
-        assert!(svc.receipt_reach().sends_receipts(ALICE, now_unix_ms()));
+        assert!(
+            svc.receipt_reach()
+                .sends_receipts(ALICE, now_unix_ms().unwrap())
+        );
         assert!(
             h.transport.sent.lock().unwrap().is_empty(),
             "a receipt is never answered"
@@ -1947,7 +2129,10 @@ mod tests {
             .send(inbound_task_receipt("never-sent", "q"))
             .unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(!svc.receipt_reach().sends_receipts(ALICE, now_unix_ms()));
+        assert!(
+            !svc.receipt_reach()
+                .sends_receipts(ALICE, now_unix_ms().unwrap())
+        );
     }
 
     #[tokio::test]
@@ -2670,5 +2855,156 @@ mod tests {
             MessagingStatus::Degraded,
             "the aggregate says only that something is down"
         );
+    }
+
+    /// #1020: a subscriber that exists but is not reading no longer makes
+    /// every message "handed off". Once its queue is full the next message is
+    /// neither acked (deleted at the mediator) nor receipted; it is left for
+    /// redelivery instead of being overwritten after the ack.
+    #[tokio::test(start_paused = true)]
+    async fn a_subscriber_that_stops_reading_gets_backpressure_not_loss() {
+        let h = mock();
+        let packer = MockPacker::new();
+        let svc = MessagingService::with_receipts(
+            h.transport.clone(),
+            Arc::new(InMemoryOutboxStore::new()),
+            packer.clone(),
+        );
+        let _stalled = svc.subscribe();
+
+        for i in 0..SUBSCRIBE_BUFFER {
+            h.inbound_tx
+                .send(inbound(&format!("m-{i}"), None, &format!("q-{i}")))
+                .unwrap();
+        }
+        h.inbound_tx
+            .send(inbound("overflow", None, "q-overflow").with_delivery_id("k-overflow"))
+            .unwrap();
+
+        // Long enough for the dispatcher to give up on the full queue.
+        tokio::time::sleep(SUBSCRIBER_SEND_TIMEOUT * 2).await;
+
+        let acked = h.transport.acked.lock().unwrap().clone();
+        assert_eq!(acked.len(), SUBSCRIBE_BUFFER);
+        assert!(
+            !acked.iter().any(|a| a == "q-overflow"),
+            "a message no subscriber could take must not be acked"
+        );
+        assert!(
+            packer.packed_for.lock().unwrap().is_empty(),
+            "nor receipted"
+        );
+        assert_eq!(svc.ack_stats().no_consumer, 1);
+    }
+
+    /// A dropped `subscribe()` stream is not a consumer.
+    #[tokio::test]
+    async fn a_dropped_subscriber_is_not_a_consumer() {
+        let h = mock();
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        drop(svc.subscribe());
+
+        h.inbound_tx
+            .send(inbound("orphan", None, "q-orphan"))
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(h.transport.acked.lock().unwrap().is_empty());
+        assert_eq!(svc.ack_stats().no_consumer, 1);
+    }
+
+    /// Every live subscriber sees every unsolicited message.
+    #[tokio::test]
+    async fn each_subscriber_gets_every_message() {
+        let h = mock();
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let mut a = svc.subscribe();
+        let mut b = svc.subscribe();
+        h.inbound_tx.send(inbound("both", None, "q-both")).unwrap();
+        for sub in [&mut a, &mut b] {
+            let got = tokio::time::timeout(Duration::from_secs(2), sub.next())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(got.message.id, "both");
+        }
+    }
+
+    /// #1021: a `Guaranteed` send with no key returns the generated key, and
+    /// that key reads the delivery state.
+    #[tokio::test]
+    async fn a_generated_idempotency_key_is_returned() {
+        let h = mock();
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let sent = svc
+            .send(
+                "did:example:bob",
+                b"m".to_vec(),
+                Delivery::Guaranteed {
+                    idempotency_key: None,
+                    ordering_key: None,
+                    deliver_by: Duration::from_secs(60),
+                },
+            )
+            .await
+            .unwrap();
+        let key = sent
+            .idempotency_key()
+            .expect("a Guaranteed send names its key");
+        assert_eq!(
+            svc.delivery_state(key).await.unwrap(),
+            Some(OutboxState::Queued)
+        );
+    }
+
+    /// #1021: re-sending under a settled key reports the outcome and changes
+    /// nothing; `retry` is the explicit way to send it again.
+    #[tokio::test]
+    async fn a_send_under_a_settled_key_reports_it_and_retry_requeues() {
+        let h = mock();
+        let outbox = Arc::new(InMemoryOutboxStore::new());
+        let svc = MessagingService::new(h.transport.clone(), outbox.clone());
+        let guaranteed = || Delivery::Guaranteed {
+            idempotency_key: Some("k".to_string()),
+            ordering_key: None,
+            deliver_by: Duration::from_secs(60),
+        };
+        svc.send("did:example:bob", b"m".to_vec(), guaranteed())
+            .await
+            .unwrap();
+        // Delivered: a re-send reports it and enqueues nothing.
+        assert!(svc.confirm("k").await.unwrap());
+        assert_eq!(
+            svc.send("did:example:bob", b"m".to_vec(), guaranteed())
+                .await
+                .unwrap(),
+            Sent::Delivered {
+                idempotency_key: "k".to_string()
+            }
+        );
+        assert_eq!(
+            svc.delivery_state("k").await.unwrap(),
+            Some(OutboxState::Delivered)
+        );
+        // `retry` refuses a Delivered entry...
+        assert!(!svc.retry("k", Duration::from_secs(60)).await.unwrap());
+
+        // ...and re-queues a Failed one, cleanly.
+        let mut e = outbox.get("k").await.unwrap().unwrap();
+        e.state = OutboxState::Failed;
+        e.attempts = 4;
+        outbox.put(e).await.unwrap();
+        assert_eq!(
+            svc.send("did:example:bob", b"m".to_vec(), guaranteed())
+                .await
+                .unwrap(),
+            Sent::Failed {
+                idempotency_key: "k".to_string()
+            }
+        );
+        assert!(svc.retry("k", Duration::from_secs(60)).await.unwrap());
+        let e = outbox.get("k").await.unwrap().unwrap();
+        assert_eq!(e.state, OutboxState::Queued);
+        assert_eq!(e.attempts, 0);
+        assert_eq!(e.settled_at_ms, None);
     }
 }

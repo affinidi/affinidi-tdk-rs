@@ -55,19 +55,33 @@ pub fn unwrap_forward(msg: &Message) -> Result<(String, String), DIDCommError> {
         .ok_or_else(|| DIDCommError::InvalidMessage("missing 'next' in forward body".into()))?
         .to_string();
 
-    let attachments = msg
-        .extra
-        .get("attachments")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| DIDCommError::InvalidMessage("missing attachments in forward".into()))?;
+    // A forward built by `wrap_in_forward` carries its attachment in `extra`;
+    // the same forward after a JSON round trip (i.e. as a relay receives it)
+    // has it in the typed `attachments` field. Accept both.
+    let inner = if let Some(attachments) = msg.attachments.as_ref() {
+        attachments
+            .first()
+            .and_then(|a| a.data.json.clone())
+            .ok_or_else(|| {
+                DIDCommError::InvalidMessage("missing inner message in forward".into())
+            })?
+    } else {
+        let attachments = msg
+            .extra
+            .get("attachments")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| DIDCommError::InvalidMessage("missing attachments in forward".into()))?;
+        attachments
+            .first()
+            .and_then(|a| a.get("data"))
+            .and_then(|d| d.get("json"))
+            .cloned()
+            .ok_or_else(|| {
+                DIDCommError::InvalidMessage("missing inner message in forward".into())
+            })?
+    };
 
-    let inner = attachments
-        .first()
-        .and_then(|a| a.get("data"))
-        .and_then(|d| d.get("json"))
-        .ok_or_else(|| DIDCommError::InvalidMessage("missing inner message in forward".into()))?;
-
-    let inner_str = serde_json::to_string(inner)
+    let inner_str = serde_json::to_string(&inner)
         .map_err(|e| DIDCommError::Serialization(format!("inner message: {e}")))?;
 
     Ok((next, inner_str))
@@ -90,6 +104,22 @@ mod tests {
         assert_eq!(next, "did:example:bob");
 
         // Parse both as JSON to compare (ordering may differ)
+        let original: Value = serde_json::from_str(inner_jwe).unwrap();
+        let parsed: Value = serde_json::from_str(&unwrapped).unwrap();
+        assert_eq!(original, parsed);
+    }
+
+    /// A forward as a relay sees it — serialized and parsed back — still
+    /// unwraps: its attachment is then in the typed `attachments` field.
+    #[test]
+    fn forward_roundtrip_through_json() {
+        let inner_jwe =
+            r#"{"protected":"abc","recipients":[],"iv":"def","ciphertext":"ghi","tag":"jkl"}"#;
+        let forward = wrap_in_forward("did:example:bob", inner_jwe).unwrap();
+        let parsed = Message::from_json(&forward.to_json().unwrap()).unwrap();
+
+        let (next, unwrapped) = unwrap_forward(&parsed).unwrap();
+        assert_eq!(next, "did:example:bob");
         let original: Value = serde_json::from_str(inner_jwe).unwrap();
         let parsed: Value = serde_json::from_str(&unwrapped).unwrap();
         assert_eq!(original, parsed);

@@ -1,5 +1,94 @@
 # Changelog
 
+## 0.3.0 — guarded outbox transitions, idempotent sends, backpressure instead of loss, settle-time retention
+
+Breaking: see **API** and the behaviour notes. Requires the host to re-check
+its handling of `Sent` and of `subscribe()` (R3.6).
+
+**Outbox state changes are guarded (#1022).** `OutboxStore::transition(key,
+expected, change)` applies a change only if the entry is in one of the
+`expected` states, atomically in `InMemoryOutboxStore` (default: `get`, check,
+`put`). Every state change the layer makes goes through it — the drain, the
+confirmation sweep, the status/listing poll and `confirm_delivered` — so a
+task holding a stale snapshot across a slow escalation or poll can no longer
+overwrite a `Delivered` with `Failed` or `Unconfirmed`. Terminal states are
+absorbing. `ConfirmReport::superseded` counts entries the sweep found changed.
+
+- **Behaviour:** `confirm_delivered` / `confirm_delivered_by` now settle a
+  `Queued` entry as well as a `Sent` one. Evidence that arrived while the
+  drain's send was in flight was dropped before; the drain's own `Queued →
+  Sent` step now leaves such an entry `Delivered`.
+
+**Sends are idempotent (#1021).** `MessagingService::send` / `send_via` with
+`Guaranteed` enqueue with `OutboxStore::insert_if_absent`: a send under a key
+that already has an entry neither replaces it nor transmits it again, and
+reports its state. Before, it reset a `Sent` or `Delivered` entry to `Queued`
+and sent it again. `MessagingService::retry(key, deliver_by)` is the explicit
+way to re-send a settled `Unconfirmed` or `Failed` entry.
+
+**Subscribers get backpressure, not loss (#1020).** `subscribe()` streams are
+now bounded per-subscriber queues instead of a shared 256-slot `broadcast`
+ring. A message is acked (deleted at the mediator) and receipted only once
+every live subscriber's queue has taken it; when one is full the dispatcher
+waits up to 10 s, then leaves the message unacked for redelivery (counted in
+`AckStats::no_consumer`). Before, a slow subscriber lost the oldest messages
+*after* they had been acked. While it waits, the dispatcher handles nothing
+else. A subscriber that took a message left unacked sees it again on
+redelivery. Receipts were already sent only after handoff (0.2.0).
+
+**Expiry is enforced for every queued entry (#1023).** The confirmation sweep
+now fails `Queued` entries past `deliver_by_ms` that the drain never reaches —
+pinned to a transport that is gone, deferred past their deadline, or waiting
+behind an ordered head — via the new `OutboxStore::expired_queued`
+(`ConfirmReport::expired_queued`). A queue-full `Retry-After` is capped at
+`QUEUE_FULL_MAX_WAIT` (10 min) and never defers an entry past its own
+deadline.
+
+- **Behaviour:** an ordering key is now a FIFO of **hop-acceptance**: the next
+  entry is released once the previous one is `Sent`, not once it is confirmed.
+  Before, each ordered message waited out its predecessor's whole delivery
+  window, and followers could fail without one attempt.
+- Same-millisecond entries now drain in enqueue order
+  (`OutboxEntry::enqueue_seq`, `#[serde(default)]`), not idempotency-key order.
+
+**Retention runs from settlement (#1025).** `OutboxEntry::settled_at_ms`
+(`#[serde(default)]`) is set on every terminal transition, and the reap
+measures `TERMINAL_RETENTION` from `OutboxEntry::settled_basis_ms()` — the
+settle time, or `max(created_at_ms, deliver_by_ms)` for entries settled
+before this field existed. A long-window entry is no longer reaped the moment
+it settles, so `delivery_state` keeps reporting its outcome.
+
+**API.**
+- `Sent` variants carry the idempotency key: `Accepted { idempotency_key:
+  Option<Key> }` (`None` for `BestEffort`), `Delivered { .. }`, `Unconfirmed {
+  .. }`, and new `Failed { .. }`; `Sent::idempotency_key()`. A `Guaranteed`
+  send with no key now returns the generated one, so `delivery_state` and
+  `confirm` can be used for it. `Sent::Accepted` patterns must become
+  `Sent::Accepted { .. }`.
+- `OutboxStore`: new defaulted `insert_if_absent`, `transition` and
+  `expired_queued`; `terminal_before` is now keyed on settle time. A durable
+  store SHOULD override all three new methods; the trait docs say how.
+- `OutboxEntry`: new `enqueue_seq` and `settled_at_ms`; `settled_basis_ms()`.
+- `ConfirmReport`: new `expired_queued` and `superseded`.
+- New re-exports: `Transition`, `ReapReport`, `TERMINAL_RETENTION`,
+  `reap_loop`, `reap_terminal`. New `drain::QUEUE_FULL_MAX_WAIT`.
+- The loops share one clock helper; a clock before the Unix epoch skips the
+  pass (and refuses a `Guaranteed` send) instead of acting on time `0`.
+
+**Docs (#1026, #1020).** The crate docs and README describe the current
+module set and carry a compiled wiring example: `MessagingService::new` starts
+only the dispatcher, and a `Guaranteed` send transmits nothing until the host
+spawns `drain_loop`, with the confirmation, outbox-drain and reap loops for
+settling. Corrected claims: the layer does not deduplicate inbound messages; a
+lost receipt is not "self-healing" without an escalator that re-sends;
+`subscribe()` is not "at-least-once after the ack"; an ordering key does not
+mean parallel draining for unordered entries.
+
+**Not done here** (follow-up #1140): durable inbound handoff — an inbox store or an
+application-driven ack — so that a receipt means "persisted", and receiver-side
+deduplication on the idempotency key.
+
+
 ## 0.2.0 — receipts on request, as `messaging/receipt/0.1`; relayed sends are not polled and settle unconfirmable
 
 Implements the delivery-receipt and evidence-path requirements of the VTI

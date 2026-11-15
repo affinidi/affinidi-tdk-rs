@@ -35,4 +35,6 @@ pub use transport::{
     MessageTransport, OutboxStatus, RelationshipRequest, SendReceipt, TransportKind,
     is_valid_delivery_id,
 };
-pub use types::{Protocol, ReceivedMessage, RelationshipState, ResolvedIdentity};
+pub use types::{
+    Protocol, ReceivedMessage, RelationshipChange, RelationshipState, ResolvedIdentity,
+};

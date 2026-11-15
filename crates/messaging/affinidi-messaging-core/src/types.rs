@@ -86,3 +86,42 @@ impl RelationshipState {
         matches!(self, RelationshipState::Bidirectional)
     }
 }
+
+/// The result of a relationship operation: the new local state, and the
+/// control message the caller must transmit for the peer to learn of it.
+///
+/// Returned by the `*_with_control` methods of
+/// [`RelationshipManager`](crate::RelationshipManager). Nothing has been sent
+/// when this is returned — if `control_message` is `Some`, delivering it is the
+/// caller's job.
+///
+/// `#[non_exhaustive]`: construct with [`new`](Self::new) or
+/// [`with_control_message`](Self::with_control_message).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RelationshipChange {
+    /// The local relationship state after the operation.
+    pub state: RelationshipState,
+    /// Packed wire bytes of the control message to deliver to the peer, or
+    /// `None` when the protocol needs nothing on the wire (DIDComm's implicit
+    /// relationships).
+    pub control_message: Option<Vec<u8>>,
+}
+
+impl RelationshipChange {
+    /// A state change with nothing to transmit.
+    pub fn new(state: RelationshipState) -> Self {
+        Self {
+            state,
+            control_message: None,
+        }
+    }
+
+    /// A state change whose peer must be sent `control_message`.
+    pub fn with_control_message(state: RelationshipState, control_message: Vec<u8>) -> Self {
+        Self {
+            state,
+            control_message: Some(control_message),
+        }
+    }
+}

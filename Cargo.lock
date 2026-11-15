@@ -477,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-core"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -491,7 +491,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-delivery"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-messaging-core",
@@ -506,7 +506,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm"
-version = "0.15.14"
+version = "0.15.15"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -530,7 +530,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm-service"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-messaging-didcomm",
@@ -607,7 +607,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator-types"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "regex",
  "serde",
@@ -618,7 +618,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-sdk"
-version = "0.47.2"
+version = "0.48.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-authentication",
@@ -876,7 +876,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.45.0"
+version = "0.46.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -986,9 +986,8 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tsp"
-version = "0.3.4"
+version = "0.4.0"
 dependencies = [
- "affinidi-cesr",
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-encoding",
@@ -2433,7 +2432,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 3.0.7",
+ "syn 1.0.109",
 ]
 
 [[package]]

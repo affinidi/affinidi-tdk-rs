@@ -4,8 +4,9 @@
 //!
 //! TSP is a ToIP Layer 2 protocol that provides authenticated, encrypted
 //! messaging between Verifiable Identifiers (VIDs). It uses HPKE-Base for
-//! encryption, Ed25519 for signing, and CESR for encoding, per the TSP
-//! specification Rev 3.
+//! encryption, Ed25519 for signing, and CESR for encoding. It speaks TSP 1.0
+//! (wire version `1.0`); section numbers in this crate's docs cite Rev 3 of the
+//! specification where 1.0 left them unchanged.
 //!
 //! ## Quick Start
 //!
@@ -375,6 +376,7 @@ impl TspAgent {
                 thread_digest: unpacked.thread_digest,
                 control: Some(control),
                 outcome,
+                confidential: unpacked.confidential,
             });
         }
 
@@ -402,6 +404,7 @@ impl TspAgent {
             thread_digest: unpacked.thread_digest,
             control: None,
             outcome: ControlOutcome::None,
+            confidential: unpacked.confidential,
         })
     }
 
@@ -415,8 +418,11 @@ impl TspAgent {
     /// advance the message. With an empty `intermediaries` list this is an
     /// ordinary direct send.
     ///
-    /// Requires a `Bidirectional` relationship with `final_vid` (the inner is a
-    /// direct message); resolution of every hop's keys is via the agent resolver.
+    /// Unlike [`TspAgent::send`], this does not check the relationship state
+    /// with `final_vid` (or with any intermediary): the caller decides whether
+    /// the relationship admits the message. A peer that enforces §7.2.2 drops
+    /// an application message from a VID it holds no relationship with.
+    /// Resolution of every hop's keys is via the agent resolver.
     pub fn send_routed(
         &self,
         our_vid: &str,
@@ -565,11 +571,6 @@ impl TspAgent {
         self.pack_message(our_vid, their_vid, &payload, MessageType::Control)
     }
 
-    /// Apply a received control message to the relationship FSM, correlating it
-    /// to the relationship-forming message via the thread digest.
-    ///
-    /// `thread_digest` is the `SHA256` of the received message's plaintext frame
-    /// (for an invite it is the value the accepter must echo back as `reply`).
     /// The key state to verify a message from `vid` against, after a silence
     /// longer than the re-verification threshold (§7.4.2), or a `Discarded`
     /// error when it cannot be confirmed.
@@ -688,6 +689,11 @@ impl TspAgent {
         }
     }
 
+    /// Apply a received control message to the relationship FSM, correlating it
+    /// to the relationship-forming message via the thread digest.
+    ///
+    /// `thread_digest` is the `SHA256` of the received message's plaintext frame
+    /// (for an invite it is the value the accepter must echo back as `reply`).
     fn handle_control(
         &self,
         our_vid: &str,
@@ -873,6 +879,13 @@ pub struct ReceivedMessage {
     /// [`ControlOutcome`]. Always [`ControlOutcome::None`] for a non-control
     /// message.
     pub outcome: ControlOutcome,
+    /// Whether the message was sealed (HPKE or sealed box) rather than signed
+    /// only. Rev 3 §3.5 lets a sender send a non-confidential, signed-only
+    /// message; it verifies just the same, so a consumer that requires
+    /// confidentiality must check this. `receive` does not refuse a
+    /// signed-only message, and applies a signed-only control message to the
+    /// relationship state like any other.
+    pub confidential: bool,
 }
 
 /// The result of forwarding a routed message at an intermediary

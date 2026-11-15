@@ -69,13 +69,24 @@ impl UnpackMetadata {
                 authenticated,
                 sender_kid,
                 recipient_kid,
+                non_repudiation,
+                signer_kid,
                 ..
             } => Self {
                 encrypted: true,
                 authenticated: *authenticated,
+                // A verified inner JWS (sign-then-encrypt) carries
+                // non-repudiation; dropping it here made a signed-and-encrypted
+                // message look unsigned to policy code (#1035).
+                non_repudiation: *non_repudiation,
                 anonymous_sender: !*authenticated,
                 encrypted_from_kid: sender_kid.clone(),
                 encrypted_to_kids: vec![recipient_kid.clone()],
+                sign_from: if *non_repudiation {
+                    signer_kid.clone()
+                } else {
+                    None
+                },
                 ..Default::default()
             },
             UnpackResult::Signed { signer_kid, .. } => Self {
@@ -212,7 +223,11 @@ impl DIDCommAgent {
     /// Tries to detect the format (JWE, JWS, plaintext) and unpack accordingly.
     /// For JWE, tries each local identity until one matches. An authcrypt JWE
     /// needs `sender_did`, and its `skid` must be that peer's key agreement
-    /// key id, or it is refused.
+    /// key id, or it is refused. If the decrypted payload is itself a JWS
+    /// (sign-then-encrypt), it is verified against `sender_did`'s signing key
+    /// and the result reports `non_repudiation = true`; without a
+    /// `sender_did` whose identity carries a signing key, such a message is
+    /// refused because its signature cannot be checked.
     /// For JWS, requires the sender's resolved identity, and the message is
     /// refused unless it is signed by that identity's signing key id.
     pub fn unpack(
@@ -233,6 +248,22 @@ impl DIDCommAgent {
                 })
                 .transpose()?;
 
+            // Sign-then-encrypt (DIDComm v2.1 non-repudiation): the inner JWS
+            // is verified against the sender's signing key. Only consulted when
+            // the decrypted payload turns out to be a JWS (#1035).
+            let signer_material = sender_did
+                .map(|did| self.store.get_resolved(did))
+                .transpose()?
+                .and_then(|r| {
+                    r.signing_kid
+                        .as_deref()
+                        .zip(r.verifying_key)
+                        .map(|(kid, vk)| (kid.to_string(), VerifyKey::Ed25519(vk)))
+                });
+            let signer = signer_material
+                .as_ref()
+                .map(|(kid, key)| SignerKey::new(kid, key));
+
             // Extract recipient KIDs from the JWE to find matching local identity
             let recipients = value["recipients"]
                 .as_array()
@@ -250,7 +281,7 @@ impl DIDCommAgent {
                                 Some(kid),
                                 Some(&local.key_agreement_private),
                                 sender,
-                                None,
+                                signer,
                             );
                         }
                     }
@@ -582,5 +613,85 @@ mod tests {
             Err(DIDCommError::SignerKeyBinding(_))
         ));
         assert!(bob_agent.unpack(&jws, Some("did:example:alice")).is_err());
+    }
+
+    /// #1035: a sign-then-encrypt message opens through the agent (the inner
+    /// JWS is verified against the sender's signing key), and
+    /// `UnpackMetadata::from_unpack_result` keeps the signature facts.
+    #[test]
+    fn agent_unpacks_sign_then_encrypt_and_metadata_keeps_non_repudiation() {
+        let mut alice_agent = DIDCommAgent::new();
+        let mut bob_agent = DIDCommAgent::new();
+        let alice = PrivateIdentity::generate("did:example:alice");
+        let bob = PrivateIdentity::generate("did:example:bob");
+        alice_agent.add_peer(bob.to_resolved());
+        bob_agent.add_peer(alice.to_resolved());
+        let alice_ka_kid = alice.key_agreement_kid.clone();
+        let alice_ka_private = alice.key_agreement_private.clone();
+        let bob_resolved = bob.to_resolved();
+        alice_agent.add_identity(alice);
+        bob_agent.add_identity(bob);
+
+        let msg = Message::new("test", serde_json::json!({"data": 7}))
+            .from("did:example:alice")
+            .to(vec!["did:example:bob".into()]);
+        let jws = alice_agent.pack_signed(&msg, "did:example:alice").unwrap();
+        let jwe = crate::jwe::encrypt::authcrypt(
+            jws.as_bytes(),
+            &alice_ka_kid,
+            &alice_ka_private,
+            &[(
+                bob_resolved.key_agreement_kid.as_str(),
+                &bob_resolved.key_agreement_public,
+            )],
+        )
+        .unwrap();
+
+        let result = bob_agent.unpack(&jwe, Some("did:example:alice")).unwrap();
+        let meta = UnpackMetadata::from_unpack_result(&result);
+        assert!(meta.encrypted);
+        assert!(meta.authenticated);
+        assert!(meta.non_repudiation);
+        assert_eq!(
+            meta.sign_from.as_deref(),
+            Some("did:example:alice#key-signing-1")
+        );
+        match result {
+            UnpackResult::Encrypted {
+                message,
+                non_repudiation,
+                ..
+            } => {
+                assert!(non_repudiation);
+                assert_eq!(message.body["data"], 7);
+            }
+            _ => panic!("expected Encrypted"),
+        }
+    }
+
+    #[test]
+    fn metadata_for_plain_authcrypt_reports_no_non_repudiation() {
+        let mut alice_agent = DIDCommAgent::new();
+        let mut bob_agent = DIDCommAgent::new();
+        let alice = PrivateIdentity::generate("did:example:alice");
+        let bob = PrivateIdentity::generate("did:example:bob");
+        alice_agent.add_peer(bob.to_resolved());
+        bob_agent.add_peer(alice.to_resolved());
+        alice_agent.add_identity(alice);
+        bob_agent.add_identity(bob);
+
+        let msg = Message::new("test", serde_json::json!({}))
+            .from("did:example:alice")
+            .to(vec!["did:example:bob".into()]);
+        let packed = alice_agent
+            .pack_authcrypt(&msg, "did:example:alice", "did:example:bob")
+            .unwrap();
+        let result = bob_agent
+            .unpack(&packed, Some("did:example:alice"))
+            .unwrap();
+        let meta = UnpackMetadata::from_unpack_result(&result);
+        assert!(meta.encrypted && meta.authenticated);
+        assert!(!meta.non_repudiation);
+        assert_eq!(meta.sign_from, None);
     }
 }

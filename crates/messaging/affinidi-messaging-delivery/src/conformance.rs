@@ -13,7 +13,8 @@
 //! - **connection-truth** — `connection_state()` re-falsifies on drop/reconnect;
 //! - **demux** — concurrent `request()`s each get their own reply; an unsolicited
 //!   push mid-request reaches `subscribe()`, not a waiter, and is not lost;
-//! - **dedup** — two `Guaranteed` sends with one idempotency key make one entry;
+//! - **dedup** — two `Guaranteed` sends with one idempotency key make one entry,
+//!   and a re-send after the entry went out transmits nothing;
 //! - **accept-then-die** — a hop-accepted entry with no evidence settles
 //!   `Unconfirmed` at window expiry, never a false `Delivered`;
 //! - **outbox-drain** — a hop-id that drains from the sender's outbox never settles
@@ -101,7 +102,12 @@ pub async fn assert_truthful_send(wire: &dyn ConformanceWire) {
     ctrl.set_up(true).await;
     let ok = svc.send("did:x", b"m".to_vec(), Delivery::BestEffort).await;
     assert!(
-        matches!(ok, Ok(Sent::Accepted)),
+        matches!(
+            ok,
+            Ok(Sent::Accepted {
+                idempotency_key: None
+            })
+        ),
         "truthful send: a send on an up wire is Accepted"
     );
 }
@@ -177,19 +183,27 @@ pub async fn assert_demux(wire: &dyn ConformanceWire) {
 }
 
 /// **Dedup:** two `Guaranteed` sends carrying the same idempotency key produce a
-/// single outbox entry (at-least-once retry is safe because the anchor dedups).
+/// single outbox entry, the first one's; and a send under the key after the
+/// entry has gone out (`Sent`) neither resets it nor transmits it again.
 pub async fn assert_dedup(wire: &dyn ConformanceWire) {
-    let (transport, _ctrl) = wire.fresh().await;
+    let (transport, ctrl) = wire.fresh().await;
     let outbox = Arc::new(InMemoryOutboxStore::new());
-    let svc = MessagingService::new(transport, outbox.clone());
+    let svc = MessagingService::new(transport.clone(), outbox.clone());
+    ctrl.set_up(true).await;
 
-    svc.send(
-        "did:x",
-        b"first".to_vec(),
-        guaranteed("k", Duration::from_secs(60)),
-    )
-    .await
-    .unwrap();
+    let first = svc
+        .send(
+            "did:x",
+            b"first".to_vec(),
+            guaranteed("k", Duration::from_secs(60)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        first.idempotency_key(),
+        Some("k"),
+        "dedup: a Guaranteed send names its key"
+    );
     svc.send(
         "did:x",
         b"second".to_vec(),
@@ -198,10 +212,50 @@ pub async fn assert_dedup(wire: &dyn ConformanceWire) {
     .await
     .unwrap();
 
-    // Exactly one entry keyed "k".
+    // Exactly one entry keyed "k", and it is the first send's.
     let all_due = outbox.due(u64::MAX / 2).await.unwrap();
-    let for_k = all_due.iter().filter(|e| e.idempotency_key == "k").count();
-    assert_eq!(for_k, 1, "dedup: same idempotency key → one outbox entry");
+    let for_k: Vec<_> = all_due
+        .iter()
+        .filter(|e| e.idempotency_key == "k")
+        .collect();
+    assert_eq!(
+        for_k.len(),
+        1,
+        "dedup: same idempotency key → one outbox entry"
+    );
+    assert_eq!(
+        for_k[0].packed, b"first",
+        "dedup: a re-send does not replace the queued entry"
+    );
+
+    // Out it goes: Sent.
+    let created = for_k[0].created_at_ms;
+    drain_once(outbox.as_ref(), transport.as_ref(), created)
+        .await
+        .unwrap();
+    let sent = outbox.get("k").await.unwrap().unwrap();
+    assert_eq!(sent.state, OutboxState::Sent);
+
+    // A re-send now must not reset it to Queued, so nothing goes out again.
+    let again = svc
+        .send(
+            "did:x",
+            b"third".to_vec(),
+            guaranteed("k", Duration::from_secs(60)),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(again, Sent::Accepted { .. }),
+        "dedup: a re-send of an in-flight entry reports it in flight"
+    );
+    let after = outbox.get("k").await.unwrap().unwrap();
+    assert_eq!(after.state, OutboxState::Sent, "dedup: still Sent");
+    assert_eq!(after.hop_id, sent.hop_id, "dedup: hop id kept");
+    let report = drain_once(outbox.as_ref(), transport.as_ref(), created + 1)
+        .await
+        .unwrap();
+    assert_eq!(report.sent, 0, "dedup: a re-send does not re-transmit");
 }
 
 /// **Accept-then-die:** an entry that hop-accepts but gets no end-to-end

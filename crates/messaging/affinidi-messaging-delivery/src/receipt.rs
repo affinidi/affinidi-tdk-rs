@@ -345,8 +345,9 @@ pub enum PackedReceipt {
 pub trait ReceiptPacker: Send + Sync {
     /// Build the receipt `request` describes, sealed to `request.to`. `Err`
     /// if the recipient can't be resolved or the receipt can't be sealed or
-    /// sent — the receipt is then dropped (fire-and-forget; the sender re-sends
-    /// within its window and the re-send is receipted again).
+    /// sent — the receipt is then dropped (fire-and-forget). Nothing in this
+    /// layer re-sends for it: the sender's entry settles by its window unless
+    /// the sender runs an escalator that re-sends.
     async fn pack_receipt(&self, request: &ReceiptRequest)
     -> Result<PackedReceipt, MessagingError>;
 }

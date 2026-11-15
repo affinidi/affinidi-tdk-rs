@@ -1,6 +1,24 @@
 # Affinidi Messaging Core Changelog
 
 ## Unreleased
+### 0.1.13 — relationship operations can hand back the control message to send
+
+- `RelationshipChange { state, control_message }` and three defaulted
+  `RelationshipManager` methods: `request_relationship_with_control`,
+  `accept_relationship_with_control` and `cancel_relationship_with_control`.
+  They return the new local state together with the packed control message
+  the caller must deliver to the peer. The defaults call the state-only
+  methods and report no control message, so existing implementations
+  (DIDComm, DIDComm v1) compile and behave as before (#1024).
+- **Behaviour note (R3.6):** the trait now documents that an adapter which
+  cannot hand back bytes through the state-only `request_relationship` /
+  `accept_relationship` / `cancel_relationship` refuses them with
+  `MessagingError::NotSupported`. `affinidi-tsp` 0.4 does so: those calls used
+  to move the TSP state machine and send nothing.
+- README: the relationship examples transmit the control message, no longer
+  `pack` straight after requesting a relationship (which fails for TSP while
+  `Pending`), and no longer call `len()` on the optional `verification_key`.
+
 ### 0.1.12 — a transport can say where a sent message is held, and an inbound can ask for a receipt
 
 - `DeliveryScope` (`Local`, `Relayed`, `Unknown`, the default) and

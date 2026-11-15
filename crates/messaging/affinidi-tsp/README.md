@@ -1,12 +1,17 @@
 # affinidi-tsp
 
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-messaging/affinidi-tsp)
+[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-tsp)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 A Rust implementation of the
 [Trust Spanning Protocol (TSP)](https://trustoverip.github.io/tswg-tsp-specification/),
 a Trust Over IP Layer 2 protocol for authenticated, encrypted messaging between
 Verifiable Identifiers (VIDs).
+
+This crate speaks **TSP 1.0** (wire version `1.0`, `YTSP-BAA`). Section numbers
+in these docs cite Rev 3 of the specification where 1.0 left them unchanged.
+1.0 does not interoperate with Rev 3 or Rev 2 peers — see the
+[interop notes](../../../docs/tsp/interop.md#the-version-field).
 
 > **Reference Implementation:** The official TSP reference implementation is
 > maintained at [github.com/trustoverip/tsp](https://github.com/trustoverip/tsp).
@@ -25,15 +30,19 @@ Verifiable Identifiers (VIDs).
 |---|---|---|
 | `did-resolver` | Yes | DID-based VID resolution via `affinidi-did-resolver-cache-sdk` |
 | `messaging-core` | No | Protocol-agnostic adapter for `affinidi-messaging-core` traits |
+| `pq` | No | Post-quantum PKAE and signatures: the MLKEM768-X25519 hybrid KEM and ML-DSA-65 (provisional code points; see [`post-quantum.md`](../../../docs/tsp/post-quantum.md)) |
+| `test-vectors` | No | Byte-reproducible packing with caller-fixed ephemeral keys, to regenerate the specification's vectors. **Destroys confidentiality** — tests only |
 
 ## Cryptographic Suite
 
 | Operation | Algorithm |
 |---|---|
-| Authenticated encryption | HPKE-Base (DHKEM(X25519) + HKDF-SHA256 + ChaCha20Poly1305), the only PKAE mode TSP spec Rev 3 §8 mandates |
+| Authenticated encryption | HPKE-Base (DHKEM(X25519) + HKDF-SHA256 + ChaCha20Poly1305), the mandatory PKAE mode (Rev 3 §8) |
+| Authenticated encryption (deprecated) | Libsodium sealed box (X25519 + XSalsa20-Poly1305, Rev 3 §8.3), received and sent for interop |
+| Signed-only | A non-confidential message (Rev 3 §3.5): signed, not sealed. `ReceivedMessage::confidential` is `false` for one; a consumer that needs confidentiality must check it |
 | Signing | Ed25519 |
 | Message digest | SHA2-256 for the `TSP_Digest` (Rev 3 §7.2.1); BLAKE2s-256 for opaque message ids |
-| Encoding | CESR (Composable Event Streaming Representation) |
+| Encoding | CESR (Composable Event Streaming Representation), with its own minimal codec in `message::wire` |
 
 ## Quick Start
 
@@ -41,7 +50,7 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-affinidi-tsp = { version = "0.1" }
+affinidi-tsp = { version = "0.4" }
 ```
 
 ### Creating an Agent and VIDs
@@ -111,7 +120,7 @@ agent.receive("did:example:bob", &cancel.bytes)?;
 ```
 None ──[SendInvite]──► Pending ──[ReceiveAccept]──► Bidirectional
 │                       │                              │
-│ [ReceiveInvite]       │ [ReceiveCancel]              │ [SendCancel/ReceiveCancel]
+│ [ReceiveInvite]       │ [SendCancel/ReceiveCancel]   │ [SendCancel/ReceiveCancel]
 ▼                       ▼                              ▼
 InviteReceived          None                           None
 │
@@ -119,6 +128,22 @@ InviteReceived          None                           None
 ▼
 Bidirectional
 ```
+
+Every transition the FSM (`RelationshipState::transition`) allows:
+
+| From | Event | To |
+|---|---|---|
+| `None` | `SendInvite` | `Pending` |
+| `None` | `ReceiveInvite` | `InviteReceived` |
+| `Pending` | `ReceiveAccept` | `Bidirectional` |
+| `Pending` | `SendCancel` / `ReceiveCancel` | `None` |
+| `InviteReceived` | `SendAccept` | `Bidirectional` |
+| `InviteReceived` | `SendCancel` / `ReceiveCancel` | `None` |
+| `InviteReceived` | `ReceiveInvite` (a re-sent invite) | `InviteReceived` |
+| `Bidirectional` | `SendCancel` / `ReceiveCancel` | `None` |
+| `Bidirectional` | `ReceiveInvite` (a fresh re-invite) | `InviteReceived` |
+
+Any other pair is refused as an invalid transition.
 
 A peer that lost its half re-forms the relationship by sending a new invite,
 which takes an established relationship back to `InviteReceived` until it is
@@ -144,26 +169,48 @@ and relationship management across protocols.
 
 ```toml
 [dependencies]
-affinidi-tsp = { version = "0.1", features = ["messaging-core"] }
+affinidi-tsp = { version = "0.4", features = ["messaging-core"] }
 affinidi-messaging-core = "0.1"
 ```
 
 ```rust
-use affinidi_tsp::{TspAgent, TspAdapter, PrivateVid};
-use affinidi_messaging_core::MessagingProtocol;
+use affinidi_tsp::{TspAgent, PrivateVid, adapter::TspAdapter};
+use affinidi_messaging_core::{MessagingProtocol, RelationshipManager};
 
-// Wrap a TspAgent in the protocol-agnostic adapter
-let agent = TspAgent::new();
-let vid = PrivateVid::generate("did:example:alice");
-agent.add_private_vid(vid);
+// Two endpoints, each knowing the other's public VID.
+let alice_vid = PrivateVid::generate("did:example:alice");
+let bob_vid = PrivateVid::generate("did:example:bob");
+let alice_agent = TspAgent::new();
+alice_agent.add_verified_vid(bob_vid.to_resolved());
+alice_agent.add_private_vid(alice_vid.clone());
+let bob_agent = TspAgent::new();
+bob_agent.add_verified_vid(alice_vid.to_resolved());
+bob_agent.add_private_vid(bob_vid);
 
-let adapter = TspAdapter::new(agent)
-    .with_default_vid("did:example:alice");
+let alice = TspAdapter::new(alice_agent).with_default_vid("did:example:alice");
+let bob = TspAdapter::new(bob_agent).with_default_vid("did:example:bob");
 
-// Use the unified MessagingProtocol trait
-let packed = adapter.pack(b"payload", "did:example:alice", "did:example:bob").await?;
-let received = adapter.unpack(&packed).await?;
+// The relationship handshake. Each `*_with_control` call returns the control
+// message to transmit; nothing is sent for you.
+let invite = alice
+    .request_relationship_with_control("did:example:alice", "did:example:bob")
+    .await?;
+bob.unpack(&invite.control_message.unwrap()).await?;
+let accept = bob
+    .accept_relationship_with_control("did:example:bob", "did:example:alice", &[])
+    .await?;
+alice.unpack(&accept.control_message.unwrap()).await?;
+
+// Now Alice can pack for Bob, and Bob unpacks it.
+let packed = alice.pack(b"payload", "did:example:alice", "did:example:bob").await?;
+let received = bob.unpack(&packed).await?;
+assert_eq!(received.payload, b"payload");
+assert!(received.encrypted); // `false` for a signed-only message
 ```
+
+The state-only `request_relationship` / `accept_relationship` /
+`cancel_relationship` are refused with `MessagingError::NotSupported` by the
+TSP adapter: they cannot hand back the control message the peer needs.
 
 ## Related Crates
 
@@ -172,7 +219,6 @@ let received = adapter.unpack(&packed).await?;
 | [`affinidi-messaging-core`](../affinidi-messaging-core/) | Protocol-agnostic messaging traits and types |
 | [`affinidi-messaging-didcomm`](../affinidi-messaging-didcomm/) | DIDComm v2.1 implementation |
 | [`affinidi-messaging-sdk`](../affinidi-messaging-sdk/) | High-level messaging client SDK |
-| [`affinidi-cesr`](../../affinidi-tdk/common/affinidi-cesr/) | CESR encoding used for TSP envelopes |
 
 ## License
 
