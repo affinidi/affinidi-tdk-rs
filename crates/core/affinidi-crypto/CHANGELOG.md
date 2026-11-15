@@ -1,5 +1,36 @@
 # Affinidi Crypto Changelog
 
+## Unreleased (0.3.2) — public JWKs drop `"d": null`; multikeys are length-checked
+
+**Behaviour changes (R3.6).** Released as a patch: signatures are unchanged,
+and every change makes output spec-conformant or refuses input that was
+already unusable. Consumers should still read this list.
+
+- **Wire format (#1054):** `ECParams.d` and `OctectParams.d` are
+  `#[serde(default, skip_serializing_if = "Option::is_none")]`. A public JWK
+  (from `public_jwk`, `JWK::from_multikey`, ...) now serializes with **no**
+  `d` member; it used to carry `"d": null`, which RFC 7517/7518 parsers may
+  reject. Deserializing is unchanged: a missing `d` and `"d": null` both give
+  `None`. **Anything that hashes or signs a serialized public `JWK`** (a DID
+  document with `publicKeyJwk`, a `did:jwk` built by serializing a `JWK`)
+  produces different bytes from earlier versions for the same key.
+- **Stricter (#1056):** `JWK::from_multikey` decodes through
+  `affinidi_encoding::decode_multikey_checked`. It accepts only base58btc
+  (`z`) multikeys (it used to take any multibase), and refuses a key whose
+  length is not its codec's — EC keys must be compressed, as the Multikey
+  format requires (an uncompressed P-256 multikey used to be accepted). A
+  truncated Ed25519/X25519 multikey used to give a JWK with a short `x`.
+- **Stricter:** `ed25519::public_jwk` and `ed25519::x25519_public_jwk` return
+  `KeyError` unless given exactly 32 bytes.
+- **Changed:** `did_key::did_key_to_ed25519_pub`, `bls12381::did_key_to_g2_pub`
+  and `ed25519::ed25519_public_to_x25519` decode through `affinidi-encoding`
+  instead of hand-rolled copies. Same results and error variants (framing
+  errors are `Decoding`, a wrong codec or length is `KeyError`); messages
+  differ slightly.
+- **Dependencies:** drops `base58` and `multibase`; requires
+  `affinidi-encoding` 0.1.7.
+
+
 ## Unreleased (0.3.1) — `p256::verify` reports a malformed signature as `Decoding`
 
 **Behaviour change (R3.6).** `p256::verify` returns `CryptoError::Decoding`

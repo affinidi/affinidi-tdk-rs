@@ -36,6 +36,17 @@ pub fn hardage(first_char: char) -> Option<usize> {
     }
 }
 
+/// Sizage of a variable-length code: `hs` hard characters, an equal number
+/// of soft (count) characters, and lead size `ls`.
+const fn var(hs: usize, ls: usize) -> Sizage {
+    Sizage {
+        hs,
+        ss: hs,
+        fs: 0,
+        ls,
+    }
+}
+
 /// Matter code table: maps code string to Sizage.
 ///
 /// Based on the CESR specification for primitive types.
@@ -276,89 +287,24 @@ pub fn matter_sizage(code: &str) -> Option<Sizage> {
             ls: 0,
         },
 
-        // Variable-length codes starting with 4
-        "4A" => Sizage {
-            hs: 2,
-            ss: 2,
-            fs: 0,
-            ls: 0,
-        }, // String variable length base64
-        "4B" => Sizage {
-            hs: 2,
-            ss: 2,
-            fs: 0,
-            ls: 0,
-        }, // Bytes variable length base64
-
-        // Variable-length codes starting with 5
-        "5A" => Sizage {
-            hs: 2,
-            ss: 2,
-            fs: 0,
-            ls: 0,
-        }, // String variable length base2
-        "5B" => Sizage {
-            hs: 2,
-            ss: 2,
-            fs: 0,
-            ls: 0,
-        }, // Bytes variable length base2
-
-        // Variable-length codes starting with 6
-        "6A" => Sizage {
-            hs: 2,
-            ss: 2,
-            fs: 0,
-            ls: 0,
-        }, // String variable length large base64
-        "6B" => Sizage {
-            hs: 2,
-            ss: 2,
-            fs: 0,
-            ls: 0,
-        }, // Bytes variable length large base64
-
-        // Variable-length codes starting with 7
-        "7AAA" => Sizage {
-            hs: 4,
-            ss: 4,
-            fs: 0,
-            ls: 0,
-        },
-        "7AAB" => Sizage {
-            hs: 4,
-            ss: 4,
-            fs: 0,
-            ls: 0,
-        },
-
-        // Variable-length codes starting with 8
-        "8AAA" => Sizage {
-            hs: 4,
-            ss: 4,
-            fs: 0,
-            ls: 0,
-        },
-        "8AAB" => Sizage {
-            hs: 4,
-            ss: 4,
-            fs: 0,
-            ls: 0,
-        },
-
-        // Variable-length codes starting with 9
-        "9AAA" => Sizage {
-            hs: 4,
-            ss: 4,
-            fs: 0,
-            ls: 0,
-        },
-        "9AAB" => Sizage {
-            hs: 4,
-            ss: 4,
-            fs: 0,
-            ls: 0,
-        },
+        // Variable-length codes. The lead size `ls` is part of the code: the
+        // number of zero bytes prepended to the raw value to make it a whole
+        // number of triplets. `4x`/`7AAx` have none, `5x`/`8AAx` one and
+        // `6x`/`9AAx` two (keripy `StrB64_L0/L1/L2`, `Bytes_L0/L1/L2` and their
+        // `_Big_` forms). Small forms count quadlets in 2 characters, big forms
+        // in 4.
+        "4A" => var(2, 0),   // StrB64_L0: Base64 string, lead size 0
+        "5A" => var(2, 1),   // StrB64_L1: Base64 string, lead size 1
+        "6A" => var(2, 2),   // StrB64_L2: Base64 string, lead size 2
+        "4B" => var(2, 0),   // Bytes_L0: bytes, lead size 0
+        "5B" => var(2, 1),   // Bytes_L1: bytes, lead size 1
+        "6B" => var(2, 2),   // Bytes_L2: bytes, lead size 2
+        "7AAA" => var(4, 0), // StrB64_Big_L0
+        "8AAA" => var(4, 1), // StrB64_Big_L1
+        "9AAA" => var(4, 2), // StrB64_Big_L2
+        "7AAB" => var(4, 0), // Bytes_Big_L0
+        "8AAB" => var(4, 1), // Bytes_Big_L1
+        "9AAB" => var(4, 2), // Bytes_Big_L2
 
         _ => return None,
     };

@@ -16,22 +16,19 @@
 //! this base crate entirely — point validation lives in `affinidi-bbs`, which
 //! interprets the bytes when the key is actually used to verify a signature.
 
-use affinidi_encoding::{BLS12381_G2_PUB, MultiEncoded, MultiEncodedBuf};
-use base58::{FromBase58, ToBase58};
+use affinidi_encoding::{BLS12381_G2_PUB, Codec, did_key};
 
-use crate::{CryptoError, error::Result};
-
-const DID_KEY_PREFIX: &str = "did:key:";
+use crate::{
+    CryptoError,
+    error::{Result, key_decoding_error},
+};
 
 /// The compressed byte length of a BLS12-381 G2 public key.
 pub const BLS12381_G2_PUB_LEN: usize = 96;
 
 /// Encode a 96-byte BLS12-381 G2 public key as a `did:key:zUC7…` identifier.
 pub fn g2_pub_to_did_key(pubkey: &[u8; BLS12381_G2_PUB_LEN]) -> String {
-    let multikey = MultiEncodedBuf::encode_bytes(BLS12381_G2_PUB, pubkey)
-        .into_bytes()
-        .to_base58();
-    format!("{DID_KEY_PREFIX}z{multikey}")
+    did_key::encode(BLS12381_G2_PUB, pubkey)
 }
 
 /// Decode a `did:key:zUC7…` string to its raw 96-byte BLS12-381 G2 public key.
@@ -41,34 +38,14 @@ pub fn g2_pub_to_did_key(pubkey: &[u8; BLS12381_G2_PUB_LEN]) -> String {
 /// bytes. The returned bytes are **not** validated as a well-formed G2 point —
 /// `affinidi-bbs` performs that check when it parses the key for verification.
 pub fn did_key_to_g2_pub(did: &str) -> Result<[u8; BLS12381_G2_PUB_LEN]> {
-    let multibase = did
-        .strip_prefix(DID_KEY_PREFIX)
-        .ok_or_else(|| CryptoError::Decoding(format!("Expected '{DID_KEY_PREFIX}' prefix")))?;
-    let base58 = multibase.strip_prefix('z').ok_or_else(|| {
-        CryptoError::Decoding("Expected multibase 'z' prefix after 'did:key:'".into())
-    })?;
-    let decoded = base58
-        .from_base58()
-        .map_err(|_| CryptoError::Decoding("Couldn't decode base58".into()))?;
-
-    let multicodec = MultiEncoded::new(decoded.as_slice())?;
-    if multicodec.codec() != BLS12381_G2_PUB {
-        return Err(CryptoError::KeyError(format!(
-            "Expected BLS12-381 G2 public key, instead received codec 0x{:x}",
-            multicodec.codec()
-        )));
-    }
-    let data = multicodec.data();
-    if data.len() != BLS12381_G2_PUB_LEN {
-        return Err(CryptoError::KeyError(format!(
+    let data = did_key::decode_expecting(did, Codec::Bls12381G2Pub).map_err(key_decoding_error)?;
+    // `decode_expecting` enforces the 96-byte G2 length.
+    data.as_slice().try_into().map_err(|_| {
+        CryptoError::KeyError(format!(
             "Invalid public key byte length: expected {BLS12381_G2_PUB_LEN}, got {}",
             data.len()
-        )));
-    }
-
-    let mut out = [0u8; BLS12381_G2_PUB_LEN];
-    out.copy_from_slice(data);
-    Ok(out)
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -129,10 +106,7 @@ mod tests {
     #[test]
     fn did_key_to_g2_pub_wrong_multicodec() {
         // A valid did:key carrying an Ed25519 key (codec 0xed) — wrong algorithm.
-        let payload = MultiEncodedBuf::encode_bytes(ED25519_PUB, &[0u8; 32])
-            .into_bytes()
-            .to_base58();
-        let did = format!("did:key:z{payload}");
+        let did = did_key::encode(ED25519_PUB, &[0u8; 32]);
         let err = did_key_to_g2_pub(&did).unwrap_err();
         assert!(
             matches!(err, CryptoError::KeyError(ref m) if m.contains("codec")),
@@ -143,10 +117,7 @@ mod tests {
     #[test]
     fn did_key_to_g2_pub_wrong_length() {
         // Correct G2 multicodec but a 48-byte payload (a G1-sized key).
-        let payload = MultiEncodedBuf::encode_bytes(BLS12381_G2_PUB, &[0u8; 48])
-            .into_bytes()
-            .to_base58();
-        let did = format!("did:key:z{payload}");
+        let did = did_key::encode(BLS12381_G2_PUB, &[0u8; 48]);
         let err = did_key_to_g2_pub(&did).unwrap_err();
         assert!(
             matches!(err, CryptoError::KeyError(ref m) if m.contains("length") || m.contains("96")),

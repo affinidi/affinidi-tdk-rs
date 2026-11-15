@@ -15,20 +15,17 @@
 //! can be added when needed — their multicodec values already live in
 //! [`crate::KeyType`] / `affinidi_encoding`.
 
-use affinidi_encoding::{ED25519_PUB, MultiEncoded, MultiEncodedBuf};
-use base58::{FromBase58, ToBase58};
+use affinidi_encoding::{Codec, ED25519_PUB, did_key};
 use ed25519_dalek::VerifyingKey;
 
-use crate::{CryptoError, error::Result};
-
-const DID_KEY_PREFIX: &str = "did:key:";
+use crate::{
+    CryptoError,
+    error::{Result, key_decoding_error},
+};
 
 /// Encode a 32-byte Ed25519 public key as a `did:key:z6Mk…` identifier.
 pub fn ed25519_pub_to_did_key(pubkey: &[u8; 32]) -> String {
-    let multikey = MultiEncodedBuf::encode_bytes(ED25519_PUB, pubkey)
-        .into_bytes()
-        .to_base58();
-    format!("{DID_KEY_PREFIX}z{multikey}")
+    did_key::encode(ED25519_PUB, pubkey)
 }
 
 /// Decode a `did:key:z6Mk…` string to its raw 32-byte Ed25519 public key.
@@ -39,34 +36,14 @@ pub fn ed25519_pub_to_did_key(pubkey: &[u8; 32]) -> String {
 /// point; use [`ed25519_pub_to_x25519_bytes`] or `VerifyingKey::from_bytes`
 /// to perform that check when it matters.
 pub fn did_key_to_ed25519_pub(did: &str) -> Result<[u8; 32]> {
-    let multibase = did
-        .strip_prefix(DID_KEY_PREFIX)
-        .ok_or_else(|| CryptoError::Decoding(format!("Expected '{DID_KEY_PREFIX}' prefix")))?;
-    let base58 = multibase.strip_prefix('z').ok_or_else(|| {
-        CryptoError::Decoding("Expected multibase 'z' prefix after 'did:key:'".into())
-    })?;
-    let decoded = base58
-        .from_base58()
-        .map_err(|_| CryptoError::Decoding("Couldn't decode base58".into()))?;
-
-    let multicodec = MultiEncoded::new(decoded.as_slice())?;
-    if multicodec.codec() != ED25519_PUB {
-        return Err(CryptoError::KeyError(format!(
-            "Expected Ed25519 public key, instead received codec 0x{:x}",
-            multicodec.codec()
-        )));
-    }
-    let data = multicodec.data();
-    if data.len() != 32 {
-        return Err(CryptoError::KeyError(format!(
+    let data = did_key::decode_expecting(did, Codec::Ed25519Pub).map_err(key_decoding_error)?;
+    // `decode_expecting` enforces the 32-byte Ed25519 length.
+    data.as_slice().try_into().map_err(|_| {
+        CryptoError::KeyError(format!(
             "Invalid public key byte length: expected 32, got {}",
             data.len()
-        )));
-    }
-
-    let mut out = [0u8; 32];
-    out.copy_from_slice(data);
-    Ok(out)
+        ))
+    })
 }
 
 /// Derive the X25519 public key for an Ed25519 public key, returning raw
@@ -151,10 +128,7 @@ mod tests {
     fn did_key_to_ed25519_pub_wrong_multicodec() {
         // Build a did:key-shaped string carrying an X25519 public key
         // multicodec (0xec) — valid multibase, wrong algorithm.
-        let payload = MultiEncodedBuf::encode_bytes(X25519_PUB, &[0u8; 32])
-            .into_bytes()
-            .to_base58();
-        let did = format!("did:key:z{payload}");
+        let did = did_key::encode(X25519_PUB, &[0u8; 32]);
 
         let err = did_key_to_ed25519_pub(&did).unwrap_err();
         assert!(
@@ -166,10 +140,7 @@ mod tests {
     #[test]
     fn did_key_to_ed25519_pub_wrong_length() {
         // Ed25519 multicodec but a 16-byte payload instead of 32.
-        let payload = MultiEncodedBuf::encode_bytes(ED25519_PUB, &[0u8; 16])
-            .into_bytes()
-            .to_base58();
-        let did = format!("did:key:z{payload}");
+        let did = did_key::encode(ED25519_PUB, &[0u8; 16]);
 
         let err = did_key_to_ed25519_pub(&did).unwrap_err();
         assert!(

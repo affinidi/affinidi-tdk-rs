@@ -12,13 +12,7 @@
 //! delegates to your preferred DID resolver (e.g.
 //! `affinidi-did-resolver-cache-sdk`) and maps back into this trait.
 
-#[cfg(feature = "slh-dsa")]
-use affinidi_secrets_resolver::multicodec::SLH_DSA_SHA2_128S_PUB;
-use affinidi_secrets_resolver::multicodec::{
-    ED25519_PUB, MultiEncoded, P256_PUB, P384_PUB, P521_PUB, SECP256K1_PUB,
-};
-#[cfg(feature = "ml-dsa")]
-use affinidi_secrets_resolver::multicodec::{ML_DSA_44_PUB, ML_DSA_65_PUB, ML_DSA_87_PUB};
+use affinidi_encoding::{Codec, EncodingError, did_key};
 use affinidi_secrets_resolver::secrets::KeyType;
 use async_trait::async_trait;
 
@@ -86,61 +80,56 @@ impl VerificationMethodResolver for DidKeyResolver {
 pub fn resolve_did_key(vm: &str) -> Result<ResolvedKey, DataIntegrityError> {
     // The key is read from the DID; the fragment is dropped unchecked.
     let did = vm.split('#').next().unwrap_or(vm);
-    let id = did.strip_prefix("did:key:").ok_or_else(|| {
-        DataIntegrityError::Resolver(format!(
+    if !did.starts_with(did_key::DID_KEY_PREFIX) {
+        return Err(DataIntegrityError::Resolver(format!(
             "not a did:key URI (expected did:key:..., got {vm})"
-        ))
+        )));
+    }
+
+    // did:key = "did:key:" base58btc(multicodec || public-key bytes). The
+    // codec's key length is enforced by `affinidi_encoding`.
+    let (codec, data) = did_key::decode(did).map_err(|e| match e {
+        EncodingError::InvalidKeyLength {
+            codec,
+            expected,
+            actual,
+        } => DataIntegrityError::InvalidPublicKey {
+            codec: Some(codec),
+            len: actual,
+            reason: format!(
+                "did:key public key length {actual} does not match expected {expected} for {:?}",
+                Codec::from_u64(codec)
+            ),
+        },
+        other => DataIntegrityError::Resolver(format!("decoding did:key failed: {other}")),
     })?;
 
-    // id = multibase-encoded multicodec ||  public-key bytes.
-    let (_base, raw) = multibase::decode(id).map_err(|e| {
-        DataIntegrityError::Resolver(format!("multibase decode of did:key id failed: {e}"))
-    })?;
-    let mc = MultiEncoded::new(&raw).map_err(|e| {
-        DataIntegrityError::Resolver(format!("multicodec decode of did:key failed: {e}"))
-    })?;
-
-    let codec = mc.codec();
-    let data = mc.data();
-
-    let (key_type, expected_len): (KeyType, usize) = match codec {
-        ED25519_PUB => (KeyType::Ed25519, 32),
-        SECP256K1_PUB => (KeyType::Secp256k1, 33),
-        P256_PUB => (KeyType::P256, 33),
-        P384_PUB => (KeyType::P384, 49),
-        P521_PUB => (KeyType::P521, 67),
+    let key_type = match codec {
+        Codec::Ed25519Pub => KeyType::Ed25519,
+        Codec::Secp256k1Pub => KeyType::Secp256k1,
+        Codec::P256Pub => KeyType::P256,
+        Codec::P384Pub => KeyType::P384,
+        Codec::P521Pub => KeyType::P521,
         #[cfg(feature = "ml-dsa")]
-        ML_DSA_44_PUB => (KeyType::MlDsa44, 1312),
+        Codec::MlDsa44Pub => KeyType::MlDsa44,
         #[cfg(feature = "ml-dsa")]
-        ML_DSA_65_PUB => (KeyType::MlDsa65, 1952),
+        Codec::MlDsa65Pub => KeyType::MlDsa65,
         #[cfg(feature = "ml-dsa")]
-        ML_DSA_87_PUB => (KeyType::MlDsa87, 2592),
+        Codec::MlDsa87Pub => KeyType::MlDsa87,
         #[cfg(feature = "slh-dsa")]
-        SLH_DSA_SHA2_128S_PUB => (KeyType::SlhDsaSha2_128s, 32),
+        Codec::SlhDsaSha2_128sPub => KeyType::SlhDsaSha2_128s,
         other => {
             return Err(DataIntegrityError::InvalidPublicKey {
-                codec: Some(other),
+                codec: Some(other.to_u64()),
                 len: data.len(),
                 reason: "unknown or unsupported multicodec for did:key".to_string(),
             });
         }
     };
 
-    if data.len() != expected_len {
-        return Err(DataIntegrityError::InvalidPublicKey {
-            codec: Some(codec),
-            len: data.len(),
-            reason: format!(
-                "did:key public key length {} does not match expected {} for {key_type:?}",
-                data.len(),
-                expected_len
-            ),
-        });
-    }
-
     Ok(ResolvedKey {
         key_type,
-        public_key_bytes: data.to_vec(),
+        public_key_bytes: data,
     })
 }
 
@@ -192,6 +181,47 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, DataIntegrityError::Resolver(_)));
+    }
+
+    #[test]
+    fn resolve_did_key_refuses_wrong_length_and_unsupported_codecs() {
+        let short = affinidi_encoding::did_key::encode(affinidi_encoding::ED25519_PUB, &[1u8; 31]);
+        let err = resolve_did_key(&short).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DataIntegrityError::InvalidPublicKey {
+                    codec: Some(0xed),
+                    len: 31,
+                    ..
+                }
+            ),
+            "got: {err:?}"
+        );
+
+        // X25519 is a well-formed did:key but not a signing key.
+        let x = affinidi_encoding::did_key::encode(affinidi_encoding::X25519_PUB, &[1u8; 32]);
+        let err = resolve_did_key(&format!("{x}#k")).unwrap_err();
+        assert!(
+            matches!(err, DataIntegrityError::InvalidPublicKey { len: 32, .. }),
+            "got: {err:?}"
+        );
+
+        // Only base58btc is a did:key.
+        let err = resolve_did_key("did:key:uAe0BAQ").unwrap_err();
+        assert!(
+            matches!(err, DataIntegrityError::Resolver(_)),
+            "got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_did_key_p256_roundtrip() {
+        let secret = Secret::generate_p256(None, Some(&[3u8; 32])).unwrap();
+        let pk_mb = secret.get_public_keymultibase().unwrap();
+        let resolved = resolve_did_key(&format!("did:key:{pk_mb}#{pk_mb}")).unwrap();
+        assert_eq!(resolved.key_type, KeyType::P256);
+        assert_eq!(resolved.public_key_bytes.len(), 33);
     }
 
     #[tokio::test]

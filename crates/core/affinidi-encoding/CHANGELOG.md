@@ -1,5 +1,30 @@
 # Affinidi Encoding Changelog
 
+## Unreleased (0.1.7) — one checked multikey / did:key decoder
+
+Additive (#1056).
+
+- **Added:** `decode_multikey_checked(key) -> Result<(Codec, Vec<u8>)>`
+  decodes a base58btc multikey and enforces `Codec::expected_key_length`
+  (EC keys in compressed SEC1 form); an unknown codec is returned as
+  `Codec::Unknown` without a length check. `decode_multikey_expecting(key,
+  codec)` also requires one codec. `decode_multikey` and
+  `decode_multikey_with_codec` are unchanged and still do no length check.
+- **Added:** `did_key` module: `did_key::decode`, `did_key::decode_expecting`,
+  `did_key::encode` and `DID_KEY_PREFIX`. Bare DIDs only: strip a `#fragment`
+  first.
+- **Added:** `EncodingError::InvalidKeyLength`, `UnexpectedCodec` and
+  `InvalidDidKey` (the enum is `#[non_exhaustive]`).
+- **Added:** the post-quantum codec constants (`ML_DSA_*_PUB`,
+  `ML_DSA_*_PRIV_SEED`, `SLH_DSA_SHA2_128S_PUB`) are re-exported from the
+  crate root, like the classical ones.
+- **Fixed:** `MultiEncodedBuf::into_bytes` moves the buffer out instead of
+  cloning it.
+- Docs: `MultiEncoded`'s `Zeroize`/`ZeroizeOnDrop` derives never run (it is
+  only held by reference). They are kept, because removing a trait impl would
+  be a breaking change.
+
+
 ## Unreleased (0.1.6) — the post-quantum code points are now pinned, not trusted
 
 No behaviour change: a test and a comment. Every value was already correct.

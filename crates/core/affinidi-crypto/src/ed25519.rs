@@ -1,14 +1,16 @@
 //! Ed25519 and X25519 key operations
 
-use affinidi_encoding::{ED25519_PUB, MultiEncoded, MultiEncodedBuf, X25519_PUB};
-use base58::{FromBase58, ToBase58};
+use affinidi_encoding::{Codec, X25519_PUB, decode_multikey_expecting, encode_multikey};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use sha2::{Digest, Sha512};
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::{CryptoError, JWK, KeyType, OctectParams, Params, error::Result};
+use crate::{
+    CryptoError, JWK, KeyType, OctectParams, Params,
+    error::{Result, key_decoding_error},
+};
 
 /// Generated key pair with raw bytes and JWK representation
 ///
@@ -119,49 +121,33 @@ pub fn ed25519_private_to_x25519(secret: &[u8; 32]) -> [u8; 32] {
 /// Converts an Ed25519 multikey public key to an X25519 multikey public key
 /// Returns the multicodec String and the raw public bytes
 pub fn ed25519_public_to_x25519(ed25519_multikey: &str) -> Result<(String, Vec<u8>)> {
-    if !ed25519_multikey.starts_with('z') {
-        return Err(CryptoError::Decoding(
-            "Expected multibase encoded string starting with 'z' prefix".into(),
-        ));
-    }
+    let data = decode_multikey_expecting(ed25519_multikey, Codec::Ed25519Pub)
+        .map_err(key_decoding_error)?;
 
-    let decoded = ed25519_multikey[1..]
-        .from_base58()
-        .map_err(|_| CryptoError::Decoding("Couldn't decode base58".into()))?;
-
-    let multicodec = MultiEncoded::new(decoded.as_slice())?;
-
-    if multicodec.codec() != ED25519_PUB {
-        return Err(CryptoError::KeyError(format!(
-            "Expected ED25519 public key, instead received codec 0x{:x}",
-            multicodec.codec()
-        )));
-    }
-    if multicodec.data().len() != 32 {
-        return Err(CryptoError::KeyError(format!(
-            "Invalid public key byte length: expected 32, got {}",
-            multicodec.data().len()
-        )));
-    }
-
-    let vk = VerifyingKey::try_from(multicodec.data())
+    let vk = VerifyingKey::try_from(data.as_slice())
         .map_err(|e| CryptoError::KeyError(format!("Couldn't create ED25519 VerifyingKey: {e}")))?;
 
     let x25519 = vk.to_montgomery().to_bytes();
 
-    Ok((
-        format!(
-            "z{}",
-            MultiEncodedBuf::encode_bytes(X25519_PUB, &x25519)
-                .into_bytes()
-                .to_base58()
-        ),
-        x25519.to_vec(),
-    ))
+    Ok((encode_multikey(X25519_PUB, &x25519), x25519.to_vec()))
+}
+
+/// Refuses raw key bytes that are not 32 bytes long.
+fn check_32(data: &[u8], what: &str) -> Result<()> {
+    if data.len() != 32 {
+        return Err(CryptoError::KeyError(format!(
+            "Invalid {what} public key byte length: expected 32, got {}",
+            data.len()
+        )));
+    }
+    Ok(())
 }
 
 /// Generates a public JWK from Ed25519 raw bytes
+///
+/// Returns `KeyError` unless `data` is exactly 32 bytes.
 pub fn public_jwk(data: &[u8]) -> Result<JWK> {
+    check_32(data, "Ed25519")?;
     Ok(JWK {
         key_id: None,
         params: Params::OKP(OctectParams {
@@ -173,7 +159,10 @@ pub fn public_jwk(data: &[u8]) -> Result<JWK> {
 }
 
 /// Generates a public JWK from X25519 raw bytes
+///
+/// Returns `KeyError` unless `data` is exactly 32 bytes.
 pub fn x25519_public_jwk(data: &[u8]) -> Result<JWK> {
+    check_32(data, "X25519")?;
     Ok(JWK {
         key_id: None,
         params: Params::OKP(OctectParams {
@@ -338,12 +327,7 @@ mod tests {
     // (multicodec 0xed, base58btc with `z` prefix). Mirrors the encoding
     // expected by `ed25519_public_to_x25519` without pulling in `did_key`.
     fn ed25519_multikey(pubkey: &[u8]) -> String {
-        format!(
-            "z{}",
-            MultiEncodedBuf::encode_bytes(ED25519_PUB, pubkey)
-                .into_bytes()
-                .to_base58()
-        )
+        encode_multikey(affinidi_encoding::ED25519_PUB, pubkey)
     }
 
     #[test]
@@ -364,10 +348,9 @@ mod tests {
     #[test]
     fn ed25519_public_to_x25519_rejects_missing_z_prefix() {
         // Valid base58 payload but no multibase `z` prefix.
-        let raw = MultiEncodedBuf::encode_bytes(ED25519_PUB, &[0u8; 32])
-            .into_bytes()
-            .to_base58();
-        let err = ed25519_public_to_x25519(&raw).unwrap_err();
+        let raw = ed25519_multikey(&[0u8; 32]);
+        let raw = raw.strip_prefix('z').unwrap();
+        let err = ed25519_public_to_x25519(raw).unwrap_err();
         assert!(
             matches!(err, CryptoError::Decoding(ref m) if m.contains('z')),
             "got {err:?}"
@@ -377,12 +360,7 @@ mod tests {
     #[test]
     fn ed25519_public_to_x25519_rejects_wrong_codec() {
         // X25519 multicodec (0xec) where Ed25519 (0xed) is expected.
-        let multikey = format!(
-            "z{}",
-            MultiEncodedBuf::encode_bytes(X25519_PUB, &[0u8; 32])
-                .into_bytes()
-                .to_base58()
-        );
+        let multikey = encode_multikey(X25519_PUB, &[0u8; 32]);
         let err = ed25519_public_to_x25519(&multikey).unwrap_err();
         assert!(
             matches!(err, CryptoError::KeyError(ref m) if m.contains("codec")),

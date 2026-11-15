@@ -2,6 +2,15 @@
 
 All notable changes to this crate are documented here.
 
+## [0.13.5] - Unreleased
+
+### Changed
+
+- Requires `affinidi-crypto` 0.3.2, whose public JWKs serialize without a `d`
+  member (#1054), and drops the two workarounds that stripped `"d": null`
+  (`document.rs`, `key_agreement.rs`). The published `publicKeyJwk` values
+  are unchanged.
+
 ## [0.13.4] - Unreleased
 
 ### Changed

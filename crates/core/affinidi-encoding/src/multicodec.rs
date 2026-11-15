@@ -181,6 +181,10 @@ impl Codec {
 
 /// A multicodec-encoded byte slice (borrowed).
 ///
+/// Only ever held by reference, so the `Zeroize`/`ZeroizeOnDrop` derives never
+/// run on drop: wipe the owning buffer instead. They are kept because removing
+/// a trait impl would break the public API.
+///
 /// `#[repr(transparent)]` guarantees the same memory layout as `[u8]`,
 /// which `MultiEncoded::new` relies on when reinterpreting a borrowed
 /// byte slice as this DST.
@@ -271,10 +275,12 @@ impl MultiEncodedBuf {
         Self(result)
     }
 
-    /// Returns the raw bytes, including the codec prefix
-    /// Note: clones due to ZeroizeOnDrop
-    pub fn into_bytes(self) -> Vec<u8> {
-        self.0.clone()
+    /// Returns the raw bytes, including the codec prefix.
+    ///
+    /// The buffer is moved out, not copied; the emptied wrapper is then
+    /// dropped as usual.
+    pub fn into_bytes(mut self) -> Vec<u8> {
+        std::mem::take(&mut self.0)
     }
 
     /// Returns a reference to the raw bytes
@@ -310,6 +316,13 @@ mod tests {
         assert_eq!(decoded.codec(), ED25519_PUB);
         assert_eq!(decoded.codec_type(), Codec::Ed25519Pub);
         assert_eq!(decoded.data(), &key_bytes);
+    }
+
+    #[test]
+    fn into_bytes_moves_the_buffer_out() {
+        let buf = MultiEncodedBuf::encode(Codec::Ed25519Pub, &[9u8; 32]);
+        let expected = buf.as_bytes().to_vec();
+        assert_eq!(buf.into_bytes(), expected);
     }
 
     #[test]

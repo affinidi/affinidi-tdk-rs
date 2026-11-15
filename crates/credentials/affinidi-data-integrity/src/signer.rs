@@ -147,22 +147,22 @@ impl Signer for Secret {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn a_short_ed25519_private_key_is_a_signing_error() {
+    /// A short Ed25519 private key never reaches the signer: since
+    /// affinidi-secrets-resolver 0.5.19 `Secret::from_jwk` refuses it when the
+    /// secret is loaded. (The signer keeps its own length check as defence in
+    /// depth.)
+    #[test]
+    fn a_short_ed25519_private_key_is_refused_at_load() {
         let jwk = serde_json::json!({
             "crv": "Ed25519",
             "kty": "OKP",
             "d": "AAAA",
             "x": "d17TbZmkoYHZUQpzJTcuOtq0tjWYm8CKvKGYHDW6ZaE"
         });
-        let secret = Secret::from_jwk_value("did:example:123#key-1", &jwk).unwrap();
-        let err = Signer::sign(&secret, b"data").await.unwrap_err();
-        assert!(matches!(err, DataIntegrityError::Signing(_)), "got {err:?}");
+        let err =
+            Secret::from_jwk_value("did:example:123#key-1", &jwk).expect_err("short d refused");
         assert!(
-            std::error::Error::source(&err)
-                .unwrap()
-                .to_string()
-                .contains("private key must be exactly 32 bytes, got 3"),
+            err.to_string().contains("must be 32 bytes, got 3"),
             "got {err:?}"
         );
     }

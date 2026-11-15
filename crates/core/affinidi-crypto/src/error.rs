@@ -40,3 +40,27 @@ pub enum CryptoError {
 }
 
 pub type Result<T> = std::result::Result<T, CryptoError>;
+
+/// Maps an error from decoding a multikey or `did:key` onto the variants this
+/// crate has always reported for them: framing problems are `Decoding`, a
+/// wrong codec or key length is `KeyError`.
+#[allow(dead_code)]
+pub(crate) fn key_decoding_error(e: affinidi_encoding::EncodingError) -> CryptoError {
+    use affinidi_encoding::EncodingError as E;
+    match e {
+        E::InvalidDidKey(m) => CryptoError::Decoding(format!("Expected 'did:key:' prefix: {m}")),
+        E::InvalidMultibasePrefix(c) => CryptoError::Decoding(format!(
+            "Expected multibase 'z' (base58btc) prefix, got '{c}'"
+        )),
+        E::InvalidBase58(m) => CryptoError::Decoding(format!("Couldn't decode base58: {m}")),
+        E::UnexpectedCodec { expected, actual } => CryptoError::KeyError(format!(
+            "Expected public key codec 0x{expected:x}, instead received codec 0x{actual:x}"
+        )),
+        E::InvalidKeyLength {
+            expected, actual, ..
+        } => CryptoError::KeyError(format!(
+            "Invalid public key byte length: expected {expected}, got {actual}"
+        )),
+        other => CryptoError::Encoding(other),
+    }
+}
