@@ -2,98 +2,175 @@
 
 [![Crates.io](https://img.shields.io/crates/v/affinidi-messaging-sdk.svg)](https://crates.io/crates/affinidi-messaging-sdk)
 [![Documentation](https://docs.rs/affinidi-messaging-sdk/badge.svg)](https://docs.rs/affinidi-messaging-sdk)
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-messaging/affinidi-messaging-sdk)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
-SDK for integrating [Affinidi Messaging](../) into your application. Provides a
-high-level API for sending and receiving end-to-end encrypted
-[DIDComm v2](https://identity.foundation/didcomm-messaging/spec/) messages via a
-mediator service.
+The Affinidi Trusted Messaging (ATM) SDK: send and receive end-to-end
+encrypted [DIDComm v2](https://identity.foundation/didcomm-messaging/spec/)
+messages through a mediator, and, with the `tsp` feature,
+[Trust Spanning Protocol](https://trustoverip.github.io/tswg-tsp-specification/)
+messages over the same mediator. It handles packing, unpacking, routing,
+authentication and transport.
 
-> **Note:** This SDK focuses on the DIDComm protocol. For
-> [Trust Spanning Protocol (TSP)](https://trustoverip.github.io/tswg-tsp-specification/)
-> messaging, see the [`affinidi-tsp`](../affinidi-tsp/) crate directly, or use
-> [`affinidi-messaging-core`](../affinidi-messaging-core/) for a protocol-agnostic
-> API that works with both DIDComm and TSP.
+The crate documentation on [docs.rs](https://docs.rs/affinidi-messaging-sdk)
+is the reference; this page is the overview.
 
 ## Installation
 
-```toml
-[dependencies]
-affinidi-messaging-sdk = "0.17"
+```bash
+cargo add affinidi-messaging-sdk
+# with TSP support
+cargo add affinidi-messaging-sdk --features tsp
 ```
 
-## Quick Start
+## Key concepts
 
-```rust
-use affinidi_messaging_sdk::{ATM, config::Config};
+- **`ATM`**: the entry point. Holds the configuration, the profiles, and the
+  background tasks (such as message deletion).
+- **`ATMProfile`**: a DID together with its mediator. Each profile sends and
+  receives on its own, over REST and optionally a websocket.
+- **Mediator**: stores and forwards messages for a profile. Its REST and
+  websocket endpoints are read from its DID document when the profile is
+  created; a mediator DID that cannot be resolved fails profile creation.
+- **Protocols**: Trust Ping, Message Pickup 3.0, Routing 2.0, Discover
+  Features, OOB discovery and the mediator's Trust Tasks, reached through
+  `atm.trust_ping()`, `atm.message_pickup()`, `atm.routing()`,
+  `atm.discover_features()`, `atm.oob_discovery()` and `atm.trust_tasks()`.
+- **Transports**: REST for authentication and request/response; a websocket
+  per profile for low-latency sends and live delivery.
 
-let config = Config::builder()
-    .with_ssl_certificates(&mut vec!["path/to/client.chain".into()])
-    .with_my_did("did:peer:2...")
-    .with_atm_did("did:peer:2...")
+## Getting started
+
+```rust,ignore
+use affinidi_messaging_sdk::{ATM, config::ATMConfig, profiles::ATMProfile};
+use affinidi_tdk_common::{TDKSharedState, config::TDKConfig};
+use std::{sync::Arc, time::Duration};
+
+// 1. The TDK shared state: DID resolution, secrets, and the HTTP client the
+//    SDK's REST calls use.
+let tdk = Arc::new(TDKSharedState::new(TDKConfig::builder().build()?).await?);
+
+// 2. The SDK.
+let config = ATMConfig::builder()
+    // Optional: trust a private CA for the mediator websocket (wss://).
+    .with_ssl_certificates(&mut vec!["certs/ca.pem".to_string()])
     .build()?;
+let atm = ATM::new(config, tdk.clone()).await?;
 
-let mut atm = ATM::new(config, vec![]).await?;
+// 3. A profile. Its secrets go into the TDK's secrets resolver.
+tdk.add_profile(&alice_tdk_profile).await;
+let alice = atm
+    .profile_add(&ATMProfile::from_tdk_profile(&atm, &alice_tdk_profile).await?, false)
+    .await?;
 
-// Send a trust ping
-atm.send_ping("did:peer:2...", true, true).await?;
+// 4. Send a trust ping over REST.
+let ping = atm
+    .trust_ping()
+    .send_ping(&alice, &mediator_did, true, true, false)
+    .await?;
+
+// 5. Open the websocket and wait for the pong on the live stream.
+atm.profile_enable_websocket(&alice).await?;
+let pong = atm
+    .message_pickup()
+    .live_stream_get(&alice, &ping.message_id, Some(Duration::from_secs(10)), true)
+    .await?;
+
+// 6. Shut down: websockets first, then the background tasks.
+atm.graceful_shutdown().await;
 ```
 
-## Transport
+`profile_enable_websocket` returns once the first connect attempt has
+finished: `Ok` when connected, or that attempt's own error (a refused upgrade
+stays a typed `ATMError::HttpStatus` carrying `Retry-After`, for example). A
+mediator whose DID document has no websocket endpoint is refused at once with
+`ATMError::ConfigError`. The wait for an attempt that hangs is bounded by
+`ATMConfigBuilder::with_websocket_ready_timeout` (default 60s).
 
-The SDK supports both **WebSocket** and **HTTPS REST** transports:
+## Sending and receiving
 
-- **WebSocket** (default) — used for sending messages and receiving inbound
-  message streams
-- **REST** — used for authentication (JWT tokens) and as a fallback
+- `atm.send_message(profile, packed, msg_id, wait_for_response, auto_delete)`
+  sends an already packed message. Over the websocket it returns `Ok` only
+  once the frame was written to the socket; a frame the transport could not
+  write (disconnected, a failed or stalled write) is an `Err`, never a false
+  success. `send_message_with_timeout` chooses how long to wait for a reply.
+- `auto_delete` applies to the reply on both transports.
+- `atm.message_pickup().live_stream_next(..)`, `live_stream_next_frame(..)`,
+  `live_stream_next_packed(..)` and `live_stream_get(..)` take messages off the
+  live stream. `wait: None` waits until one arrives. With `auto_delete` the
+  message's deletion is queued after it is handed to you; if the deletion
+  cannot be queued it is logged, the message is still returned, and the
+  mediator may deliver it again. Treat delivery as at-least-once.
+- `send_status_request`, `send_delivery_request` and
+  `send_delivery_request_frames` drain the mediator's queue. A delivered
+  message keeps its sender's `id`; acknowledge it with
+  `UnpackMetadata::sha256_hash`, the mediator's id for it.
 
-WebSocket is created automatically when `ATM::new()` is called. You can disable
-it or manage it manually:
+### One inbound channel for every profile
 
-```rust
-let config = Config::builder()
-    .with_websocket_disabled()
-    .build()?;
-let mut atm = ATM::new(config, vec![]).await?;
+`ATMConfigBuilder::with_inbound_message_channel(capacity)` routes inbound
+websocket messages from every profile to one bounded channel. Take its
+receiver once with `atm.get_inbound_channel()`. It never drops a message: when
+it is full the transport holds messages in its caches, then stops reading the
+socket until you catch up.
 
-// Send via REST
-atm.send_ping("did:peer:2...", true, true).await?;
+## Connection state and receive health
 
-// Start WebSocket later if needed
-atm.start_websocket().await?;
-atm.send_ping("did:peer:2...", true, true).await?;
-atm.close_websocket().await?;
+The websocket reconnects by itself. Watch it rather than assuming it is up:
+
+```rust,ignore
+// Connecting / Connected / Disconnected, published on every drop and
+// reconnect for the life of the transport.
+if let Some(mut state) = alice.connection_state().await {
+    while state.changed().await.is_ok() {
+        println!("connection: {:?}", *state.borrow());
+    }
+}
+
+// Is anything reaching this profile? A socket can be up while the mediator has
+// stopped delivering, or while the application has stopped taking messages.
+if let Some(health) = alice.receive_health().await {
+    let health = health.borrow();
+    if health.consumer_stalled() {
+        eprintln!("{} inbound messages are waiting to be collected", health.held_frames);
+    }
+}
 ```
 
-## Core API
+`ReceiveHealth` also reports the receive-leg probe (a live-delivery request
+sent when inbound has been silent for `with_receive_probe`, default 60s, with
+a reconnect if it goes unanswered) and frames that could not be unpacked.
 
-### Sending Messages
+For a transport-agnostic interface with acknowledgement after handoff, wrap a
+profile in `DidCommTransport` (an `affinidi-messaging-core` `MessageTransport`).
 
-| Method | Description |
-|---|---|
-| `send_ping(to, signed, response)` | Send a DIDComm Trust Ping |
-| `send_didcomm_message(msg)` | Send a packed DIDComm message via REST |
-| `ws_send_didcomm_message(msg)` | Send a packed DIDComm message via WebSocket |
+## TSP
 
-### Message Management
+With the `tsp` feature, `atm.tsp()` packs, sends, routes and unpacks TSP
+messages through the same profile and mediator, and
+`live_stream_next_frame` / `send_delivery_request_frames` return DIDComm and
+TSP frames side by side as `InboundFrame`. `atm.send_to(..)` chooses the
+protocol per peer according to `ATMConfigBuilder::with_tsp_policy` (off by
+default, so enabling the feature alone changes nothing). TSP relationship
+state lives in a pluggable `RelationshipStore` (in memory by default).
 
-| Method | Description |
-|---|---|
-| `list_messages(did, folder)` | List messages in Inbox or Outbox |
-| `get_messages(request)` | Retrieve messages by ID |
-| `delete_messages(request)` | Delete messages by ID |
+Without the feature, a TSP frame arriving on a DIDComm-only stream is logged,
+deleted and skipped.
 
-### Packing & Unpacking
+## Configuration highlights
 
-| Method | Description |
-|---|---|
-| `pack_encrypted(msg, from, sign_by)` | Encrypt (and optionally sign) a message |
-| `pack_signed(msg, sign_by)` | Sign a plaintext message |
-| `pack_plaintext(msg)` | Create an unencrypted DIDComm message |
-| `unpack(msg)` | Unpack any DIDComm message |
+| Builder method | Default | What it does |
+|---|---|---|
+| `with_ssl_certificates` | none | Extra trust roots (PEM files) for the mediator websocket, on top of the platform's. REST trust comes from the `TDKConfig`. |
+| `with_request_timeout` | 15s | Bound on each REST call. |
+| `with_websocket_ready_timeout` | 60s | Bound on waiting for the first websocket connect attempt. |
+| `with_fetch_cache_limit_count` / `_bytes` | 100 / 10 MB | Per-profile limit on inbound messages held for the application, measured in wire bytes. Reading pauses when reached. |
+| `with_inbound_message_channel` | off | One bounded channel for inbound messages from every profile. |
+| `with_unpack_policy` | authcrypt only | Which envelope wrappings `unpack` and the pickup drain accept. |
+| `with_unprocessable_message_channel` | off | Report messages that could not be processed before they are deleted. |
+| `with_receive_probe` | 60s | Probe a silent receive leg; `None` turns it off. |
+| `with_tsp_policy` (`tsp`) | off | Whether `send_to` picks TSP. |
 
-## Debug Logging
+## Debug logging
 
 ```bash
 export RUST_LOG=none,affinidi_messaging_sdk=debug
@@ -101,28 +178,20 @@ export RUST_LOG=none,affinidi_messaging_sdk=debug
 
 ## Examples
 
-Set up a mediator first (see [affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator)),
-then:
+Runnable examples live in
+[affinidi-messaging-helpers](../affinidi-messaging-helpers/examples/), e.g.
+`trust_ping`, `mediator_ping`, `alice_bob` and `oob_invite`. They need a
+mediator (see
+[affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator))
+and an environment file from the helpers' setup tool.
 
-```bash
-export MEDIATOR_DID=<your-mediator-did>
-export MEDIATOR_ENDPOINT=https://localhost:7037/mediator/v1
+## Related crates
 
-cargo run --example ping
-cargo run --example send_message_to_me
-cargo run --example message_pickup
-```
-
-See [affinidi-messaging-helpers](../affinidi-messaging-helpers/) for more
-examples.
-
-## Related Crates
-
-- [`affinidi-messaging-didcomm`](../affinidi-messaging-didcomm/) — DIDComm protocol implementation (dependency)
-- [`affinidi-tsp`](../affinidi-tsp/) — Trust Spanning Protocol (alternative protocol)
-- [`affinidi-messaging-core`](../affinidi-messaging-core/) — Protocol-agnostic messaging traits
-- [`affinidi-messaging-mediator`](https://github.com/affinidi/affinidi-messaging-mediator) — Mediator service
-- [`affinidi-did-resolver-cache-sdk`](../../affinidi-did-resolver/affinidi-did-resolver-cache-sdk/) — DID resolution
+- [`affinidi-messaging-didcomm`](../affinidi-messaging-didcomm/): the DIDComm implementation
+- [`affinidi-tsp`](../affinidi-tsp/): the Trust Spanning Protocol implementation
+- [`affinidi-messaging-core`](../affinidi-messaging-core/): protocol-agnostic messaging traits
+- [`affinidi-messaging-delivery`](../affinidi-messaging-delivery/): reliable delivery on top of a transport
+- [`affinidi-messaging-mediator`](https://github.com/affinidi/affinidi-messaging-mediator): the mediator
 
 ## License
 

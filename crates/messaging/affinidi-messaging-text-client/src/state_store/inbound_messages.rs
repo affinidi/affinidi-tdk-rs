@@ -608,11 +608,11 @@ pub async fn handle_message(
                         };
 
                         match atm.unpack(&decoded).await {
-                            Ok((mut m, meta)) => {
+                            // The message keeps its sender's id, so replies thread
+                            // to it. `handle_message` acks by `meta.sha256_hash`,
+                            // the mediator's id for it (== the attachment id).
+                            Ok((m, meta)) => {
                                 info!("Delivered message: id({:?})\n {:#?}", attachment.id, m);
-                                if let Some(attachment_id) = &attachment.id {
-                                    m.id = attachment_id.to_string();
-                                }
                                 Box::pin(handle_message(atm, state, &m, &meta)).await;
                             }
                             Err(e) => {

@@ -6,7 +6,7 @@
 //!
 //! ```rust,ignore
 //! atm.trust_ping().send_ping(&profile, &did, true, true, false).await?;
-//! atm.message_pickup().live_stream_get(&profile, &msg_id, dur, true).await?;
+//! atm.message_pickup().live_stream_get(&profile, &msg_id, Some(dur), true).await?;
 //! atm.trust_tasks().admin_config(&profile).await?;
 //! ```
 /// **Deprecated**: Use `atm.trust_ping()`, `atm.message_pickup()`, etc. instead.

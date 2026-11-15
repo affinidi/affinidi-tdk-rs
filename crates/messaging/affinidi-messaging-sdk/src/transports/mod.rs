@@ -69,19 +69,37 @@ fn stored_reply_ids(answer: &SendMessageResponse, recipient: &str) -> Vec<String
         .collect()
 }
 
+/// How long [`ATM::send_message`] waits for the websocket transport to confirm
+/// that a frame was written (or refused) before giving up with an error.
+///
+/// The transport bounds each write itself, but it runs one command at a time,
+/// and a command can queue behind a connect attempt or an inbound unpack. This
+/// keeps the caller from waiting on it without limit. A frame whose caller has
+/// given up is not written afterwards: the transport checks before writing, so
+/// a timed-out send was not transmitted (R1.1).
+pub const SEND_CONFIRM_TIMEOUT: Duration = Duration::from_secs(30);
+
 impl ATM {
     /// Send a message to a mediator based on a given profile
     /// - profile: The profile to connect to the mediator with
     /// - message: The message to send (already packed as a DIDComm message)
     /// - msg_id: The ID of the message (used for message response pickup)
     /// - wait_for_response: Whether to wait for a message response from the mediator
-    /// - auto_delete: Whether to delete the message response after receiving it
+    /// - auto_delete: Whether to delete the message response after receiving it,
+    ///   on both the websocket and the REST path.
     ///   NOTE: If set to false, then you must delete the message elsewhere
     ///
-    /// Returns: If wait_for_response is true, the response message from the mediator
-    ///          Else Ok(None) - Message sent Successfully
-    ///          Else Err - Error sending message    
+    /// Over the websocket the reply is waited for up to
+    /// [`DEFAULT_RESPONSE_WAIT`](crate::protocols::message_pickup::DEFAULT_RESPONSE_WAIT);
+    /// use [`send_message_with_timeout`](Self::send_message_with_timeout) to
+    /// choose.
     ///
+    /// Returns: If wait_for_response is true, `Ok(SendMessageResponse::Message)`
+    ///          with the response message from the mediator.
+    ///          Else, once the message is sent, `Ok(SendMessageResponse::EmptyResponse)`
+    ///          over the websocket or `Ok(SendMessageResponse::RestAPI(body))` over REST.
+    ///          Else Err - Error sending message. A websocket send is `Ok` only
+    ///          once the frame was written to the socket.
     pub async fn send_message(
         &self,
         profile: &Arc<ATMProfile>,
@@ -90,22 +108,48 @@ impl ATM {
         wait_for_response: bool,
         auto_delete: bool,
     ) -> Result<SendMessageResponse, ATMError> {
+        self.send_message_with_timeout(
+            profile,
+            message,
+            msg_id,
+            wait_for_response,
+            auto_delete,
+            crate::protocols::message_pickup::DEFAULT_RESPONSE_WAIT,
+        )
+        .await
+    }
+
+    /// [`send_message`](Self::send_message), waiting up to `wait` for the
+    /// reply when it arrives over the websocket. Over REST the reply is
+    /// fetched at once and the configured request timeout applies instead.
+    pub async fn send_message_with_timeout(
+        &self,
+        profile: &Arc<ATMProfile>,
+        message: &str,
+        msg_id: &str,
+        wait_for_response: bool,
+        auto_delete: bool,
+        wait: Duration,
+    ) -> Result<SendMessageResponse, ATMError> {
         self.send_message_inner(
             profile,
             message,
             msg_id,
             wait_for_response,
             auto_delete,
-            true,
+            auto_delete,
+            wait,
         )
         .await
     }
 
-    /// [`send_message`](Self::send_message), choosing whether a reply that
-    /// arrives on the websocket is deleted. `send_message` always deletes it
-    /// there; a reply the mediator never stores (the answer to
-    /// `messaging/mux/ack`) must not be, or each ack would queue a delete for
-    /// an id that was never there.
+    /// [`send_message`](Self::send_message), choosing separately whether a
+    /// reply is deleted when it arrives on the websocket (`ws_reply_delete`)
+    /// and when it is fetched over REST (`auto_delete`). A reply the mediator
+    /// never stores (the answer to `messaging/mux/ack`) must not be deleted on
+    /// the websocket, or each ack would queue a delete for an id that was
+    /// never there.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn send_message_inner(
         &self,
         profile: &Arc<ATMProfile>,
@@ -114,6 +158,7 @@ impl ATM {
         wait_for_response: bool,
         auto_delete: bool,
         ws_reply_delete: bool,
+        wait: Duration,
     ) -> Result<SendMessageResponse, ATMError> {
         let Some(mediator) = &*profile.inner.mediator else {
             return Err(ATMError::ConfigError(
@@ -140,27 +185,42 @@ impl ATM {
                 profile.inner.alias
             );
 
-            let (reply_tx, reply_rx) = oneshot::channel();
-            channel
-                .send(WebSocketCommands::SendMessage(message.to_owned(), reply_tx))
-                .await
-                .map_err(|err| {
-                    ATMError::TransportError(format!("Could not send websocket message: {err:?}"))
-                })?;
-
             // R1.1: await the ACTUAL write result. A frame dropped during a
             // reconnect (socket `None`) or a failed socket write now surfaces as
             // an error instead of a false `Ok(EmptyResponse)`. This is the
             // behaviour change every downstream "delivered" log was built on.
-            let written = match reply_rx.await {
-                Ok(Ok(())) => Ok(()),
-                Ok(Err(reason)) => Err(ATMError::TransportError(format!(
-                    "WebSocket message not transmitted: {reason}"
-                ))),
-                Err(_) => Err(ATMError::TransportError(
-                    "WebSocket task ended before confirming the send".to_string(),
-                )),
-            };
+            //
+            // Bounded: queueing the command and waiting for its confirmation
+            // together take at most `SEND_CONFIRM_TIMEOUT`. When that runs out
+            // the transport sees this side's receiver gone and does not write
+            // the frame, so the error is truthful.
+            let written = tokio::time::timeout(SEND_CONFIRM_TIMEOUT, async {
+                let (reply_tx, reply_rx) = oneshot::channel();
+                channel
+                    .send(WebSocketCommands::SendMessage(message.to_owned(), reply_tx))
+                    .await
+                    .map_err(|err| {
+                        ATMError::TransportError(format!(
+                            "Could not send websocket message: {err:?}"
+                        ))
+                    })?;
+                match reply_rx.await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(reason)) => Err(ATMError::TransportError(format!(
+                        "WebSocket message not transmitted: {reason}"
+                    ))),
+                    Err(_) => Err(ATMError::TransportError(
+                        "WebSocket task ended before confirming the send".to_string(),
+                    )),
+                }
+            })
+            .await
+            .unwrap_or_else(|_| {
+                Err(ATMError::TransportError(format!(
+                    "WebSocket transport did not take the message within \
+                     {SEND_CONFIRM_TIMEOUT:?}; not transmitted"
+                )))
+            });
             if let Err(e) = written {
                 // Nothing was sent, so no reply will come: drop the registration.
                 if reply.is_some() {
@@ -184,7 +244,7 @@ impl ATM {
                         msg_id,
                         ws_channel,
                         rx,
-                        Duration::from_secs(10),
+                        Some(wait),
                         ws_reply_delete,
                     )
                     .await?;

@@ -1,5 +1,129 @@
 # Changelog
 
+## 0.49.0 — truthful receive and request paths, bounded websocket writes, a lossless inbound channel, real connect errors
+
+Fixes from the 2026-11 review (#1008, #1009, #1010, #1011, #1012, #1013,
+#1014, #1016, #1017, #1018, #1019). Breaking: send/receive semantics change
+even where signatures do not (R3.6). Consumers of the websocket transport,
+the inbound channel or `send_delivery_request` should read the behaviour
+notes.
+
+### Behaviour changes (R3.6)
+
+- **A received message is never lost to its auto-delete (#1008).**
+  `live_stream_next`, `live_stream_next_frame`, `live_stream_next_packed`,
+  `live_stream_get` and the reply wait in `ATM::send_message` used to return
+  `Err(SDKError)` — with no message and no id — when `auto_delete` was set and
+  the deletion queue stayed full for `DELETE_ENQUEUE_TIMEOUT`. They now return
+  the message and log the failed enqueue at WARN; the message stays at the
+  mediator and may be redelivered. Callers stop seeing `SDKError` from these
+  functions under delete backpressure; treat delivery as at-least-once.
+- **`auto_delete` is honoured on the websocket (#1009).** `ATM::send_message`
+  deleted a websocket reply whatever `auto_delete` said. It now follows the
+  argument on both transports. A caller that passed `false` and relied on the
+  reply being deleted anyway must now delete it. The Message Pickup requests
+  pass `false` (the mediator does not store those replies), so they no longer
+  queue a `DELETE` for an id the mediator never held.
+- **Requests sent without waiting succeed (#1009).** `send_status_request`,
+  `send_delivery_request` and `send_delivery_request_frames` with
+  `wait_for_response = false` returned `Err("Invalid response from API")`
+  after a successful send. They now return `Ok(None)` / an empty `Vec`.
+  `send_messages_received` also returns `Ok(None)` for a REST send without
+  waiting.
+- **`send_status_request`'s `wait` is used (#1009).** It bounds the wait for
+  the reply over the websocket (`None` = `DEFAULT_RESPONSE_WAIT`, 10s); it was
+  ignored.
+- **Websocket writes are bounded and a failed write is a disconnect (#1010).**
+  Application sends and pong replies are bounded by the 5s socket write
+  timeout. A write that fails or times out drops the socket at once (pending
+  waiters fail, `ConnState::Disconnected` is published, a reconnect is
+  scheduled) instead of leaving it for later sends to fail against. A send on
+  a wedged socket fails after about 5s instead of hanging.
+- **`ATM::send_message` waits a bounded time for the transport (#1010).** At
+  most `SEND_CONFIRM_TIMEOUT` (30s) for the transport to take and write the
+  frame. A frame whose caller gave up is not written afterwards, so the error
+  stays true (R1.1).
+- **Connect-time live-delivery enable and mux proof checks are bounded
+  (#1010).** Packing the connect-time `live-delivery-change` is bounded like
+  the receive-leg probe (10s pack, 5s write). Verifying a mux event or notice
+  through the DID resolver is bounded at 10s: an event that cannot be verified
+  in time is dropped, a notice is passed on as an ordinary message.
+- **Enabling a websocket reports the real error (#1012).**
+  `profile_enable_websocket`, `profile_enable_mux_websocket`,
+  `profile_start_live_streaming` and `profile_add(.., true)` return the first
+  connect attempt's own error as soon as it fails (a refused upgrade stays a
+  typed `ATMError::HttpStatus` with `Retry-After`; an authentication failure
+  stays an auth error) instead of `TransportError("WebSocket isActive? command
+  timed out")` after 10s. A failure inside that window used to be retried; it
+  is now returned, and the half-started transport is stopped. A mediator with
+  no websocket endpoint in its DID document fails at once with `ConfigError`.
+  The wait for an attempt that hangs is now 60s (was 10s, shorter than one
+  connect attempt), configurable with `with_websocket_ready_timeout` and never
+  below the 30s connect timeout.
+- **`ATMProfile::new` fails when the mediator DID cannot be resolved (#1017).**
+  It used to return a profile with no mediator, which then failed elsewhere
+  with "No Mediator is configured for this Profile". It now returns the
+  resolver's `ATMError::DIDError`. `from_tdk_profile` and `profile_add` callers
+  see the error at construction. A boot during a resolver outage now fails
+  instead of producing an unusable profile; retry construction.
+- **`send_delivery_request` keeps each message's `id` (#1018).** The message
+  used to come back with `id` overwritten by the mediator's attachment id, so
+  a reply threaded on it pointed at the mediator's id. It now keeps the
+  sender's id, as `send_delivery_request_frames` already did. **Acknowledge or
+  delete by `UnpackMetadata::sha256_hash`** (the mediator's id; set to the
+  attachment id should they ever differ), not `m.id`. A caller that acked by
+  `m.id` now names an id the mediator does not hold and the message stays
+  queued.
+- **The fetch cache's byte limit measures message size (#1016).**
+  `with_fetch_cache_limit_bytes` used to count every cached DIDComm message as
+  the fixed size of the `Message` struct, so only the count limit ever
+  applied. Each message now counts its packed (wire) length, so backpressure
+  starts earlier for large messages, as the option documents.
+- **`with_ssl_certificates` takes effect (#1013).** The parsed roots were never
+  used. They are now trusted by the websocket TLS connector (mediator and TSP
+  websockets), in addition to the platform's native roots. REST trust still
+  comes from the `TDKConfig` given to `ATM::new`; this is documented.
+- **`enable_direct_channel` without a running websocket is an error.** It
+  returned `Ok(())` having done nothing; it now returns `ConfigError`.
+
+### API changes (breaking)
+
+- **The inbound message channel is a bounded `mpsc` (#1011).**
+  `with_inbound_message_channel(capacity)` built a `broadcast` channel; a
+  receiver that fell more than `capacity` behind silently lost the oldest
+  frames, outside every cache limit and backpressure rule. It is now a
+  single-consumer bounded `mpsc`: a full channel hands the frame to the
+  transport's caches, whose limits pause reading the socket, and held frames
+  move to the channel as it drains. `ATM::get_inbound_channel()` now returns
+  `Option<mpsc::Receiver<WebSocketResponses>>` and hands the receiver out
+  once (later calls return `None`); `recv()` yields `Option`, not `Result`.
+  `ATMProfile::enable_direct_channel` takes an `mpsc::Sender`.
+  `WebSocketResponses` is no longer `Clone` (it is now `Debug`).
+- **`live_stream_get` takes `wait: Option<Duration>` (#1019)**, like its
+  siblings: `None` waits until the message arrives. A zero `Duration` used to
+  mean "wait forever" despite the doc saying "will not block"; pass `None` for
+  that now.
+- New: `ATM::send_message_with_timeout`, `SEND_CONFIRM_TIMEOUT`,
+  `protocols::message_pickup::DEFAULT_RESPONSE_WAIT`,
+  `ATMConfigBuilder::with_websocket_ready_timeout`,
+  `ATMConfig::get_websocket_ready_timeout`,
+  `config::DEFAULT_WEBSOCKET_READY_TIMEOUT`.
+- New dependency: `rustls-native-certs` 0.8 (already in the graph through
+  `tokio-tungstenite`).
+
+### Documentation (#1014, #1019)
+
+- README rewritten against the current API (profiles, websocket enable,
+  delivery semantics, the inbound channel, `connection_state()` /
+  `receive_health()`, the `tsp` feature); the stale version pin is gone.
+- Rustdoc corrected where it contradicted the code: `allow_invalid_signatures`
+  and `relationship_store` docs, `wait` units ("milliseconds" on `Duration`
+  parameters), what `live_stream_next` does with a TSP frame, `profile_add`'s
+  return, the direct-channel type, `send_message`'s return,
+  `ATMProfile::new`'s mediator handling, the crate-level getting-started
+  (`TDKSharedState::new`). The commented-out old `send_messages_received` body
+  and the dead `live_stream_get_packed` stub are removed.
+
 ## 0.48.0 — affinidi-tsp 0.4 and affinidi-messaging-delivery 0.3
 
 - **Changed (breaking):** requires `affinidi-tsp` 0.4, whose types it

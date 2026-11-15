@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.48.0"
+version = "0.49.0"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -86,6 +86,10 @@ rustls = { version = "0.23", default-features = false, features = [
   "aws_lc_rs",
   "tls12",
 ] }
+# The platform's trust roots, for a websocket TLS config that adds
+# `with_ssl_certificates` roots to them (the same source tokio-tungstenite's
+# `rustls-tls-native-roots` default connector uses; already in the graph).
+rustls-native-certs = "0.8"
 # PEM parsing comes from rustls-pki-types (already re-exported by rustls as
 # `rustls::pki_types`) rather than rustls-pemfile: that crate is archived and
 # unmaintained (RUSTSEC-2025-0134), and its final release is a thin wrapper
@@ -113,3 +117,6 @@ rcgen = { version = "0.14", default-features = false, features = [
 ] }
 ring = { version = "0.17", features = ["std"] }
 time = "0.3"
+# A TLS websocket server on loopback, to prove `with_ssl_certificates` roots
+# reach the websocket connector.
+tokio-rustls = "0.26"

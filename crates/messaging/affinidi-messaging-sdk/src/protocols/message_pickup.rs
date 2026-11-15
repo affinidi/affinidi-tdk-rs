@@ -67,10 +67,35 @@ pub(crate) fn emit_unprocessable(
     }
 }
 
+/// Queue the auto-delete of a message the caller has already been handed.
+///
+/// Never fails the receive. By the time this runs the frame has left the
+/// transport's cache and is in the caller's hands; failing here (as the `?` on
+/// these sites once did) turned a delivered message into an error carrying no
+/// message and no id. The enqueue is bounded by
+/// [`DELETE_ENQUEUE_TIMEOUT`](crate::messages::delete::DELETE_ENQUEUE_TIMEOUT);
+/// if the deletion queue is still full after that, the message stays at the
+/// mediator and is redelivered on the next reconnect or delivery request, which
+/// the caller must already tolerate (at-least-once).
+pub(crate) async fn auto_delete_message(atm: &ATM, profile: &Arc<ATMProfile>, message_id: &str) {
+    if let Err(e) = atm.delete_message_background(profile, message_id).await {
+        warn!(
+            "Received message ({message_id}) could not be queued for deletion ({e}); \
+             returning it anyway. The mediator still holds it and will redeliver it"
+        );
+    }
+}
+
+/// How long a request/response exchange waits for its reply over the
+/// websocket when the caller does not say: [`ATM::send_message`] and the
+/// Message Pickup requests given `wait: None`.
+pub const DEFAULT_RESPONSE_WAIT: Duration = Duration::from_secs(10);
+
 /// A single inbound frame off the live-delivery stream, tagged by transport.
 ///
-/// `live_stream_next` yields only DIDComm and errors on a TSP frame;
-/// `live_stream_next_packed` yields only TSP and errors on a DIDComm frame. A
+/// `live_stream_next` yields only DIDComm: a TSP frame on it is logged, deleted
+/// (when `auto_delete`) and skipped with `Ok(None)`. `live_stream_next_packed`
+/// yields only packed frames and errors on an unpacked DIDComm one. A
 /// node that speaks **both** protocols over one websocket can't know which will
 /// arrive next, so neither single-protocol method fits. `live_stream_next_frame`
 /// returns whichever arrives, tagged here, so a multiplexing consumer (e.g.
@@ -127,13 +152,16 @@ pub struct MessagePickupMessagesReceived {
 }
 
 impl MessagePickup {
-    /// Sends a Message Pickup 3.0 `Status Request` message
-    /// recipient_did : Optional, allows you to ask for status for a specific DID. If none, will ask for default DID in ATM
-    /// mediator_did  : Optional, allows you to ask a specific mediator. If none, will ask for default mediator in ATM
-    /// wait_for_response : If true, will wait for a response from the server. If false, will return immediately
-    /// wait          : Time Duration to wait for a response from websocket. Default (10 Seconds)
+    /// Sends a Message Pickup 3.0 `Status Request` message for this profile's
+    /// DID to its mediator.
+    /// wait_for_response : If true, waits for the mediator's status reply. If
+    ///                     false, returns `Ok(None)` once the request is sent
+    ///                     (the reply then arrives on the live stream, if any).
+    /// wait          : How long to wait for the reply over the websocket.
+    ///                 `None` uses [`DEFAULT_RESPONSE_WAIT`] (10 seconds). Over
+    ///                 REST the configured request timeout applies instead.
     ///
-    /// Returns a StatusReply if successful
+    /// Returns the StatusReply when `wait_for_response` is true.
     pub async fn send_status_request(
         &self,
         atm: &ATM,
@@ -180,20 +208,28 @@ impl MessagePickup {
                 .await
                 .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
-            match atm
-                .send_message(profile, &msg, &msg_id, wait_for_response, false)
-                .await?
-            {
-                SendMessageResponse::Message(message) => {
-                    if wait_for_response {
-                        self._parse_status_response(&message).await
-                    } else {
-                        Ok(None)
-                    }
+            let response = atm
+                .send_message_with_timeout(
+                    profile,
+                    &msg,
+                    &msg_id,
+                    wait_for_response,
+                    false,
+                    wait.unwrap_or(DEFAULT_RESPONSE_WAIT),
+                )
+                .await?;
+            match (wait_for_response, response) {
+                (true, SendMessageResponse::Message(message)) => {
+                    self._parse_status_response(&message).await
                 }
-                _ => Err(ATMError::MsgReceiveError(
-                    "Invalid response from API".into(),
-                )),
+                // Sent, and the caller did not ask for the reply: the websocket
+                // answers `EmptyResponse`, REST the POST's own body.
+                (false, SendMessageResponse::EmptyResponse | SendMessageResponse::RestAPI(_)) => {
+                    Ok(None)
+                }
+                (_, other) => Err(ATMError::MsgReceiveError(format!(
+                    "Invalid response from API: {other:?}"
+                ))),
             }
         }
         .instrument(_span)
@@ -283,10 +319,16 @@ impl MessagePickup {
     /// Waits for the next message to be received via websocket live delivery
     /// atm         : The ATM SDK to use
     /// profile     : The profile to use
-    /// wait        : How long to wait (in milliseconds) for a message before returning None
+    /// wait        : How long to wait for a message before returning None.
     ///                 If None, will block forever until a message is received
-    /// auto_delete : If true, will delete the message after receiving it
-    /// Returns a tuple of the message and metadata, or None if no message was received
+    /// auto_delete : If true, queues the message's deletion at the mediator
+    ///               after receiving it. A deletion that cannot be queued is
+    ///               logged and the message is still returned (it stays at the
+    ///               mediator and may be redelivered).
+    /// Returns a tuple of the message and metadata, or None if no message was received.
+    /// A packed (TSP) frame is not DIDComm: it is logged, deleted when
+    /// `auto_delete`, and skipped with `Ok(None)`. Use
+    /// [`live_stream_next_frame`](Self::live_stream_next_frame) to receive both.
     pub async fn live_stream_next(
         &self,
         atm: &ATM,
@@ -347,10 +389,8 @@ impl MessagePickup {
             };
             match value {
                 Ok(WebSocketResponses::MessageReceived(msg, meta)) => {
-                    // If auto_delete is true, delete the message
                     if auto_delete {
-                        atm.delete_message_background(profile, &meta.sha256_hash)
-                            .await?;
+                        auto_delete_message(atm, profile, &meta.sha256_hash).await;
                     }
                     Ok(Some((*msg, meta)))
                 }
@@ -376,7 +416,7 @@ impl MessagePickup {
                     );
                     if auto_delete {
                         let sha256_hash = sha256::digest(packed_msg.as_str());
-                        atm.delete_message_background(profile, &sha256_hash).await?;
+                        auto_delete_message(atm, profile, &sha256_hash).await;
                     }
                     Ok(None)
                 }
@@ -395,9 +435,9 @@ impl MessagePickup {
     /// Waits for the next inbound frame — **DIDComm or TSP** — via websocket
     /// live delivery, returning it tagged as an [`InboundFrame`].
     ///
-    /// Unlike [`live_stream_next`](Self::live_stream_next) (DIDComm-only, errors
-    /// on a TSP frame) and [`live_stream_next_packed`](Self::live_stream_next_packed)
-    /// (TSP-only, errors on a DIDComm frame), this accepts **both** off the one
+    /// Unlike [`live_stream_next`](Self::live_stream_next) (DIDComm-only, skips
+    /// a TSP frame) and [`live_stream_next_packed`](Self::live_stream_next_packed)
+    /// (packed-only, errors on an unpacked DIDComm frame), this accepts **both** off the one
     /// stream so a multiplexing consumer can route by transport. `auto_delete`
     /// deletes the received message in the background (by unpack `sha256_hash`
     /// for DIDComm, by hash of the packed frame for TSP), matching the two
@@ -462,8 +502,7 @@ impl MessagePickup {
             match value {
                 Ok(WebSocketResponses::MessageReceived(msg, meta)) => {
                     if auto_delete {
-                        atm.delete_message_background(profile, &meta.sha256_hash)
-                            .await?;
+                        auto_delete_message(atm, profile, &meta.sha256_hash).await;
                     }
                     Ok(Some(InboundFrame::DidComm(msg, meta)))
                 }
@@ -476,7 +515,7 @@ impl MessagePickup {
                         // streams the exact bytes it stored — locked by
                         // the mediator's `message_id_is_sha256_of_body`.
                         let sha256_hash = sha256::digest(packed_msg.as_str());
-                        atm.delete_message_background(profile, &sha256_hash).await?;
+                        auto_delete_message(atm, profile, &sha256_hash).await;
                     }
                     Ok(Some(InboundFrame::Tsp(packed_msg)))
                 }
@@ -502,17 +541,19 @@ impl MessagePickup {
     /// Attempts to retrieve a specific message from the server via websocket live delivery
     /// atm                 : The ATM SDK to use
     /// profile             : The profile to use
-    /// msg_id              : The ID of the message to retrieve (matches on either `id` or `pthid`)
-    /// wait                : How long to wait (in milliseconds) for a message before returning None
-    ///                       If 0, will not block
-    /// auto_delete         : If true, will delete the message after receiving it
+    /// msg_id              : The ID of the message to retrieve (matches on `id`, `thid` or `pthid`)
+    /// wait                : How long to wait for the message before returning None.
+    ///                       If None, will block forever until it is received
+    /// auto_delete         : If true, queues the message's deletion at the
+    ///                       mediator after receiving it (a deletion that cannot
+    ///                       be queued is logged; the message is still returned)
     /// Returns a tuple of the message and metadata, or None if no message was received
     pub async fn live_stream_get(
         &self,
         atm: &ATM,
         profile: &Arc<ATMProfile>,
         msg_id: &str,
-        wait: Duration,
+        wait: Option<Duration>,
         auto_delete: bool,
     ) -> Result<Option<(Message, Box<UnpackMetadata>)>, ATMError> {
         let (ws_channel, rx) = self.live_stream_register(profile, msg_id).await?;
@@ -578,7 +619,7 @@ impl MessagePickup {
     }
 
     /// Wait for a message registered with [`Self::live_stream_register`]. On
-    /// timeout the registration is cancelled.
+    /// timeout the registration is cancelled. `wait: None` waits forever.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn live_stream_await(
         &self,
@@ -587,24 +628,20 @@ impl MessagePickup {
         msg_id: &str,
         ws_channel: tokio::sync::mpsc::Sender<WebSocketCommands>,
         rx: tokio::sync::oneshot::Receiver<WebSocketResponses>,
-        wait: Duration,
+        wait: Option<Duration>,
         auto_delete: bool,
     ) -> Result<Option<(Message, Box<UnpackMetadata>)>, ATMError> {
         let _span = span!(Level::DEBUG, "live_stream_get");
 
         async move {
-            // A zero `wait` has always meant no timeout here.
-            let wait = (wait.as_millis() > 0).then_some(wait);
             let cancel = WebSocketCommands::CancelGetMessage(msg_id.to_string());
             let Some(value) = await_next(&ws_channel, rx, wait, cancel).await? else {
                 return Ok(None);
             };
             match value {
                 Ok(WebSocketResponses::MessageReceived(msg, meta)) => {
-                    // If auto_delete is true, delete the message
                     if auto_delete {
-                        atm.delete_message_background(profile, &meta.sha256_hash)
-                            .await?;
+                        auto_delete_message(atm, profile, &meta.sha256_hash).await;
                     }
                     Ok(Some((*msg, meta)))
                 }
@@ -633,7 +670,7 @@ impl MessagePickup {
                     );
                     if auto_delete {
                         let sha256_hash = sha256::digest(packed_msg.as_str());
-                        atm.delete_message_background(profile, &sha256_hash).await?;
+                        auto_delete_message(atm, profile, &sha256_hash).await;
                     }
                     Ok(None)
                 }
@@ -652,6 +689,16 @@ impl MessagePickup {
     /// Sends a Message Pickup 3.0 `Delivery Request` message
     /// atm           : The ATM SDK to use
     /// limit         : # of messages to retrieve, defaults to 10 if None
+    /// wait_for_response : If true, waits for the mediator's `delivery` reply
+    ///                 and returns its messages. If false, returns an empty
+    ///                 `Vec` once the request is sent (the `delivery` then
+    ///                 arrives on the live stream, if any).
+    ///
+    /// Each message keeps the `id` its sender gave it. To acknowledge or delete
+    /// one, use its [`UnpackMetadata::sha256_hash`]: that is the mediator's id
+    /// for it (the delivery attachment id). This used to return the message
+    /// with `id` overwritten by the attachment id, which made a reply threaded
+    /// on it point at the mediator's id instead of the sender's.
     pub async fn send_delivery_request(
         &self,
         atm: &ATM,
@@ -659,10 +706,13 @@ impl MessagePickup {
         limit: Option<usize>,
         wait_for_response: bool,
     ) -> Result<Vec<(Message, UnpackMetadata)>, ATMError> {
-        let message = self
+        match self
             ._request_delivery(atm, profile, limit, wait_for_response)
-            .await?;
-        self._handle_delivery(atm, profile, &message).await
+            .await?
+        {
+            Some(message) => self._handle_delivery(atm, profile, &message).await,
+            None => Ok(Vec::new()),
+        }
     }
 
     /// TSP-aware sibling of [`send_delivery_request`]: returns each queued
@@ -679,14 +729,18 @@ impl MessagePickup {
         limit: Option<usize>,
         wait_for_response: bool,
     ) -> Result<Vec<(Option<InboundFrame>, String)>, ATMError> {
-        let message = self
+        match self
             ._request_delivery(atm, profile, limit, wait_for_response)
-            .await?;
-        self._handle_delivery_frames(atm, &message).await
+            .await?
+        {
+            Some(message) => self._handle_delivery_frames(atm, &message).await,
+            None => Ok(Vec::new()),
+        }
     }
 
     /// Send a Message-Pickup 3.0 delivery-request and return the mediator's
-    /// `delivery` message (whose attachments are the queued messages). Shared by
+    /// `delivery` message (whose attachments are the queued messages), or
+    /// `None` when `wait_for_response` is false. Shared by
     /// [`send_delivery_request`] and [`send_delivery_request_frames`].
     async fn _request_delivery(
         &self,
@@ -694,7 +748,7 @@ impl MessagePickup {
         profile: &Arc<ATMProfile>,
         limit: Option<usize>,
         wait_for_response: bool,
-    ) -> Result<Message, ATMError> {
+    ) -> Result<Option<Message>, ATMError> {
         let _span = span!(Level::DEBUG, "send_delivery_request",);
 
         async move {
@@ -742,12 +796,17 @@ impl MessagePickup {
                 msg
             };
 
-            match atm
+            let response = atm
                 .send_message(profile, &msg, &msg_id, wait_for_response, false)
-                .await?
-            {
-                SendMessageResponse::Message(message) => Ok(*message),
-                _ => Err(ATMError::MsgReceiveError("No Messages from API".into())),
+                .await?;
+            match (wait_for_response, response) {
+                (true, SendMessageResponse::Message(message)) => Ok(Some(*message)),
+                (false, SendMessageResponse::EmptyResponse | SendMessageResponse::RestAPI(_)) => {
+                    Ok(None)
+                }
+                (_, other) => Err(ATMError::MsgReceiveError(format!(
+                    "No Messages from API: {other:?}"
+                ))),
             }
         }
         .instrument(_span)
@@ -1010,9 +1069,23 @@ impl MessagePickup {
                         .unpack_with(&decoded, atm.inner.config.unpack_policy())
                         .await
                     {
-                        Ok((mut m, u)) => {
-                            if let Some(attachment_id) = &attachment.id {
-                                m.id = attachment_id.to_string();
+                        // The message keeps the id its sender gave it, so a reply
+                        // threads to the sender's id (VTI-49; the frames variant
+                        // above already did this). The mediator's id, the one to
+                        // ack or delete with, is `u.sha256_hash`: sha256 of these
+                        // bytes, which is how the mediator ids a stored message,
+                        // so it equals the attachment id. Should a mediator name
+                        // it differently, its id is the one an ack must carry.
+                        Ok((m, mut u)) => {
+                            if let Some(attachment_id) = &attachment.id
+                                && *attachment_id != u.sha256_hash
+                            {
+                                debug!(
+                                    "delivery attachment id ({attachment_id}) differs from the \
+                                     message hash ({}); acking by the attachment id",
+                                    u.sha256_hash
+                                );
+                                u.sha256_hash = attachment_id.to_string();
                             }
                             response.push((m, u))
                         }
@@ -1156,6 +1229,8 @@ impl MessagePickup {
                     }
                 }
                 Ok(SendMessageResponse::EmptyResponse) => Ok(None),
+                // REST without waiting answers with the POST's own body.
+                Ok(SendMessageResponse::RestAPI(_)) if !wait_for_response => Ok(None),
                 Err(err) => Err(ATMError::MsgReceiveError(format!(
                     "Invalid response from API: {err}"
                 ))),
@@ -1163,21 +1238,6 @@ impl MessagePickup {
                     "Wrong type received from API".into(),
                 )),
             }
-
-            /*if let SendMessageResponse::Message(message) = atm
-                .send_message(profile, &msg, &msg_id, wait_for_response)
-                .await?
-            {
-                if wait_for_response {
-                    self._parse_status_response(&message).await
-                } else {
-                    Ok(None)
-                }
-            } else {
-                Err(ATMError::MsgReceiveError(
-                    "Invalid response from API".into(),
-                ))
-            }*/
         }
         .instrument(_span)
         .await
@@ -1187,9 +1247,11 @@ impl MessagePickup {
     /// Returns the message as a packed string without unpacking
     /// atm         : The ATM SDK to use
     /// profile     : The profile to use
-    /// wait        : How long to wait (in milliseconds) for a message before returning None
+    /// wait        : How long to wait for a message before returning None.
     ///                 If None, will block forever until a message is received
-    /// auto_delete : If true, will delete the message after receiving it
+    /// auto_delete : If true, queues the message's deletion at the mediator
+    ///               after receiving it (a deletion that cannot be queued is
+    ///               logged; the message is still returned)
     /// Returns the packed message string, or None if no message was received
     pub async fn live_stream_next_packed(
         &self,
@@ -1249,9 +1311,7 @@ impl MessagePickup {
                     // If auto_delete is true, delete the message
                     if auto_delete {
                         let sha256_hash = sha256::digest(packed_msg.as_str());
-                        debug!("Trying to delete message in background with hash: {}", sha256_hash);
-                        atm.delete_message_background(profile, &sha256_hash).await?;
-                        debug!("Deleted message in background with hash: {}", sha256_hash);
+                        auto_delete_message(atm, profile, &sha256_hash).await;
                     }
                     Ok(Some(*packed_msg))
                 }
@@ -1277,20 +1337,6 @@ impl MessagePickup {
         }
         .instrument(_span)
         .await
-    }
-
-    /// Attempts to retrieve a specific message from the server via websocket live delivery (packed version)
-    /// Note: This method is not yet implemented as it requires changes to the message cache to support packed messages
-    #[allow(dead_code)]
-    async fn live_stream_get_packed(
-        &self,
-        _profile: &Arc<ATMProfile>,
-        _msg_id: &str,
-        _wait: Duration,
-    ) -> Result<Option<String>, ATMError> {
-        Err(ATMError::MsgReceiveError(
-            "live_stream_get_packed is not yet implemented. The message cache currently only supports unpacked messages. Use live_stream_next_packed() instead.".into()
-        ))
     }
 }
 
@@ -1344,7 +1390,7 @@ impl<'a> MessagePickupOps<'a> {
         &self,
         profile: &Arc<ATMProfile>,
         msg_id: &str,
-        wait: Duration,
+        wait: Option<Duration>,
         auto_delete: bool,
     ) -> Result<Option<(Message, Box<UnpackMetadata>)>, ATMError> {
         MessagePickup::default()
@@ -1645,14 +1691,19 @@ mod tests {
             .expect("the drain must not error on an unprocessable batch");
 
         // Only the two valid authcrypt messages surface; every unprocessable one is skipped.
-        let ids: Vec<&str> = out.iter().map(|(m, _)| m.id.as_str()).collect();
+        // Each keeps its sender's id, and carries the mediator's (attachment)
+        // id as the one to ack it by (#1018).
+        let ids: Vec<(&str, &str)> = out
+            .iter()
+            .map(|(m, meta)| (m.id.as_str(), meta.sha256_hash.as_str()))
+            .collect();
         assert_eq!(
             out.len(),
             2,
             "only the valid messages should surface, got ids: {ids:?}"
         );
-        assert!(ids.contains(&"good-1"));
-        assert!(ids.contains(&"good-2"));
+        assert!(ids.contains(&("m1", "good-1")));
+        assert!(ids.contains(&("m2", "good-2")));
         // The secure default held: everything surfaced is authenticated authcrypt.
         for (_, meta) in &out {
             assert!(
@@ -1744,7 +1795,8 @@ mod tests {
 
         // The good message is delivered.
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].0.id, "good-1");
+        assert_eq!(out[0].0.id, "m1", "the sender's id is kept");
+        assert_eq!(out[0].1.sha256_hash, "good-1", "the mediator's id acks it");
 
         // Exactly one unprocessable event — for the plaintext — carrying its id,
         // the retained raw payload, and a reason. The good message is not reported.
@@ -2048,6 +2100,199 @@ mod tests {
             rx.try_recv().is_err(),
             "only the unprocessable frame is reported, not the valid one"
         );
+    }
+
+    // ── live stream / request helpers against a stand-in websocket task ────
+
+    /// A profile whose mediator has a websocket "running": `tx` is the
+    /// command channel a test drives in place of the transport task.
+    fn profile_with_ws(
+        did: &str,
+        mediator_did: &str,
+        tx: mpsc::Sender<WebSocketCommands>,
+    ) -> Arc<ATMProfile> {
+        use crate::profiles::Mediator;
+        use std::sync::atomic::AtomicU32;
+        use tokio::sync::RwLock;
+        let mediator = Mediator {
+            did: mediator_did.to_string(),
+            rest_endpoint: None,
+            websocket_endpoint: Some("ws://127.0.0.1:1/".to_string()),
+            ws_channel_tx: RwLock::new(Some(tx)),
+            ws_conn_state_rx: RwLock::new(None),
+            ws_receive_health_rx: RwLock::new(None),
+            mux: RwLock::new(None),
+            tx_uuid: AtomicU32::new(0),
+        };
+        Arc::new(ATMProfile {
+            inner: Arc::new(ATMProfileInner {
+                did: did.to_string(),
+                alias: "ws-test".to_string(),
+                mediator: Arc::new(Some(mediator)),
+            }),
+        })
+    }
+
+    fn received(id: &str) -> WebSocketResponses {
+        let msg = DcMessage::build(id.to_string(), "example/v1".to_string(), json!({})).finalize();
+        let meta = UnpackMetadata {
+            sha256_hash: format!("hash-{id}"),
+            ..Default::default()
+        };
+        WebSocketResponses::MessageReceived(Box::new(msg), Box::new(meta))
+    }
+
+    /// A message the transport has handed over is returned even when its
+    /// auto-delete cannot be queued (#1008). It used to be turned into an
+    /// error carrying neither the message nor its id.
+    #[tokio::test]
+    async fn a_received_message_survives_a_delete_that_cannot_be_queued() {
+        let (_, secret) = peer_with_x25519();
+        let atm = atm_with_secret(secret).await;
+        let (tx, mut rx) = mpsc::channel(8);
+        let profile = profile_with_ws("did:peer:fake", "did:peer:fake-mediator", tx);
+
+        // Stop the deletion handler and fill its queue: every delete now fails.
+        atm.graceful_shutdown().await;
+        while atm.try_delete_message_background(&profile, "filler") {}
+        assert!(
+            atm.delete_message_background(&profile, "probe")
+                .await
+                .is_err(),
+            "precondition: deletes cannot be queued"
+        );
+
+        // Stand-in transport: answer each request with a message.
+        let transport = tokio::spawn(async move {
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    WebSocketCommands::Next(_, sender) => {
+                        let _ = sender.send(received("next"));
+                    }
+                    WebSocketCommands::GetMessage(id, sender) => {
+                        let _ = sender.send(received(&id));
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        let wait = Some(Duration::from_secs(10));
+        let (msg, meta) = atm
+            .message_pickup()
+            .live_stream_next(&profile, wait, true)
+            .await
+            .expect("a delete that cannot be queued must not fail the receive")
+            .expect("the message is returned");
+        assert_eq!(msg.id, "next");
+        assert_eq!(meta.sha256_hash, "hash-next");
+
+        let frame = atm
+            .message_pickup()
+            .live_stream_next_frame(&profile, wait, true)
+            .await
+            .expect("nor fail live_stream_next_frame");
+        assert!(matches!(frame, Some(InboundFrame::DidComm(..))));
+
+        let (got, _) = atm
+            .message_pickup()
+            .live_stream_get(&profile, "wanted", wait, true)
+            .await
+            .expect("nor fail live_stream_get")
+            .expect("the wanted message is returned");
+        assert_eq!(got.id, "wanted");
+
+        transport.abort();
+    }
+
+    /// A status or delivery request sent with `wait_for_response = false`
+    /// returns nothing once it is sent, rather than an error (#1009).
+    #[tokio::test]
+    async fn requests_sent_without_waiting_return_nothing_not_an_error() {
+        let (profile_did, profile_x) = peer_with_x25519();
+        let (mediator_did, _) = peer_with_x25519();
+        let atm = atm_with_secret(profile_x).await;
+        let (tx, mut rx) = mpsc::channel(8);
+        let profile = profile_with_ws(&profile_did, &mediator_did, tx);
+
+        // Stand-in transport: confirm every write, and count them.
+        let written = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = written.clone();
+        let transport = tokio::spawn(async move {
+            while let Some(cmd) = rx.recv().await {
+                if let WebSocketCommands::SendMessage(_, reply) = cmd {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let _ = reply.send(Ok(()));
+                }
+            }
+        });
+
+        let status = atm
+            .message_pickup()
+            .send_status_request(&profile, false, None)
+            .await
+            .expect("a sent status request is not an error");
+        assert!(status.is_none());
+
+        let delivered = atm
+            .message_pickup()
+            .send_delivery_request(&profile, Some(5), false)
+            .await
+            .expect("a sent delivery request is not an error");
+        assert!(delivered.is_empty());
+
+        #[cfg(feature = "tsp")]
+        {
+            let frames = atm
+                .message_pickup()
+                .send_delivery_request_frames(&profile, Some(5), false)
+                .await
+                .expect("nor is a sent frames delivery request");
+            assert!(frames.is_empty());
+        }
+
+        let expected = if cfg!(feature = "tsp") { 3 } else { 2 };
+        assert_eq!(
+            written.load(std::sync::atomic::Ordering::SeqCst),
+            expected,
+            "each request was actually written"
+        );
+        transport.abort();
+        atm.graceful_shutdown().await;
+    }
+
+    /// `send_status_request`'s `wait` bounds the wait for the reply (#1009);
+    /// it used to be ignored in favour of a fixed 10 seconds.
+    #[tokio::test]
+    async fn the_status_request_wait_is_honoured() {
+        let (profile_did, profile_x) = peer_with_x25519();
+        let (mediator_did, _) = peer_with_x25519();
+        let atm = atm_with_secret(profile_x).await;
+        let (tx, mut rx) = mpsc::channel(8);
+        let profile = profile_with_ws(&profile_did, &mediator_did, tx);
+
+        // Confirms the write; never answers.
+        let transport = tokio::spawn(async move {
+            while let Some(cmd) = rx.recv().await {
+                if let WebSocketCommands::SendMessage(_, reply) = cmd {
+                    let _ = reply.send(Ok(()));
+                }
+            }
+        });
+
+        let started = std::time::Instant::now();
+        let result = atm
+            .message_pickup()
+            .send_status_request(&profile, true, Some(Duration::from_millis(300)))
+            .await;
+        assert!(result.is_err(), "no reply arrives");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the caller's wait is used, not the default 10s: {:?}",
+            started.elapsed()
+        );
+        transport.abort();
+        atm.graceful_shutdown().await;
     }
 
     // ── `await_next`: a frame handed over as the wait runs out ──────────────

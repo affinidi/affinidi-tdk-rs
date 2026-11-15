@@ -3742,15 +3742,19 @@ impl TspOps<'_> {
             builder = builder.with_sub_protocol(*p);
         }
 
-        let (ws, response) =
-            crate::transports::websockets::proxy::connect_websocket(builder, &host, port)
-                .await
-                .map_err(|e| {
-                    ATMError::TransportError(format!(
-                        "Profile '{}' → mediator {} TSP websocket {address} ({host}:{port}): {e}",
-                        profile.inner.alias, mediator.did
-                    ))
-                })?;
+        let (ws, response) = crate::transports::websockets::proxy::connect_websocket(
+            builder,
+            &host,
+            port,
+            self.atm.inner.config.websocket_tls.clone(),
+        )
+        .await
+        .map_err(|e| {
+            ATMError::TransportError(format!(
+                "Profile '{}' → mediator {} TSP websocket {address} ({host}:{port}): {e}",
+                profile.inner.alias, mediator.did
+            ))
+        })?;
 
         let selected = response
             .headers()

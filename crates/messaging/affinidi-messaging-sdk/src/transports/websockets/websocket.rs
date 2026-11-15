@@ -62,6 +62,12 @@ const UNPACK_TIMEOUT: Duration = Duration::from_secs(20);
 /// resolve the mediator's DID).
 const PROBE_PACK_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long the transport task waits for a mux control document's Data
+/// Integrity proof to verify. Verification resolves DIDs over the network and
+/// runs inline on the transport task, outside [`UNPACK_TIMEOUT`]; unbounded, a
+/// hung resolver stalled reads, sends and the watchdog behind one event.
+const MUX_VERIFY_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// The Message Pickup 3.0 status type — the mediator's answer to a probe.
 const STATUS_TYPE: &str = "https://didcomm.org/messagepickup/3.0/status";
 
@@ -169,13 +175,22 @@ pub(crate) struct WebSocketTransport {
     /// than waiting to be kicked. `None` until the first successful connect.
     access_expires_at: Option<u64>,
 
-    /// Cache of inbound messages awaiting to be sent to the SDK
-    /// If a MPSC delivery channel is enabled, then this cache isn't used
+    /// Cache of inbound messages awaiting to be sent to the SDK.
+    /// Also where a frame goes when the direct channel is full.
     inbound_cache: MessageCache,
 
-    /// Possible to send messages to the SDK via a MPSC channel
-    /// This bypasses the cache
-    direct_channel: Option<broadcast::Sender<WebSocketResponses>>,
+    /// Optional bounded channel to hand inbound messages straight to the
+    /// application (`ATMConfigBuilder::with_inbound_message_channel`). A frame
+    /// is offered with `try_send`; when the channel is full (or its receiver
+    /// gone) the frame falls through to the caches, whose limits pause reading
+    /// the socket. Nothing is discarded to make room. This was a `broadcast`
+    /// channel, which overwrote the oldest frames once a receiver lagged.
+    direct_channel: Option<mpsc::Sender<WebSocketResponses>>,
+
+    /// Why the last connect attempt failed, kept until someone waiting on
+    /// `NotifyConnection` takes it (so `profile_enable_websocket` reports the
+    /// real error rather than a timeout). Cleared on a successful connect.
+    last_connect_error: Option<ATMError>,
 
     /// Tracks number of next message requests from the SDK
     next_requests: HashMap<u32, oneshot::Sender<WebSocketResponses>>,
@@ -257,8 +272,12 @@ pub(crate) enum WebSocketCommands {
     /// Stop the WebSocket Connection and shutdown the task
     Stop,
 
-    /// Request to send a notifcation (true) if already connected or when next connects if not connected
-    NotifyConnection(oneshot::Sender<bool>),
+    /// Ask to be told when the socket is up: `Ok(())` at once if connected, or
+    /// when the next connect attempt succeeds. If an attempt fails first (or
+    /// one already failed and nobody has been told), `Err` with that attempt's
+    /// error, typed as the connect produced it (e.g. `ATMError::HttpStatus`
+    /// for a refused upgrade). The transport keeps retrying either way.
+    NotifyConnection(oneshot::Sender<Result<(), ATMError>>),
 
     /// Send a message to the mediator. The `oneshot` reports the ACTUAL write
     /// result: `Ok(())` once the frame is written to the socket, `Err(reason)`
@@ -266,8 +285,8 @@ pub(crate) enum WebSocketCommands {
     /// the caller never sees success for a frame that was not transmitted (R1.1).
     SendMessage(String, oneshot::Sender<Result<(), String>>),
 
-    /// Send inbound messages to a MPSC Channel
-    EnableInboundChannel(broadcast::Sender<WebSocketResponses>),
+    /// Send inbound messages to a bounded MPSC channel
+    EnableInboundChannel(mpsc::Sender<WebSocketResponses>),
 
     /// Disable the inbound messages channel
     DisableInboundChannel,
@@ -296,7 +315,7 @@ impl WebSocketTransport {
     pub(crate) async fn start(
         profile: Arc<ATMProfile>,
         shared: Arc<SharedState>,
-        direct_channel: Option<broadcast::Sender<WebSocketResponses>>,
+        direct_channel: Option<mpsc::Sender<WebSocketResponses>>,
     ) -> (
         JoinHandle<()>,
         Sender<WebSocketCommands>,
@@ -309,7 +328,7 @@ impl WebSocketTransport {
     pub(crate) async fn start_mux(
         profile: Arc<ATMProfile>,
         shared: Arc<SharedState>,
-        direct_channel: Option<broadcast::Sender<WebSocketResponses>>,
+        direct_channel: Option<mpsc::Sender<WebSocketResponses>>,
     ) -> (
         JoinHandle<()>,
         Sender<WebSocketCommands>,
@@ -321,7 +340,7 @@ impl WebSocketTransport {
     pub(crate) async fn start_with_options(
         profile: Arc<ATMProfile>,
         shared: Arc<SharedState>,
-        direct_channel: Option<broadcast::Sender<WebSocketResponses>>,
+        direct_channel: Option<mpsc::Sender<WebSocketResponses>>,
         skip_toggle_live_delivery: bool,
         skip_unpack_messages: bool,
     ) -> (
@@ -343,7 +362,7 @@ impl WebSocketTransport {
     async fn start_inner(
         profile: Arc<ATMProfile>,
         shared: Arc<SharedState>,
-        direct_channel: Option<broadcast::Sender<WebSocketResponses>>,
+        direct_channel: Option<mpsc::Sender<WebSocketResponses>>,
         skip_toggle_live_delivery: bool,
         skip_unpack_messages: bool,
         mux: bool,
@@ -414,7 +433,7 @@ impl WebSocketTransport {
     fn new(
         profile: Arc<ATMProfile>,
         shared: Arc<SharedState>,
-        direct_channel: Option<broadcast::Sender<WebSocketResponses>>,
+        direct_channel: Option<mpsc::Sender<WebSocketResponses>>,
         skip_toggle_live_delivery: bool,
         skip_unpack_messages: bool,
         conn_state_tx: watch::Sender<ConnState>,
@@ -434,6 +453,7 @@ impl WebSocketTransport {
             connected_at: None,
             access_expires_at: None,
             direct_channel,
+            last_connect_error: None,
             next_requests: HashMap::new(),
             next_requests_list: VecDeque::new(),
             packed_cache: VecDeque::new(),
@@ -468,7 +488,7 @@ impl WebSocketTransport {
             // for why ticks missed while disconnected are never replayed.
             let mut watchdog = new_watchdog();
 
-            let mut notify_connection: Option<oneshot::Sender<bool>> = None;
+            let mut notify_connection: Option<oneshot::Sender<Result<(), ATMError>>> = None;
 
             // Armed on each successful connect; drives a proactive token
             // refresh + reconnect before the mediator closes the socket at
@@ -495,7 +515,23 @@ impl WebSocketTransport {
                 select! {
                     Some(_) = WebSocketTransport::conditional_reconnect_delay(&mut self.connect_delay_timer), if self.web_socket.is_none() => {
                         debug!("Attempt to reconnect");
-                        self.web_socket = self._handle_connection(&atm).await;
+                        match self._handle_connection(&atm).await {
+                            Ok(web_socket) => {
+                                self.web_socket = Some(web_socket);
+                                self.last_connect_error = None;
+                            }
+                            Err(e) => {
+                                // Hand the failure to whoever is waiting for this
+                                // connection, typed as it came, or keep it for the
+                                // next one to ask. Retrying carries on regardless.
+                                match notify_connection.take() {
+                                    Some(waiter) => {
+                                        let _ = waiter.send(Err(e));
+                                    }
+                                    None => self.last_connect_error = Some(e),
+                                }
+                            }
+                        }
                         if self.web_socket.is_some() {
                             // Single success site for the first connect AND every
                             // reconnect — publish the live connection signal here.
@@ -510,9 +546,8 @@ impl WebSocketTransport {
                             rearm_watchdog(&mut watchdog);
                             // Arm the proactive-refresh timer for this socket.
                             refresh_deadline = self.refresh_deadline();
-                            if notify_connection.is_some() {
-                                let _ = notify_connection.unwrap().send(true);
-                                notify_connection = None;
+                            if let Some(waiter) = notify_connection.take() {
+                                let _ = waiter.send(Ok(()));
                             }
                         }
                     },
@@ -595,24 +630,24 @@ impl WebSocketTransport {
                         match cmd {
                             Some(WebSocketCommands::NotifyConnection(sender)) => {
                                 if self.web_socket.is_some() {
-                                    let _ = sender.send(self.web_socket.is_some());
+                                    let _ = sender.send(Ok(()));
+                                } else if let Some(e) = self.last_connect_error.take() {
+                                    // An attempt already failed before anyone asked.
+                                    let _ = sender.send(Err(e));
                                 } else {
                                     notify_connection = Some(sender);
                                 }
                             },
                             Some(WebSocketCommands::SendMessage(msg, reply)) => {
-                                let result = if let Some(web_socket) = self.web_socket.as_mut() {
+                                let result = if reply.is_closed() {
+                                    // The caller stopped waiting (`SEND_CONFIRM_TIMEOUT`)
+                                    // and was told the frame was not transmitted. Keep
+                                    // that true: do not write it now.
+                                    debug!("SendMessage caller gone before the write; not transmitted");
+                                    Err("the sender stopped waiting".to_string())
+                                } else if self.web_socket.is_some() {
                                     debug!("Sending message to websocket");
-                                    match web_socket.send(Message::text(msg)).await {
-                                        Ok(_) => {
-                                            debug!("Message sent");
-                                            Ok(())
-                                        }
-                                        Err(e) => {
-                                            error!("Error sending message: {:?}", e);
-                                            Err(format!("websocket write failed: {e}"))
-                                        }
-                                    }
+                                    self.write_frame(Message::text(msg)).await
                                 } else {
                                     // The socket is `None` for the whole reconnect
                                     // window — the frame was NOT transmitted. Report
@@ -704,6 +739,18 @@ impl WebSocketTransport {
                     Some(msg) = WebSocketTransport::conditional_websocket(&mut self.web_socket), if !self.inbound_cache.is_full() && !self.packed_cache_is_full() => {
                         self.handle_inbound_message(&atm, msg).await;
                     }
+                    // Frames that went to the caches because the direct channel
+                    // was full move to it, oldest first, as it makes room. Without
+                    // this a consumer of only the direct channel would never see
+                    // them, and the full caches would pause reading for good.
+                    Some(permit) = WebSocketTransport::direct_channel_room(self.direct_channel.clone()), if self.held_frames() > 0 => {
+                        if let Some(packed) = self.pop_packed() {
+                            permit.send(WebSocketResponses::PackedMessageReceived(Box::new(packed)));
+                        } else if let Some((message, metadata)) = self.inbound_cache.next() {
+                            permit.send(WebSocketResponses::MessageReceived(Box::new(message), Box::new(metadata)));
+                        }
+                        self.last_take_at = Some(tokio::time::Instant::now());
+                    }
                 }
                 self.track_held_frames();
             }
@@ -725,6 +772,15 @@ impl WebSocketTransport {
         } else {
             None
         }
+    }
+
+    // Resolves with a slot in the direct channel once it has room. `None` when
+    // there is no direct channel or its receiver is gone, which disables the
+    // `select!` arm for that turn.
+    async fn direct_channel_room(
+        channel: Option<mpsc::Sender<WebSocketResponses>>,
+    ) -> Option<mpsc::OwnedPermit<WebSocketResponses>> {
+        channel?.reserve_owned().await.ok()
     }
 
     // Helper function that conditionally checks if reconnecting is needed
@@ -803,8 +859,10 @@ impl WebSocketTransport {
                 }
                 Message::Ping(data) => {
                     debug!("Received ping message, sending pong");
-                    if let Some(web_socket) = self.web_socket.as_mut() {
-                        let _ = web_socket.send(Message::Pong(data)).await;
+                    if self.web_socket.is_some()
+                        && let Err(e) = self.write_frame(Message::Pong(data)).await
+                    {
+                        warn!("Could not answer the mediator's ping ({e})");
                     }
                 }
                 Message::Pong(_) => {
@@ -857,6 +915,38 @@ impl WebSocketTransport {
                 self.on_disconnected();
             }
         }
+    }
+
+    /// Write one frame to the current socket within [`SOCKET_WRITE_TIMEOUT`].
+    ///
+    /// The write runs inline on the transport task, so an unbounded one on a
+    /// half-open socket whose send buffer is full parked the whole task — the
+    /// watchdog that would have noticed the dead socket included. A write that
+    /// fails or times out means the socket is unusable: it is dropped as a
+    /// disconnect (waiters failed, `Disconnected` published, reconnect
+    /// scheduled) rather than left for later sends to fail against.
+    async fn write_frame(&mut self, frame: Message) -> Result<(), String> {
+        let Some(web_socket) = self.web_socket.as_mut() else {
+            return Err("websocket is not connected".to_string());
+        };
+        let reason = match tokio::time::timeout(SOCKET_WRITE_TIMEOUT, web_socket.send(frame)).await
+        {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(e)) => format!("websocket write failed: {e}"),
+            Err(_) => format!("websocket write did not complete within {SOCKET_WRITE_TIMEOUT:?}"),
+        };
+        error!("{reason}; dropping the connection");
+        self.drop_dead_socket();
+        Err(reason)
+    }
+
+    /// Give up on a socket that can no longer be written: no close handshake
+    /// (it would only wait on the same stuck write), just a disconnect.
+    fn drop_dead_socket(&mut self) {
+        self.web_socket = None;
+        self.awaiting_pong = false;
+        self.fail_pending_requests();
+        self.on_disconnected();
     }
 
     /// Queue a packed frame, updating the byte total and the full latch.
@@ -954,23 +1044,28 @@ impl WebSocketTransport {
                 }
             }
 
-            // 2. The direct channel, when one is attached and has receivers.
-            //    `send` fails only when every receiver has dropped, which makes
-            //    the channel no better than no channel for this frame.
-            if let Some(direct_channel) = self.direct_channel.as_mut() {
+            // 2. The direct channel, when one is attached and has room. A full
+            //    channel (the application is behind) or a closed one hands the
+            //    frame back, and it goes to the cache, whose limit pauses
+            //    reading: backpressure, never loss.
+            if let Some(direct_channel) = self.direct_channel.as_ref() {
                 match direct_channel
-                    .send(WebSocketResponses::PackedMessageReceived(Box::new(message)))
+                    .try_send(WebSocketResponses::PackedMessageReceived(Box::new(message)))
                 {
-                    Ok(_) => {
+                    Ok(()) => {
                         debug!("Sending message to direct channel packed");
                         self.last_take_at = Some(tokio::time::Instant::now());
                         return;
                     }
                     Err(returned) => {
-                        let WebSocketResponses::PackedMessageReceived(returned) = returned.0 else {
-                            unreachable!("broadcast returns the value it was given")
+                        debug!(
+                            "Direct channel full or closed ({returned}); caching the packed frame"
+                        );
+                        let WebSocketResponses::PackedMessageReceived(returned) =
+                            returned.into_inner()
+                        else {
+                            unreachable!("try_send returns the value it was given")
                         };
-                        debug!("Direct channel has no receivers; caching the packed frame");
                         message = *returned;
                     }
                 }
@@ -991,6 +1086,9 @@ impl WebSocketTransport {
             return;
         }
 
+        // What the message counts against the cache's byte limit, should it
+        // end up there: its size on the wire, as for the packed cache.
+        let frame_len = message.len() as u64;
         let unpacked = match tokio::time::timeout(UNPACK_TIMEOUT, atm.unpack(&message)).await {
             Ok(result) => result,
             Err(_) => Err(ATMError::TransportError(format!(
@@ -1020,24 +1118,53 @@ impl WebSocketTransport {
                 // are pushed, never stored, so there is nothing to delete.
                 // Only the mediator's count: one from anyone else stays an
                 // ordinary message.
-                if let Some(mux) = &self.mux
-                    && mux
-                        .absorb(
+                //
+                // Both checks verify a Data Integrity proof through the DID
+                // resolver, inline on this task, so each is bounded. An event
+                // that cannot be verified in time is dropped like one that
+                // fails to verify (it is pushed, never stored); a notice that
+                // cannot be verified in time stays an ordinary message, as one
+                // that fails does.
+                if let Some(mux) = &self.mux {
+                    let absorbed = tokio::time::timeout(
+                        MUX_VERIFY_TIMEOUT,
+                        mux.absorb(
                             &crate::protocols::mux::proof_resolver(atm),
                             &message,
                             &metadata,
-                        )
-                        .await
-                {
-                    return;
+                        ),
+                    )
+                    .await
+                    .unwrap_or_else(|_| {
+                        warn!(
+                            "verifying a mux event did not complete within {MUX_VERIFY_TIMEOUT:?}; \
+                             ignoring it"
+                        );
+                        true
+                    });
+                    if absorbed {
+                        return;
+                    }
                 }
                 // Durable notices go to `ATMProfile::mux_notices`, verified,
                 // when someone is listening. They stay stored until the
                 // application acknowledges them.
-                if let Some(mux) = &self.mux
-                    && mux.take_notice(atm, &message, &metadata.sha256_hash).await
-                {
-                    return;
+                if let Some(mux) = &self.mux {
+                    let taken = tokio::time::timeout(
+                        MUX_VERIFY_TIMEOUT,
+                        mux.take_notice(atm, &message, &metadata.sha256_hash),
+                    )
+                    .await
+                    .unwrap_or_else(|_| {
+                        warn!(
+                            "verifying a mux notice did not complete within {MUX_VERIFY_TIMEOUT:?}; \
+                             passing it on as an ordinary message"
+                        );
+                        false
+                    });
+                    if taken {
+                        return;
+                    }
                 }
 
                 // An unpacked message has the same rule as a packed frame above:
@@ -1098,31 +1225,36 @@ impl WebSocketTransport {
                     }
                 }
 
-                // 3. The direct channel, when one is attached and has receivers.
-                if let Some(direct_channel) = self.direct_channel.as_mut() {
-                    match direct_channel.send(WebSocketResponses::MessageReceived(
+                // 3. The direct channel, when one is attached and has room. Full
+                //    or closed, the message falls through to the cache, whose
+                //    limit pauses reading the socket.
+                if let Some(direct_channel) = self.direct_channel.as_ref() {
+                    match direct_channel.try_send(WebSocketResponses::MessageReceived(
                         Box::new(message),
                         Box::new(metadata),
                     )) {
-                        Ok(_) => {
+                        Ok(()) => {
                             debug!("Sent message to direct channel");
                             self.last_take_at = Some(tokio::time::Instant::now());
                             return;
                         }
-                        Err(broadcast::error::SendError(WebSocketResponses::MessageReceived(
-                            m,
-                            md,
-                        ))) => {
-                            debug!("Direct channel has no receivers; caching the message");
+                        Err(returned) => {
+                            debug!(
+                                "Direct channel full or closed ({returned}); caching the message"
+                            );
+                            let WebSocketResponses::MessageReceived(m, md) = returned.into_inner()
+                            else {
+                                unreachable!("try_send returns the value it was given")
+                            };
                             (message, metadata) = (*m, *md);
                         }
-                        Err(_) => unreachable!("broadcast returns the value it was given"),
                     }
                 }
 
-                // 4. Cache it for the next `Next` / `Get`.
+                // 4. Cache it for the next `Next` / `Get`, counted at the size
+                //    it arrived as.
                 debug!("Caching message");
-                self.inbound_cache.insert(message, metadata);
+                self.inbound_cache.insert(message, metadata, frame_len);
             }
             Err(e) => {
                 // The mediator ids a message by `sha256(packed message)` and
@@ -1516,7 +1648,7 @@ impl WebSocketTransport {
     }
 
     // Wrapper that handles all of the logic of setting up a connection to the mediator
-    async fn _handle_connection(&mut self, atm: &ATM) -> Option<WebSocket> {
+    async fn _handle_connection(&mut self, atm: &ATM) -> Result<WebSocket, ATMError> {
         debug!("Starting websocket connection");
 
         let mut web_socket = match self._create_socket().await {
@@ -1527,7 +1659,7 @@ impl WebSocketTransport {
                 if let Some(retry_after) = e.http_status().and_then(|s| s.retry_after_secs) {
                     self.connect_delay = honour_retry_after(self.connect_delay, retry_after);
                 }
-                return None;
+                return Err(e);
             }
         };
 
@@ -1542,7 +1674,7 @@ impl WebSocketTransport {
             self.connect_delay_timer = None;
             self.connected_at = Some(tokio::time::Instant::now());
             self.awaiting_pong = false;
-            Some(web_socket)
+            Ok(web_socket)
         } else {
             // Pack the live-delivery-change frame and write it DIRECTLY to the
             // socket we are holding. This code runs on the transport task
@@ -1550,21 +1682,44 @@ impl WebSocketTransport {
             // enqueues a `SendMessage` command into this task's own channel and
             // awaits a reply that only this (currently busy) task could
             // produce — a deadlock that timed out every connect attempt (#611).
-            let send_result =
-                match crate::protocols::message_pickup::MessagePickup::packed_live_delivery_change(
+            //
+            // Both steps are bounded, as the receive-leg probe's are: packing
+            // can resolve the mediator's DID, and the write can stall on a
+            // socket that is not really up.
+            let packed = tokio::time::timeout(
+                PROBE_PACK_TIMEOUT,
+                crate::protocols::message_pickup::MessagePickup::packed_live_delivery_change(
                     atm,
                     &self.profile,
                     true,
-                )
-                .await
-                {
-                    Ok((frame, _msg_id)) => {
-                        web_socket.send(Message::text(frame)).await.map_err(|e| {
-                            ATMError::TransportError(format!("websocket write failed: {e}"))
-                        })
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| {
+                Err(ATMError::TransportError(format!(
+                    "packing the live-delivery request did not complete within {PROBE_PACK_TIMEOUT:?}"
+                )))
+            });
+            let send_result = match packed {
+                Ok((frame, _msg_id)) => {
+                    match tokio::time::timeout(
+                        SOCKET_WRITE_TIMEOUT,
+                        web_socket.send(Message::text(frame)),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => Ok(()),
+                        Ok(Err(e)) => Err(ATMError::TransportError(format!(
+                            "websocket write failed: {e}"
+                        ))),
+                        Err(_) => Err(ATMError::TransportError(format!(
+                            "enabling live delivery: websocket write did not complete within \
+                             {SOCKET_WRITE_TIMEOUT:?}"
+                        ))),
                     }
-                    Err(e) => Err(e),
-                };
+                }
+                Err(e) => Err(e),
+            };
             match send_result {
                 Ok(()) => {
                     debug!("Live streaming enabled");
@@ -1573,13 +1728,13 @@ impl WebSocketTransport {
                     self.connect_delay_timer = None;
                     self.connected_at = Some(tokio::time::Instant::now());
                     self.awaiting_pong = false;
-                    Some(web_socket)
+                    Ok(web_socket)
                 }
                 Err(e) => {
                     error!("Error enabling live streaming: {:?}", e);
                     close_bounded(&mut web_socket).await;
                     self.backoff_delay();
-                    None
+                    Err(e)
                 }
             }
         }
@@ -1648,24 +1803,29 @@ impl WebSocketTransport {
             builder = builder.with_sub_protocol(crate::protocols::mux::MUX_SUBPROTOCOL);
         }
 
-        let (web_socket, response) = super::proxy::connect_websocket(builder, &host, port)
-            .await
-            .map_err(|e| match e {
-                // Keep a refused upgrade typed, so a caller can see it was
-                // rate-limited and by whom.
-                ATMError::HttpStatus(status) => {
-                    let mut status = *status;
-                    status.context = format!(
-                        "Profile '{}' → mediator {} websocket: {}",
-                        self.profile.inner.alias, mediator.did, status.context
-                    );
-                    ATMError::from(status.with_url(address.as_str()))
-                }
-                e => ATMError::TransportError(format!(
-                    "Profile '{}' → mediator {} websocket {} ({}:{}): {}",
-                    self.profile.inner.alias, mediator.did, address, host, port, e
-                )),
-            })?;
+        let (web_socket, response) = super::proxy::connect_websocket(
+            builder,
+            &host,
+            port,
+            self.shared.config.websocket_tls.clone(),
+        )
+        .await
+        .map_err(|e| match e {
+            // Keep a refused upgrade typed, so a caller can see it was
+            // rate-limited and by whom.
+            ATMError::HttpStatus(status) => {
+                let mut status = *status;
+                status.context = format!(
+                    "Profile '{}' → mediator {} websocket: {}",
+                    self.profile.inner.alias, mediator.did, status.context
+                );
+                ATMError::from(status.with_url(address.as_str()))
+            }
+            e => ATMError::TransportError(format!(
+                "Profile '{}' → mediator {} websocket {} ({}:{}): {}",
+                self.profile.inner.alias, mediator.did, address, host, port, e
+            )),
+        })?;
 
         debug!("Completed websocket connection");
 
@@ -2449,5 +2609,106 @@ mod tests {
         ws.track_held_frames();
         ws.check_receive_leg(&atm).await;
         assert!(!ws.health.consumer_stalled(), "and clears once drained");
+    }
+
+    /// A full direct channel does not lose a message (#1011): it goes to the
+    /// cache, whose limits pause reading, and moves to the channel once the
+    /// application makes room.
+    #[tokio::test]
+    async fn a_full_direct_channel_hands_the_message_to_the_cache() {
+        let atm = plaintext_atm().await;
+        let mut ws = test_transport(&atm);
+        let (tx, mut rx) = mpsc::channel(1);
+        ws.direct_channel = Some(tx);
+
+        ws.process_inbound_didcomm_message(&atm, plaintext_frame("first", None))
+            .await;
+        ws.process_inbound_didcomm_message(&atm, plaintext_frame("second", None))
+            .await;
+
+        let Some(WebSocketResponses::MessageReceived(first, _)) = rx.try_recv().ok() else {
+            panic!("the first message goes to the direct channel");
+        };
+        assert_eq!(first.id, "first");
+        assert_eq!(ws.inbound_cache.len(), 1, "the second waits in the cache");
+
+        // The channel has room again: the run loop's drain arm gets a slot and
+        // moves the held message across.
+        let permit = WebSocketTransport::direct_channel_room(ws.direct_channel.clone())
+            .await
+            .expect("room in the direct channel");
+        let (held, meta) = ws.inbound_cache.next().expect("held message");
+        permit.send(WebSocketResponses::MessageReceived(
+            Box::new(held),
+            Box::new(meta),
+        ));
+        let Some(WebSocketResponses::MessageReceived(second, _)) = rx.recv().await else {
+            panic!("the held message reaches the direct channel");
+        };
+        assert_eq!(second.id, "second");
+    }
+
+    /// A transport with no direct channel never offers a slot, so the drain
+    /// arm stays idle.
+    #[tokio::test]
+    async fn no_direct_channel_offers_no_room() {
+        assert!(
+            WebSocketTransport::direct_channel_room(None)
+                .await
+                .is_none()
+        );
+        let (tx, rx) = mpsc::channel::<WebSocketResponses>(1);
+        drop(rx);
+        assert!(
+            WebSocketTransport::direct_channel_room(Some(tx))
+                .await
+                .is_none(),
+            "a closed channel offers no room either"
+        );
+    }
+
+    /// A websocket client connected to a local server that completes the
+    /// upgrade and then never reads.
+    async fn unread_socket() -> (WebSocket, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let _ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            // Hold the socket open, reading nothing.
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        });
+        let (client, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/"))
+            .await
+            .unwrap();
+        (client, server)
+    }
+
+    /// A write that cannot complete — the peer has stopped reading and the
+    /// socket buffers are full — fails within `SOCKET_WRITE_TIMEOUT` and drops
+    /// the socket as a disconnect, instead of parking the transport task
+    /// (#1010).
+    #[tokio::test]
+    async fn a_stalled_write_times_out_and_drops_the_socket() {
+        let atm = plaintext_atm().await;
+        let mut ws = test_transport(&atm);
+        let mut state = ws.conn_state_tx.subscribe();
+        let (client, server) = unread_socket().await;
+        ws.web_socket = Some(client);
+        ws.connected_at = Some(tokio::time::Instant::now());
+
+        // Far more than the loopback socket buffers hold.
+        let frame = "x".repeat(64 * 1024 * 1024);
+        let started = std::time::Instant::now();
+        let result = ws.write_frame(Message::text(frame)).await;
+
+        assert!(result.is_err(), "a stalled write must fail");
+        assert!(
+            started.elapsed() < SOCKET_WRITE_TIMEOUT + Duration::from_secs(5),
+            "and within its bound"
+        );
+        assert!(ws.web_socket.is_none(), "the dead socket is dropped");
+        assert_eq!(*state.borrow_and_update(), ConnState::Disconnected);
+        server.abort();
     }
 }

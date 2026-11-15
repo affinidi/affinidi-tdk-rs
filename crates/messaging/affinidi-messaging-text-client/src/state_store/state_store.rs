@@ -121,26 +121,25 @@ impl StateStore {
 
         let result = loop {
             tokio::select! {
-                message_received = inbound_message_channel.recv() => {
+                // The inbound channel is a bounded mpsc: it never drops a
+                // message, it holds the socket back while this loop is busy.
+                // `None` (every sender gone) disables this arm.
+                Some(message_received) = inbound_message_channel.recv() => {
                     match message_received {
-                        Ok(WebSocketResponses::MessageReceived(message, meta)) => {
+                        WebSocketResponses::MessageReceived(message, meta) => {
                             handle_message(&atm, &mut state, &message, &meta).await;
                         },
-                        Ok(WebSocketResponses::PackedMessageReceived(_)) => {
+                        WebSocketResponses::PackedMessageReceived(_) => {
                             // Ignore packed messages
                             warn!("Packed message received but not handled");
                         },
-                        Ok(WebSocketResponses::Disconnected) => {
+                        WebSocketResponses::Disconnected => {
                             // In-flight request waiters are notified of a dropped
                             // connection via dedicated channels; nothing to do on
-                            // the broadcast inbound stream.
+                            // the inbound stream.
                             debug!("WebSocket disconnected notification");
                         },
-                        Err(e) => {
-                            warn!("Failed to receive message: {}", e);
-                        }
                     }
-                    //handle_message(&atm, &mut state, message, meta);
                 },
                 Some(action) = action_rx.recv() => match action {
                     Action::SendMessage { chat_msg } => {

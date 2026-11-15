@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (0.12.9) — affinidi-messaging-sdk 0.49
+
+- Requires `affinidi-messaging-sdk` 0.49 and `affinidi-tdk` 0.47. The inbound
+  channel is now the SDK's bounded `mpsc` (lossless; the socket is held back
+  while the UI loop is busy instead of messages being dropped).
+- Messages collected from a pickup `delivery` keep their sender's `id` (it was
+  overwritten with the mediator's attachment id), so replies thread to the
+  sender. They are still acknowledged by `UnpackMetadata::sha256_hash`.
+
 ## Unreleased (0.12.8) — inbound messages handled without panicking
 
 - Inbound messages with missing or unreadable fields are logged and skipped

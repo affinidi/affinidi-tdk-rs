@@ -187,7 +187,12 @@ async fn main() -> Result<(), ATMError> {
 
     let response = atm
         .message_pickup()
-        .live_stream_get(&alice, &response.message_id, Duration::from_secs(10), true)
+        .live_stream_get(
+            &alice,
+            &response.message_id,
+            Some(Duration::from_secs(10)),
+            true,
+        )
         .await?;
     let after_pong_receive = SystemTime::now();
 
@@ -246,7 +251,12 @@ async fn main() -> Result<(), ATMError> {
 
     let response = atm
         .message_pickup()
-        .live_stream_get(&alice, &response.message_id, Duration::from_secs(10), true)
+        .live_stream_get(
+            &alice,
+            &response.message_id,
+            Some(Duration::from_secs(10)),
+            true,
+        )
         .await?;
     let after_pong_receive = SystemTime::now();
 

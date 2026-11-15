@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.34.0 — affinidi-messaging-sdk 0.49; offline sync acks by the mediator's id
+
+- **Changed (breaking):** requires `affinidi-messaging-sdk` 0.49, whose types
+  it re-exports. See that crate's changelog for the send/receive behaviour
+  changes (R3.6): auto-delete failures no longer fail a receive, websocket
+  writes are bounded, enabling a websocket returns the real connect error, an
+  unresolvable mediator DID fails profile construction.
+- **Fixed (non-`tsp` builds):** the offline sync acknowledged the drained
+  batch by each message's `id`. SDK 0.49 no longer overwrites that with the
+  mediator's id, so the ack now uses `UnpackMetadata::sha256_hash`, the
+  mediator's id for each message. Dispatched messages keep their sender's
+  `id`, so a reply threads to the sender. The `tsp` build already acked by
+  the attachment id.
+
 ## 0.33.0 — affinidi-messaging-sdk 0.48 and affinidi-tsp 0.4
 
 - **Changed (breaking):** requires `affinidi-messaging-sdk` 0.48 and
