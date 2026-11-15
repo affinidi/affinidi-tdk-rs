@@ -296,11 +296,18 @@ impl Kels {
     /// no read of this one is limited, since they do not depend on any limit
     /// set afterwards on the identifier they belong to (see
     /// [`Kels::as_of`]).
+    ///
+    /// For the same reason the superseded events a verification found are
+    /// carried over too, so that [`Kels::sequence_numbers`] and
+    /// [`Kels::as_of`] on the view leave them out.
     pub(crate) fn view(&self) -> Self {
-        let full_logs = if self.limits.is_empty() {
-            self.full_logs.borrow().clone()
+        let (full_logs, superseded) = if self.limits.is_empty() {
+            (
+                self.full_logs.borrow().clone(),
+                self.superseded.borrow().clone(),
+            )
         } else {
-            HashMap::new()
+            (HashMap::new(), HashMap::new())
         };
         Self {
             messages: Arc::clone(&self.messages),
@@ -311,7 +318,7 @@ impl Kels {
             receipts: Arc::clone(&self.receipts),
             verified: RefCell::new(HashMap::new()),
             in_progress: RefCell::new(Vec::new()),
-            superseded: RefCell::new(HashMap::new()),
+            superseded: RefCell::new(superseded),
             establishment: RefCell::new(HashMap::new()),
             full_logs: RefCell::new(full_logs),
             issuer_logs: RefCell::new(HashMap::new()),
@@ -330,11 +337,18 @@ impl Kels {
     }
 
     /// The sequence numbers of `prefix`'s key events, in stream order.
+    ///
+    /// Once `prefix`'s log has been verified ([`Kels::key_state`]), the
+    /// interaction events a recovery rotation superseded are left out: they
+    /// are no longer part of the log, and the rotation took over the sequence
+    /// number of the first of them. Before, every event in the stream counts.
     pub fn sequence_numbers(&self, prefix: &str) -> Vec<u64> {
+        let superseded = self.superseded_of(prefix);
         self.by_prefix
             .get(prefix)
             .into_iter()
             .flatten()
+            .filter(|i| !superseded.contains(i))
             .filter_map(|i| {
                 self.messages[*i]
                     .serder
@@ -355,6 +369,12 @@ impl Kels {
     /// and the anchors that make an alias attestation or its revocation count —
     /// goes through the per-prefix index this narrows, so all of it then sees
     /// only that much of the log.
+    ///
+    /// An event a recovery rotation superseded is not one the log reaches
+    /// (see [`Kels::sequence_numbers`]), so its sequence number is refused
+    /// once `prefix` has been verified on this stream or the one it is a
+    /// [`Kels::view`] of. The superseded events themselves stay in the
+    /// stream, and the replay sets them aside again.
     ///
     /// # Errors
     /// Returns [`DidWebsError::Kel`] if `prefix` has no event at `sn`.

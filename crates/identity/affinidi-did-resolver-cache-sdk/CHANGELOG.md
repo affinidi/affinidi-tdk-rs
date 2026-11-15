@@ -1,5 +1,22 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.55) — typed fetch failures for did:webs, did:ebsi and did:scid:ke
+
+- **Changed (#1043):** a failed fetch of a did:webs, did:ebsi or `did:scid:ke`
+  DID is `ResolverError::NetworkFetch`, with its URL, HTTP status and
+  `Retry-After`, as did:web and did:webvh failures already were. Before, the
+  status was flattened into `ResolutionFailed` text.
+- `EbsiResolver` resolves with one shared HTTP client for the process, instead
+  of building one per lookup.
+- Through `did-scid` 0.4.9, `did:scid:ke` follows the configured host policy
+  and resolves to the did:scid DID's own document (`id` is
+  `did:scid:ke:1:<AID>`); through `affinidi-did-common` 0.4.8, a did:peer:0
+  document is built under the peer DID. Both are behaviour changes for a
+  caller (R3.6); see those crates' changelogs.
+- Requires `affinidi-did-common` 0.4.8, `affinidi-did-resolver-traits` 0.1.5,
+  and, with their features, `did-scid` 0.4.9, `did-ebsi` 0.1.8 and
+  `affinidi-did-webs` 0.13.6.
+
 ## Unreleased (0.8.54) — network mode: connection state observable, requests bounded, no wedge after reconnects
 
 ### Fixed

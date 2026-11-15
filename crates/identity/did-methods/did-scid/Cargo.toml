@@ -1,7 +1,7 @@
 
 [package]
 name = "did-scid"
-version = "0.4.8"
+version = "0.4.9"
 description = "Implementation of did:scid in Rust"
 repository.workspace = true
 edition.workspace = true
@@ -19,20 +19,27 @@ rust-version.workspace = true
 did-cheqd = []
 default = ["did-webvh"]
 
-did-webvh = ["dep:didwebvh-rs"]
+# Inert since 0.4.9: `didwebvh-rs` is a hard dependency, because the public API
+# (`ResolveOptions`, `DIDSCIDError::WebVHError`) is typed in it and the crate
+# never built without it. Kept, and empty, so a consumer enabling it still
+# builds.
+did-webvh = []
 # did:scid:ke — a KERI AID via did:webs. Optional so did-scid does not pull the
-# KERI stack into builds that never resolve it.
-did-webs = ["dep:affinidi-did-webs"]
+# KERI stack into builds that never resolve it. `reqwest` builds the did:webs
+# resolver's client with the caller's timeout.
+did-webs = ["dep:affinidi-did-webs", "dep:reqwest"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-affinidi-did-common = "0.4"
+# 0.4.8: `NetworkError`.
+affinidi-did-common = "0.4.8"
 
-affinidi-did-webs = { version = "0.13", optional = true }
-didwebvh-rs = { version = "0.8.1", optional = true }
-regex = "1"
+# 0.13.6: `DidWebsError::Network`.
+affinidi-did-webs = { version = "0.13.6", optional = true }
+didwebvh-rs = "0.8.1"
+reqwest = { version = "0.13", default-features = false, optional = true }
 serde_json = "1"
 thiserror = "2"
 tracing = "0.1"

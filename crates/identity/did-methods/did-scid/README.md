@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/did-scid.svg)](https://crates.io/crates/did-scid)
 [![Documentation](https://docs.rs/did-scid/badge.svg)](https://docs.rs/did-scid)
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid)
+[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/did-methods/did-scid)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 Rust implementation of the `did:scid` (Self-Certifying Identifier) DID method.
@@ -15,24 +15,28 @@ identifier is cryptographically bound to the keys from which it was generated.
 
 ```toml
 [dependencies]
-did-scid = "0.1"
+did-scid = "0.4"
 ```
 
 ## Feature Flags
 
 | Feature | Default | Description |
 |---|---|---|
-| `did-webvh` | Yes | Verifiable History via WebVH |
 | `did-webs` | No | KERI AIDs via did:webs (`did:scid:ke:1`) |
-| `did-cheqd` | Yes | Verifiable History via Cheqd |
+| `did-webvh` | Yes | Inert since 0.4.9: did:webvh support is always built |
+| `did-cheqd` | No | Inert: did:cheqd resolution was retired in 0.2.6 |
 
 ## Capabilities
 
-- `did:scid:vh:1` — Verifiable History
-  - WebVH backend
-  - Cheqd backend
+- `did:scid:vh:1` — Verifiable History via did:webvh
 - `did:scid:ke:1` — a KERI AID via did:webs (requires the `did-webs` feature)
-- Peer-level `did:scid` implementations
+- Peer-level `did:scid` implementations (the source supplied out of band)
+
+Both formats resolve to the DID's own document: its `id` is the bare
+`did:scid:<format>:1:<scid>` DID, and `alsoKnownAs` lists the source's
+location as a did:scid DID URL and the source DID (`did:webvh:…` or
+`did:webs:…`). `resolve_with_options` applies its timeout and host policy to
+both formats.
 
 > ⚠️ The did:scid method type registry (Appendix A of the specification) is
 > still marked TODO, and `ke` is listed there as a **proposed** entry rather

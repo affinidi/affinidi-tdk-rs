@@ -23,8 +23,16 @@ use crate::did_method::{DIDMethod, parse::parse_method};
 
 /// A validated Decentralized Identifier (DID) or DID URL
 ///
-/// DIDs are parsed and validated at construction time according to W3C DID Core 1.0.
-/// Invalid DIDs are rejected immediately, ensuring type-level guarantees.
+/// Every way of making a `DID` validates it against W3C DID Core 1.0 and the
+/// rules of the methods this crate models: parsing a string, the `new_*`
+/// constructors, [`DID::new`] (which re-parses the [`DIDMethod`] it is given
+/// and refuses one whose fields disagree with its identifier) and
+/// deserialization. A `DID` value has therefore passed the same checks as
+/// `str::parse`.
+///
+/// The serde form is the struct's fields, not the DID string (kept for
+/// compatibility with values already persisted); deserializing it re-runs the
+/// validation and refuses fields that do not agree with each other.
 ///
 /// # Examples
 ///
@@ -43,6 +51,7 @@ use crate::did_method::{DIDMethod, parse::parse_method};
 /// let did = DID::new_key("z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK").unwrap();
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "DIDFields")]
 pub struct DID {
     method: DIDMethod,
     path: Option<String>,
@@ -50,6 +59,52 @@ pub struct DID {
     fragment: Option<String>,
     /// Pre-parsed URL representation (guaranteed valid at construction)
     url: url::Url,
+}
+
+/// The serde form of a [`DID`], read before it is validated.
+#[derive(Deserialize)]
+struct DIDFields {
+    method: DIDMethod,
+    path: Option<String>,
+    query: Option<String>,
+    fragment: Option<String>,
+    url: url::Url,
+}
+
+impl TryFrom<DIDFields> for DID {
+    type Error = DIDError;
+
+    /// Rebuild the DID string from the fields, parse it as any DID string is
+    /// parsed, and require the result to be exactly the fields given.
+    fn try_from(fields: DIDFields) -> Result<Self, Self::Error> {
+        let mut did_string = format!(
+            "did:{}:{}",
+            fields.method.name(),
+            fields.method.identifier()
+        );
+        for (separator, component) in [
+            ('/', &fields.path),
+            ('?', &fields.query),
+            ('#', &fields.fragment),
+        ] {
+            if let Some(component) = component {
+                did_string.push(separator);
+                did_string.push_str(component);
+            }
+        }
+        let parsed: DID = did_string.parse()?;
+        if parsed.method != fields.method
+            || parsed.path != fields.path
+            || parsed.query != fields.query
+            || parsed.fragment != fields.fragment
+            || parsed.url != fields.url
+        {
+            return Err(DIDError::InvalidMethodSpecificId(format!(
+                "the serialized fields of {did_string} do not agree with each other"
+            )));
+        }
+        Ok(parsed)
+    }
 }
 
 /// Errors that can occur when parsing or constructing a DID
@@ -103,14 +158,7 @@ impl FromStr for DID {
             .split_once(':')
             .ok_or_else(|| DIDError::InvalidMethod("missing method".into()))?;
 
-        // Validate method name: must be non-empty, lowercase letters and digits only
-        if method_name.is_empty()
-            || !method_name
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        {
-            return Err(DIDError::InvalidMethod(method_name.into()));
-        }
+        validate_method_name(method_name)?;
 
         let components = parse_did_url_components(rest)?;
 
@@ -124,6 +172,18 @@ impl FromStr for DID {
             components.fragment,
         )
     }
+}
+
+/// A method name must be non-empty, lowercase letters and digits only.
+fn validate_method_name(method_name: &str) -> Result<(), DIDError> {
+    if method_name.is_empty()
+        || !method_name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    {
+        return Err(DIDError::InvalidMethod(method_name.into()));
+    }
+    Ok(())
 }
 
 /// Parsed components from a DID URL string
@@ -332,8 +392,23 @@ impl DID {
     }
 
     /// Create a new DID with a pre-constructed DIDMethod
+    ///
+    /// The method is validated as a parsed DID's is: its name and identifier
+    /// are parsed again, and a method whose other fields (a did:key's codec
+    /// and key bytes, a did:web's domain, ...) disagree with what its
+    /// identifier parses to is refused with
+    /// [`DIDError::InvalidMethodSpecificId`].
     pub fn new(method: DIDMethod) -> Result<Self, DIDError> {
-        Self::build(method, None, None, None)
+        validate_method_name(method.name())?;
+        let parsed = parse_method(method.name(), method.identifier())?;
+        if parsed != method {
+            return Err(DIDError::InvalidMethodSpecificId(format!(
+                "the fields of the did:{} method do not match its identifier {:?}",
+                method.name(),
+                method.identifier()
+            )));
+        }
+        Self::build(parsed, None, None, None)
     }
 
     /// Create a new did:key from identifier
@@ -536,26 +611,83 @@ impl DID {
 // Accessors
 impl DID {
     /// Returns the DID method
+    ///
+    /// This clones the whole [`DIDMethod`], including a did:key's key bytes;
+    /// [`DID::method_ref`] borrows it instead.
     pub fn method(&self) -> DIDMethod {
         self.method.clone()
     }
 
+    /// Borrows the DID method.
+    pub fn method_ref(&self) -> &DIDMethod {
+        &self.method
+    }
+
+    /// Borrows the method-specific identifier.
+    pub fn method_specific_id_ref(&self) -> &str {
+        self.method.identifier()
+    }
+
+    /// Borrows the path component, if present.
+    pub fn path_ref(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
+    /// Borrows the query component, if present.
+    pub fn query_ref(&self) -> Option<&str> {
+        self.query.as_deref()
+    }
+
+    /// Borrows the fragment component, if present.
+    pub fn fragment_ref(&self) -> Option<&str> {
+        self.fragment.as_deref()
+    }
+
+    /// Borrows this DID as a URL.
+    pub fn as_url(&self) -> &url::Url {
+        &self.url
+    }
+
+    /// The bare DID (`did:<method>:<id>`) as a URL, without the path, query
+    /// and fragment of a DID URL: the subject a document for it is built
+    /// under.
+    pub(crate) fn base_url(&self) -> Result<url::Url, DIDError> {
+        if self.is_url() {
+            url::Url::parse(&format!(
+                "did:{}:{}",
+                self.method.name(),
+                self.method.identifier()
+            ))
+            .map_err(|e| DIDError::InvalidUrl(e.to_string()))
+        } else {
+            Ok(self.url.clone())
+        }
+    }
+
     /// Returns the method-specific identifier
+    ///
+    /// Allocates; [`DID::method_specific_id_ref`] borrows.
     pub fn method_specific_id(&self) -> String {
         self.method.identifier().to_string()
     }
 
     /// Returns the path component, if present
+    ///
+    /// Allocates; [`DID::path_ref`] borrows.
     pub fn path(&self) -> Option<String> {
         self.path.clone()
     }
 
     /// Returns the query component, if present
+    ///
+    /// Allocates; [`DID::query_ref`] borrows.
     pub fn query(&self) -> Option<String> {
         self.query.clone()
     }
 
     /// Returns the fragment component, if present
+    ///
+    /// Allocates; [`DID::fragment_ref`] borrows.
     pub fn fragment(&self) -> Option<String> {
         self.fragment.clone()
     }
@@ -566,6 +698,8 @@ impl DID {
     }
 
     /// Returns this DID as a URL
+    ///
+    /// Clones; [`DID::as_url`] borrows.
     pub fn url(&self) -> url::Url {
         self.url.clone()
     }
@@ -618,6 +752,90 @@ impl TryFrom<&str> for DID {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_refuses_a_method_whose_fields_disagree_with_its_identifier() {
+        let did: DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+            .parse()
+            .unwrap();
+        let DIDMethod::Key {
+            identifier, codec, ..
+        } = did.method()
+        else {
+            panic!("a did:key");
+        };
+        let forged = DIDMethod::Key {
+            identifier,
+            codec,
+            key_bytes: vec![0; 32],
+        };
+        assert!(matches!(
+            DID::new(forged),
+            Err(DIDError::InvalidMethodSpecificId(_))
+        ));
+
+        // An identifier that does not parse at all.
+        let bogus = DIDMethod::Key {
+            identifier: "x".into(),
+            codec: affinidi_encoding::Codec::from_u64(affinidi_encoding::ED25519_PUB),
+            key_bytes: vec![],
+        };
+        assert!(DID::new(bogus).is_err());
+
+        // A method name a DID cannot carry.
+        let other = DIDMethod::Other {
+            method: "Bad Name".into(),
+            identifier: "abc".into(),
+        };
+        assert!(matches!(DID::new(other), Err(DIDError::InvalidMethod(_))));
+    }
+
+    #[test]
+    fn new_accepts_a_method_parsed_from_a_did() {
+        let did: DID = "did:web:example.com:user:alice".parse().unwrap();
+        assert_eq!(DID::new(did.method()).unwrap(), did);
+    }
+
+    #[test]
+    fn serde_keeps_its_wire_form_and_round_trips() {
+        let did: DID = "did:web:example.com:alice/path?q=1#frag".parse().unwrap();
+        let value = serde_json::to_value(&did).unwrap();
+        assert!(value.get("method").is_some(), "the struct form: {value}");
+        let back: DID = serde_json::from_value(value).unwrap();
+        assert_eq!(back, did);
+    }
+
+    #[test]
+    fn deserialization_refuses_fields_that_disagree() {
+        let did: DID = "did:web:example.com#frag".parse().unwrap();
+
+        // A url that is not the DID's.
+        let mut value = serde_json::to_value(&did).unwrap();
+        value["url"] = serde_json::json!("did:web:evil.example.com#frag");
+        assert!(serde_json::from_value::<DID>(value).is_err());
+
+        // A did:web whose domain is not its identifier's.
+        let mut value = serde_json::to_value(&did).unwrap();
+        value["method"]["Web"]["domain"] = serde_json::json!("evil.example.com");
+        assert!(serde_json::from_value::<DID>(value).is_err());
+
+        // A fragment a DID URL cannot carry.
+        let mut value = serde_json::to_value(&did).unwrap();
+        value["fragment"] = serde_json::json!("a b");
+        assert!(serde_json::from_value::<DID>(value).is_err());
+    }
+
+    #[test]
+    fn borrowing_accessors_agree_with_the_owned_ones() {
+        let did: DID = "did:example:123/path?query=value#fragment".parse().unwrap();
+        assert_eq!(did.method_ref(), &did.method());
+        assert_eq!(did.method_specific_id_ref(), did.method_specific_id());
+        assert_eq!(did.path_ref(), did.path().as_deref());
+        assert_eq!(did.query_ref(), did.query().as_deref());
+        assert_eq!(did.fragment_ref(), did.fragment().as_deref());
+        assert_eq!(did.as_url(), &did.url());
+        assert_eq!(did.base_url().unwrap().as_str(), "did:example:123");
+    }
 
     #[cfg(all(feature = "ed25519", feature = "p256"))]
     #[test]

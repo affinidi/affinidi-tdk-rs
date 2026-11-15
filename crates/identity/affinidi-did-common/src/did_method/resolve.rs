@@ -31,7 +31,9 @@ impl DIDMethod {
     /// For network methods, returns an error indicating external resolution is needed.
     pub fn resolve(&self, did: &DID) -> Result<Document, DIDError> {
         match self {
-            DIDMethod::Key { identifier, .. } => resolve_key(did, identifier),
+            DIDMethod::Key {
+                identifier, codec, ..
+            } => resolve_key(&did.base_url()?, identifier, codec.to_u64()),
             DIDMethod::Peer {
                 numalgo,
                 identifier,
@@ -44,13 +46,15 @@ impl DIDMethod {
     }
 }
 
-/// Resolve a did:key to its DID Document
-fn resolve_key(did: &DID, identifier: &str) -> Result<Document, DIDError> {
-    // Get the codec (already validated at parse time)
-    let (codec, _) = affinidi_encoding::decode_multikey_with_codec(identifier)
-        .map_err(|e| DIDError::ResolutionError(format!("Invalid multikey: {e}")))?;
-
-    let mut vm_id = did.url();
+/// Build the document of a single-key DID (did:key, did:peer numalgo 0).
+///
+/// `subject` is the bare DID the document is for; every id, controller and
+/// reference is under it. `multikey` is the public key as a multikey (the
+/// did:key method-specific id), already validated at parse time, and `codec`
+/// its multicodec. Each verification method's fragment is its multikey.
+fn resolve_key(subject: &url::Url, multikey: &str, codec: u64) -> Result<Document, DIDError> {
+    let identifier = multikey;
+    let mut vm_id = subject.clone();
     vm_id.set_fragment(Some(identifier));
 
     let mut vms = Vec::new();
@@ -63,13 +67,13 @@ fn resolve_key(did: &DID, identifier: &str) -> Result<Document, DIDError> {
                 DIDError::ResolutionError(format!("Failed to derive X25519 from Ed25519: {e}"))
             })?;
 
-            let mut x25519_vm_id = did.url();
+            let mut x25519_vm_id = subject.clone();
             x25519_vm_id.set_fragment(Some(&x25519_encoded));
 
             vms.push(VerificationMethod {
                 id: x25519_vm_id.clone(),
                 type_: MULTIKEY_TYPE.to_string(),
-                controller: did.url(),
+                controller: subject.clone(),
                 expires: None,
                 revoked: None,
                 property_set: HashMap::from([(
@@ -98,7 +102,7 @@ fn resolve_key(did: &DID, identifier: &str) -> Result<Document, DIDError> {
         VerificationMethod {
             id: vm_id.clone(),
             type_: MULTIKEY_TYPE.to_string(),
-            controller: did.url(),
+            controller: subject.clone(),
             expires: None,
             revoked: None,
             property_set: HashMap::from([(
@@ -111,7 +115,7 @@ fn resolve_key(did: &DID, identifier: &str) -> Result<Document, DIDError> {
     let vm_relationship = VerificationRelationship::Reference(vm_id.to_string());
 
     Ok(Document {
-        id: did.url(),
+        id: subject.clone(),
         also_known_as: vec![],
         verification_method: vms,
         authentication: vec![vm_relationship.clone()],
@@ -134,13 +138,15 @@ fn resolve_key(did: &DID, identifier: &str) -> Result<Document, DIDError> {
 fn resolve_peer(did: &DID, numalgo: &PeerNumAlgo, identifier: &str) -> Result<Document, DIDError> {
     match numalgo {
         PeerNumAlgo::InceptionKey => {
-            // Numalgo 0: The identifier IS the did:key multibase
-            // Strip the leading '0' and treat as did:key
+            // Numalgo 0: the identifier after the leading '0' is a did:key
+            // multikey. The document is a did:key's, built under the
+            // did:peer:0 DID itself: its id, every verification method's id
+            // and controller, and every reference are `did:peer:0…`, with the
+            // multikey as each method's fragment as for did:key.
             let key_multibase = identifier.strip_prefix('0').unwrap_or(identifier);
-            let key_did: DID = format!("did:key:{key_multibase}")
-                .parse()
+            let (codec, _) = affinidi_encoding::decode_multikey_with_codec(key_multibase)
                 .map_err(|e| DIDError::ResolutionError(format!("Invalid did:peer:0 key: {e}")))?;
-            key_did.resolve()
+            resolve_key(&did.base_url()?, key_multibase, codec)
         }
         PeerNumAlgo::MultipleKeys => resolve_peer_2(did, identifier),
         PeerNumAlgo::GenesisDoc => Err(DIDError::ResolutionError(
@@ -156,7 +162,8 @@ fn resolve_peer_2(did: &DID, identifier: &str) -> Result<Document, DIDError> {
     use std::str::FromStr;
     use url::Url;
 
-    let did_string = did.to_string();
+    let subject = did.base_url()?;
+    let did_string = subject.to_string();
 
     // Skip the leading '2' and split on '.'
     let content = identifier.strip_prefix('2').unwrap_or(identifier);
@@ -208,7 +215,7 @@ fn resolve_peer_2(did: &DID, identifier: &str) -> Result<Document, DIDError> {
                 id: Url::from_str(&kid)
                     .map_err(|e| DIDError::ResolutionError(format!("Invalid key ID: {e}")))?,
                 type_: MULTIKEY_TYPE.to_string(),
-                controller: did.url(),
+                controller: subject.clone(),
                 expires: None,
                 revoked: None,
                 property_set: HashMap::from([(
@@ -244,7 +251,7 @@ fn resolve_peer_2(did: &DID, identifier: &str) -> Result<Document, DIDError> {
     }
 
     Ok(Document {
-        id: did.url(),
+        id: subject,
         also_known_as: vec![],
         verification_method: verification_methods,
         authentication,
@@ -326,6 +333,74 @@ mod tests {
         assert_eq!(doc.verification_method.len(), 2); // Ed25519 + derived X25519
         assert_eq!(doc.authentication.len(), 1);
         assert_eq!(doc.key_agreement.len(), 1);
+    }
+
+    /// The numalgo-0 document is the peer DID's, not the did:key's it wraps.
+    #[test]
+    fn peer_numalgo_0_document_is_under_the_peer_did() {
+        let peer = "did:peer:0z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+        let did: DID = peer.parse().unwrap();
+        let doc = did.resolve().unwrap();
+
+        assert_eq!(doc.id.as_str(), peer);
+        for vm in &doc.verification_method {
+            assert!(vm.id.as_str().starts_with(&format!("{peer}#z")), "{vm:?}");
+            assert_eq!(vm.controller.as_str(), peer);
+        }
+        assert_eq!(
+            doc.verification_method[0].id.as_str(),
+            format!("{peer}#z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK")
+        );
+        for relationship in doc
+            .authentication
+            .iter()
+            .chain(&doc.assertion_method)
+            .chain(&doc.key_agreement)
+            .chain(&doc.capability_invocation)
+            .chain(&doc.capability_delegation)
+        {
+            assert!(
+                relationship.get_id().starts_with(&format!("{peer}#")),
+                "{relationship:?}"
+            );
+        }
+        assert!(!serde_json::to_string(&doc).unwrap().contains("did:key"));
+
+        // The keys are the did:key's.
+        let key: DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+            .parse()
+            .unwrap();
+        let key_doc = key.resolve().unwrap();
+        assert_eq!(
+            doc.verification_method[1].property_set,
+            key_doc.verification_method[1].property_set
+        );
+    }
+
+    /// A DID URL resolves to the document of its DID, not one whose subject
+    /// carries the URL's fragment or path.
+    #[test]
+    fn a_did_url_resolves_under_the_bare_did() {
+        let did: DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK#frag"
+            .parse()
+            .unwrap();
+        let doc = did.resolve().unwrap();
+        assert_eq!(
+            doc.id.as_str(),
+            "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+        );
+        let did: DID = "did:peer:2.Vz6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK#key-1"
+            .parse()
+            .unwrap();
+        let doc = did.resolve().unwrap();
+        assert_eq!(
+            doc.verification_method[0].id.as_str(),
+            "did:peer:2.Vz6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK#key-1"
+        );
+        assert_eq!(
+            doc.verification_method[0].controller.as_str(),
+            "did:peer:2.Vz6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+        );
     }
 
     #[test]

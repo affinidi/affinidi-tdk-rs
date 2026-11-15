@@ -277,8 +277,12 @@ pub(crate) fn derive(did: &DidWebs, keri_cesr: &[u8]) -> Result<Derived, DidWebs
         )));
     }
 
+    // The verified key state's sequence number is the log's last: a stream
+    // can carry events past it that a recovery rotation superseded, and
+    // `sequence_numbers` (called after the verification above) leaves those
+    // out.
     let sequence_numbers = full.sequence_numbers(aid);
-    let latest = sequence_numbers.iter().copied().max().unwrap_or(0);
+    let latest = current.sn;
     let version = did.version_id().unwrap_or(latest);
     let versioned = match did.version_id() {
         // `as_of` refuses a sequence number the log does not reach.

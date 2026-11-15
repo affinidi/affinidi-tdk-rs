@@ -9,26 +9,22 @@ use crate::{
     },
 };
 
-fn parse_key(identifier: &str) -> Result<DIDMethod, DIDError> {
-    let (codec_value, key_bytes) = affinidi_encoding::decode_multikey_with_codec(identifier)
-        .map_err(|e| DIDError::InvalidMethodSpecificId(format!("invalid did:key encoding: {e}")))?;
-
-    let codec = Codec::from_u64(codec_value);
-
+/// Decode a multikey that must be a public key of its codec's length: the
+/// rule did:key, and each key of a did:peer, is held to.
+fn decode_public_multikey(key: &str, what: &str) -> Result<(Codec, Vec<u8>), DIDError> {
+    let (codec, key_bytes) = affinidi_encoding::decode_multikey_checked(key)
+        .map_err(|e| DIDError::InvalidMethodSpecificId(format!("invalid {what} key: {e}")))?;
     if !codec.is_public() {
         return Err(DIDError::InvalidMethodSpecificId(format!(
-            "unsupported did:key codec: 0x{codec_value:x}"
+            "unsupported {what} codec: 0x{:x}",
+            codec.to_u64()
         )));
     }
+    Ok((codec, key_bytes))
+}
 
-    if let Some(expected_len) = codec.expected_key_length()
-        && key_bytes.len() != expected_len
-    {
-        return Err(DIDError::InvalidMethodSpecificId(format!(
-            "invalid key length for codec 0x{codec_value:x}: expected {expected_len}, got {}",
-            key_bytes.len()
-        )));
-    }
+fn parse_key(identifier: &str) -> Result<DIDMethod, DIDError> {
+    let (codec, key_bytes) = decode_public_multikey(identifier, "did:key")?;
 
     Ok(DIDMethod::Key {
         identifier: identifier.to_string(),
@@ -51,29 +47,7 @@ fn parse_peer(identifier: &str) -> Result<DIDMethod, DIDError> {
     match numalgo {
         PeerNumAlgo::InceptionKey => {
             // Type 0: rest is a did:key identifier
-            let key_id = &identifier[1..];
-            let (codec_value, key_bytes) = affinidi_encoding::decode_multikey_with_codec(key_id)
-                .map_err(|e| {
-                    DIDError::InvalidMethodSpecificId(format!(
-                        "invalid did:peer:0 key encoding: {e}"
-                    ))
-                })?;
-
-            let codec = Codec::from_u64(codec_value);
-            if !codec.is_public() {
-                return Err(DIDError::InvalidMethodSpecificId(format!(
-                    "unsupported did:peer:0 codec: 0x{codec_value:x}"
-                )));
-            }
-
-            if let Some(expected_len) = codec.expected_key_length()
-                && key_bytes.len() != expected_len
-            {
-                return Err(DIDError::InvalidMethodSpecificId(format!(
-                    "invalid key length for did:peer:0: expected {expected_len}, got {}",
-                    key_bytes.len()
-                )));
-            }
+            decode_public_multikey(&identifier[1..], "did:peer:0")?;
         }
         PeerNumAlgo::GenesisDoc => {
             return Err(DIDError::InvalidMethodSpecificId(
@@ -108,11 +82,9 @@ fn parse_peer(identifier: &str) -> Result<DIDMethod, DIDError> {
                             "did:peer:2 key entry has no key data".into(),
                         ));
                     }
-                    affinidi_encoding::decode_multikey_with_codec(key_data).map_err(|e| {
-                        DIDError::InvalidMethodSpecificId(format!(
-                            "invalid did:peer:2 key encoding: {e}"
-                        ))
-                    })?;
+                    // The same rule as numalgo 0 and did:key: a public key
+                    // of its codec's length.
+                    decode_public_multikey(key_data, "did:peer:2")?;
                 }
             }
         }
@@ -262,5 +234,39 @@ pub fn parse_method(method_name: &str, identifier: &str) -> Result<DIDMethod, DI
             method: other.to_string(),
             identifier: identifier.to_string(),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::DID;
+
+    const ED25519: &str = "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+
+    #[test]
+    fn peer_2_refuses_a_private_key() {
+        let private = affinidi_encoding::encode_multikey(affinidi_encoding::ED25519_PRIV, &[7; 32]);
+        let err = format!("did:peer:2.V{private}")
+            .parse::<DID>()
+            .expect_err("a private key");
+        assert!(err.to_string().contains("codec"), "{err}");
+    }
+
+    #[test]
+    fn peer_2_refuses_a_key_of_the_wrong_length() {
+        let short = affinidi_encoding::encode_multikey(affinidi_encoding::ED25519_PUB, &[7; 31]);
+        assert!(format!("did:peer:2.V{short}").parse::<DID>().is_err());
+        let p256_uncompressed =
+            affinidi_encoding::encode_multikey(affinidi_encoding::P256_PUB, &[4; 65]);
+        assert!(
+            format!("did:peer:2.V{p256_uncompressed}")
+                .parse::<DID>()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn peer_2_accepts_public_keys_of_their_length() {
+        assert!(format!("did:peer:2.V{ED25519}").parse::<DID>().is_ok());
     }
 }

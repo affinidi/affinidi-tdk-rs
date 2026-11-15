@@ -103,13 +103,7 @@ impl VerificationMethod {
                 .decode(s)
                 .map_err(|e| DocumentError::VM(format!("invalid base64url in JWK: {e}")))
         };
-        let sec1 = |x: &[u8], y: &[u8]| {
-            let mut v = Vec::with_capacity(1 + x.len() + y.len());
-            v.push(0x04);
-            v.extend_from_slice(x);
-            v.extend_from_slice(y);
-            v
-        };
+        let sec1 = crate::did_method::key::sec1_uncompressed;
 
         match (&jwk.params, jwk.key_type()) {
             (Params::OKP(p), KeyType::Ed25519) => Ok((affinidi_encoding::ED25519_PUB, b64(&p.x)?)),

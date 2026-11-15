@@ -155,6 +155,63 @@ async fn a_server_error_is_surfaced_not_swallowed() {
 }
 
 #[tokio::test]
+async fn a_chosen_timeout_is_applied() {
+    // A host that accepts the connection and never answers.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+
+    let resolver = WebsResolver::with_client_builder_and_timeout(
+        reqwest::Client::builder(),
+        HostPolicy::AllowPrivate,
+        std::time::Duration::from_millis(200),
+    )
+    .unwrap();
+    let did = format!("did:webs:{}:{AID}", address.to_string().replace(':', "%3A"));
+    let err = tokio::time::timeout(std::time::Duration::from_secs(10), resolver.resolve(&did))
+        .await
+        .expect("the 200 ms timeout applies, not the 20 s default")
+        .expect_err("the host never answers");
+    assert!(matches!(err, DidWebsError::Fetch { .. }), "{err:?}");
+}
+
+#[tokio::test]
+async fn a_rate_limit_is_kept_as_data() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{AID}/keri.cesr")))
+        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "12"))
+        .mount(&server)
+        .await;
+
+    let err = WebsResolver::with_policy(HostPolicy::AllowPrivate)
+        .resolve(&did_for(&server))
+        .await
+        .expect_err("a 429 must fail resolution");
+    let DidWebsError::Network(network) = &err else {
+        panic!("expected DidWebsError::Network, got {err:?}");
+    };
+    assert!(network.is_rate_limited());
+    assert_eq!(
+        network.retry_after,
+        Some(std::time::Duration::from_secs(12))
+    );
+    assert!(
+        network
+            .url
+            .as_deref()
+            .is_some_and(|url| url.ends_with("/keri.cesr")),
+        "{network:?}"
+    );
+    assert_eq!(err.network_error().as_ref(), Some(network));
+}
+
+#[tokio::test]
 async fn an_oversized_artifact_is_refused() {
     // A key event log grows with every rotation and has no natural bound, and
     // the server is not trusted, so an artifact past the cap is refused rather

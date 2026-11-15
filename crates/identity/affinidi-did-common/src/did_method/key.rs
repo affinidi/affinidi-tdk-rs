@@ -269,9 +269,20 @@ impl KeyMaterial {
     pub fn from_jwk(jwk: &JWK) -> Result<Self, KeyError> {
         match &jwk.params {
             Params::EC(params) => {
-                let mut x = Self::decode_base64url(&params.x)?;
-                let mut y = Self::decode_base64url(&params.y)?;
-                x.append(&mut y);
+                let key_type = KeyType::try_from(params.curve.as_str())?;
+                let coordinate_len = ec_coordinate_length(key_type).ok_or_else(|| {
+                    KeyError::UnsupportedKeyType(format!("{key_type:?} is not an EC curve"))
+                })?;
+                let x = Self::decode_base64url(&params.x)?;
+                let y = Self::decode_base64url(&params.y)?;
+                if x.len() != coordinate_len || y.len() != coordinate_len {
+                    return Err(KeyError::Key(format!(
+                        "{} JWK coordinates must be {coordinate_len} bytes each, got x: {}, y: {}",
+                        params.curve,
+                        x.len(),
+                        y.len()
+                    )));
+                }
 
                 Ok(KeyMaterial {
                     id: jwk.key_id.as_ref().unwrap_or(&String::new()).clone(),
@@ -283,8 +294,12 @@ impl KeyMaterial {
                             .as_ref()
                             .ok_or_else(|| KeyError::Key("Missing private key".into()))?,
                     )?,
-                    public_bytes: x,
-                    key_type: KeyType::try_from(params.curve.as_str())?,
+                    // The SEC1 uncompressed form (`0x04 || x || y`) a
+                    // generated key carries, so `public_bytes` and
+                    // `public_multibase` do not depend on where the key came
+                    // from.
+                    public_bytes: sec1_uncompressed(&x, &y),
+                    key_type,
                 })
             }
             Params::OKP(params) => Ok(KeyMaterial {
@@ -354,33 +369,28 @@ impl KeyMaterial {
     }
 
     /// Compress public key for EC curves (returns as-is for OKP)
+    ///
+    /// EC keys are held as SEC1 uncompressed points, `0x04 || x || y`.
     fn compress_public_key(&self) -> Result<Vec<u8>, KeyError> {
         match self.key_type {
             KeyType::Ed25519 | KeyType::X25519 => Ok(self.public_bytes.clone()),
-            KeyType::P256 | KeyType::Secp256k1 => {
-                if self.public_bytes.len() < 65 {
-                    return Err(KeyError::Key("Invalid public key length".into()));
+            KeyType::P256 | KeyType::Secp256k1 | KeyType::P384 => {
+                let coordinate_len = ec_coordinate_length(self.key_type).unwrap_or_default();
+                let bytes = &self.public_bytes;
+                if bytes.len() != 1 + 2 * coordinate_len || bytes[0] != 0x04 {
+                    return Err(KeyError::Key(format!(
+                        "Invalid public key length: expected a {}-byte SEC1 uncompressed point, got {} bytes",
+                        1 + 2 * coordinate_len,
+                        bytes.len()
+                    )));
                 }
-                let parity: u8 = if self.public_bytes[64].is_multiple_of(2) {
+                let parity: u8 = if bytes[2 * coordinate_len].is_multiple_of(2) {
                     0x02
                 } else {
                     0x03
                 };
                 let mut compressed = vec![parity];
-                compressed.extend_from_slice(&self.public_bytes[1..33]);
-                Ok(compressed)
-            }
-            KeyType::P384 => {
-                if self.public_bytes.len() < 97 {
-                    return Err(KeyError::Key("Invalid public key length".into()));
-                }
-                let parity: u8 = if self.public_bytes[96].is_multiple_of(2) {
-                    0x02
-                } else {
-                    0x03
-                };
-                let mut compressed = vec![parity];
-                compressed.extend_from_slice(&self.public_bytes[1..49]);
+                compressed.extend_from_slice(&bytes[1..=coordinate_len]);
                 Ok(compressed)
             }
             _ => Err(KeyError::UnsupportedKeyType(format!("{:?}", self.key_type))),
@@ -435,10 +445,86 @@ impl KeyMaterial {
     }
 }
 
+/// The length of one affine coordinate of an EC curve's public key, or `None`
+/// for a key type that is not an EC curve.
+pub(crate) fn ec_coordinate_length(key_type: KeyType) -> Option<usize> {
+    match key_type {
+        KeyType::P256 | KeyType::Secp256k1 => Some(32),
+        KeyType::P384 => Some(48),
+        KeyType::P521 => Some(66),
+        _ => None,
+    }
+}
+
+/// An EC public key as a SEC1 uncompressed point: `0x04 || x || y`.
+pub(crate) fn sec1_uncompressed(x: &[u8], y: &[u8]) -> Vec<u8> {
+    let mut point = Vec::with_capacity(1 + x.len() + y.len());
+    point.push(0x04);
+    point.extend_from_slice(x);
+    point.extend_from_slice(y);
+    point
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A generated EC key, serialized and read back or rebuilt from its JWK,
+    /// keeps its public bytes (SEC1 uncompressed) and its multikey.
+    #[cfg(any(feature = "p256", feature = "p384", feature = "k256"))]
+    fn assert_ec_round_trip(generated: KeyMaterial, sec1_len: usize) {
+        assert_eq!(generated.public_bytes().len(), sec1_len);
+        assert_eq!(generated.public_bytes()[0], 0x04);
+        let multibase = generated.public_multibase().expect("multibase");
+
+        let json = serde_json::to_value(&generated).expect("serializes");
+        let read: KeyMaterial = serde_json::from_value(json).expect("deserializes");
+        assert_eq!(read.key_type(), generated.key_type());
+        assert_eq!(read.public_bytes(), generated.public_bytes());
+        assert_eq!(read.public_multibase().expect("multibase"), multibase);
+
+        let KeyMaterialFormat::JWK(jwk) = &generated.format else {
+            panic!("a generated key carries a JWK");
+        };
+        let from_jwk = KeyMaterial::from_jwk(jwk).expect("from_jwk");
+        assert_eq!(from_jwk.public_bytes(), generated.public_bytes());
+        assert_eq!(from_jwk.public_multibase().expect("multibase"), multibase);
+    }
+
+    #[cfg(feature = "p256")]
+    #[test]
+    fn p256_from_jwk_matches_the_generated_key() {
+        assert_ec_round_trip(KeyMaterial::generate_p256(None).unwrap(), 65);
+    }
+
+    #[cfg(feature = "p384")]
+    #[test]
+    fn p384_from_jwk_matches_the_generated_key() {
+        assert_ec_round_trip(KeyMaterial::generate_p384(None).unwrap(), 97);
+    }
+
+    #[cfg(feature = "k256")]
+    #[test]
+    fn secp256k1_from_jwk_matches_the_generated_key() {
+        assert_ec_round_trip(KeyMaterial::generate_secp256k1(None).unwrap(), 65);
+    }
+
+    #[cfg(feature = "p256")]
+    #[test]
+    fn from_jwk_refuses_ec_coordinates_of_the_wrong_length() {
+        let key = KeyMaterial::generate_p256(None).unwrap();
+        let KeyMaterialFormat::JWK(jwk) = &key.format else {
+            panic!("a generated key carries a JWK");
+        };
+        let mut value = serde_json::to_value(jwk).unwrap();
+        // One byte too long, then one byte too short.
+        for x in [vec![7u8; 33], vec![7u8; 31]] {
+            value["x"] = json!(BASE64_URL_SAFE_NO_PAD.encode(&x));
+            let err = KeyMaterial::from_jwk_value("k", &value).expect_err("wrong length");
+            assert!(err.to_string().contains("32 bytes"), "{err}");
+        }
+    }
 
     #[test]
     fn debug_does_not_print_the_private_key() {

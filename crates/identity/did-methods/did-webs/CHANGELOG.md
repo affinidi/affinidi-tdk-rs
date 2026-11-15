@@ -2,6 +2,44 @@
 
 All notable changes to this crate are documented here.
 
+## [0.13.6] - Unreleased
+
+### Fixed
+
+- **`versionId` after a superseding recovery (#1038).** The metadata's
+  `versionId` was the highest sequence number in the stream, which after a
+  recovery is an interaction event the rotation superseded and that is no
+  longer in the log; a `?versionId=` naming that event returned the current
+  document labelled with it, and `nextVersionId` could name it too. The
+  latest version is now the verified key state's sequence number, and
+  `Kels::sequence_numbers` (and so `Kels::as_of`) leaves out superseded events
+  once the log has been verified. `?versionId=` of a superseded event fails
+  with `DidWebsError::Kel`.
+
+### Changed
+
+- **An unsuccessful HTTP status is kept as data (#1043).** A host answering an
+  artifact request with a non-2xx status now fails with the new
+  `DidWebsError::Network(NetworkError)`, carrying the URL, the status and the
+  host's `Retry-After`, instead of `DidWebsError::Fetch { reason: "HTTP …" }`.
+  `Fetch` remains for transport failures and bodies over the cap.
+  `DidWebsError::network_error()` returns a `NetworkError` for either.
+- **Added:** `WebsResolver::with_client_builder_and_timeout(builder, policy,
+  timeout)`. `with_client_builder` sets the request timeout to
+  `DEFAULT_TIMEOUT` and the user agent to this crate's, replacing any the
+  caller's builder set; its docs said the caller could override them, which
+  was not so, and now say what it does. did-scid uses the new constructor to
+  apply its caller's timeout.
+- `into_document` resolves relative references with `affinidi-did-common`
+  0.4.8's `Document::from_json_with_base` (#1042), instead of a private copy:
+  a relative embedded relationship method, and a relative `?query` or `/path`
+  reference, are now made absolute too.
+- Compatibility (R3.6): a caller matching `DidWebsError::Fetch` for an HTTP
+  error status now gets `DidWebsError::Network` (the enum is
+  `#[non_exhaustive]`); the `Display` text names the URL and status as
+  before. Metadata after a recovery reports the recovery rotation's sequence
+  number.
+
 ## [0.13.5] - Unreleased
 
 ### Changed

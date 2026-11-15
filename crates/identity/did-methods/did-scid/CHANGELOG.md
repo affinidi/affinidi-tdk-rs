@@ -1,5 +1,42 @@
 # did:scid
 
+## Unreleased (0.4.9) — builds without `did-webvh`; `ke` honours the options and resolves to the did:scid DID
+
+- **Fixed (#1041):** `didwebvh-rs` is a hard dependency. The public API is
+  typed in it (`ResolveOptions`, `DIDSCIDError::WebVHError`) and the crate
+  never compiled without it, so `default-features = false, features =
+  ["did-webs"]` failed to build. The `did-webvh` feature stays, empty, so a
+  consumer naming it still builds.
+- **Changed (#1041):** `did:scid:ke` honours `resolve_with_options`'
+  `timeout` and `host_policy` (`HostPolicy::AllowPrivate` resolves a local
+  did:webs host). Before, it always used a fresh `PublicOnly` did:webs
+  resolver with its 20 s default, whatever the options said. New
+  `resolve_with_webs_resolver` (feature `did-webs`) resolves `ke` with a
+  did:webs resolver the caller holds, reusing its connection pool.
+- **Changed (#1041):** `did:scid:ke` resolves to the did:scid DID's own
+  document, as `vh` does: its `id` is the bare `did:scid:ke:1:<AID>`, every
+  reference the did:webs document makes to itself is under it, and
+  `alsoKnownAs` gains `did:scid:ke:1:<AID>?src=<location>` and the
+  `did:webs:…` DID. Before, the did:webs document came back unchanged.
+- **Changed (#1043):** an unsuccessful HTTP status from a `ke` source fails
+  with the new `DIDSCIDError::Network(NetworkError)` (URL, status,
+  `Retry-After`) instead of `WebsError("…HTTP …")`. New
+  `DIDSCIDError::network_error()` reads that and a did:webvh
+  `NetworkError` alike.
+- Failed resolutions log at `debug`, not `error`: they are the caller's to
+  report, and the DIDs are often untrusted input.
+- The `did:scid` parser no longer uses `regex` (dependency removed); it
+  accepts exactly what the pattern did.
+- Docs (#1045): the crate docs and README no longer offer did:cheqd as a
+  `vh` backend (retired in 0.2.6); the README's install line, feature table and
+  badge link are current.
+- Requires `affinidi-did-common` 0.4.8 and, with `did-webs`,
+  `affinidi-did-webs` 0.13.6.
+- Compatibility (R3.6): no signature change. A `did:scid:ke` document's `id`
+  and key ids are `did:scid:ke:1:…`, not `did:webs:…`; a `ke` lookup that
+  ignored a non-public host policy or timeout now follows it; a caller
+  matching `WebsError` for an HTTP status now gets `Network`.
+
 ## Unreleased (0.4.8) — a deactivated did:scid:ke does not resolve
 
 - **Behaviour:** `resolve` and `resolve_with_options` refuse a `did:scid:ke`

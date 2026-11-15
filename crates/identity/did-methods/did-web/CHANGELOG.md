@@ -1,5 +1,24 @@
 # Affinidi DID Web
 
+## 0.1.9 — relative ids in a fetched document
+
+- **Fixed (#1042):** a fetched document whose verification method or service
+  ids, controllers or relationship references are relative DID URLs
+  (`"#key-1"`), which DID Core allows, resolves, with them made absolute
+  against the document's `id`. Before, it failed with
+  `DidWebError::InvalidDocument("… relative URL without a base")`, and a
+  relative relationship reference next to absolute method ids never matched.
+  Uses `affinidi-did-common` 0.4.8's `Document::from_json_slice`.
+- Tests (#1045): the mock-server tests drive `DIDWeb`'s fetch (status,
+  size cap, parse and `id` check) instead of calling `reqwest` directly.
+- Docs: `with_client_builder` sets the request timeout to `DEFAULT_TIMEOUT`
+  and the user agent to this crate's, replacing any the caller's builder set.
+  It always did; its docs said the caller could override them.
+- README: the client example uses `with_client_builder` instead of the
+  deprecated `with_client`, and the SSRF guard and `HostPolicy` are described.
+- Compatibility (R3.6): no signature change; documents that failed to parse
+  now resolve.
+
 ## 0.1.8 — the decoded domain must be a host, each path segment one segment
 
 Behaviour change (R3.6): some DIDs that resolved before are refused with

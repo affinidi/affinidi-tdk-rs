@@ -2,6 +2,23 @@
 
 ## Changelog history
 
+## 15th November 2026
+
+### 0.1.5 — `Retry-After`, and the method crates' `NetworkError`
+
+- Added `NetworkFetchError::retry_after` and `with_retry_after`: how long the
+  host asked the caller to wait. Additive (`NetworkFetchError` is
+  `#[non_exhaustive]`).
+- Added `From<affinidi_did_common::NetworkError>` for `NetworkFetchError` and
+  for `ResolverError` (to `NetworkFetch`), keeping the URL, status and
+  `Retry-After` that did:webs, did:ebsi and did:scid now report (#1043).
+- The built-in resolvers match on `DID::method_ref` instead of cloning the
+  method.
+- Requires `affinidi-did-common` 0.4.8, whose did:peer:0 documents are built
+  under the peer DID (#1039): `PeerResolver` returns them as they are.
+  Behaviour change for a caller that looked up a did:peer:0 key by its
+  `did:key:…` id (R3.6).
+
 ## 16th September 2026
 
 ### 0.1.4 — typed network fetch failures

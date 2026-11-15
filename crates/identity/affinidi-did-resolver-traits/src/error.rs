@@ -1,6 +1,8 @@
 //! Error types for DID resolution.
 
-use affinidi_did_common::{DIDError, DocumentError};
+use std::time::Duration;
+
+use affinidi_did_common::{DIDError, DocumentError, NetworkError};
 
 /// Error type for resolver failures.
 ///
@@ -63,9 +65,9 @@ impl ResolverError {
 /// no response arrived (DNS, connect, TLS, timeout) and when the failure came
 /// after a successful status line (reading or decoding the body).
 ///
-/// `#[non_exhaustive]` so that fields can be added without a breaking release —
-/// notably the host's `Retry-After`, which the method crates do not surface
-/// yet. Build one with [`NetworkFetchError::new`].
+/// `#[non_exhaustive]` so that fields can be added without a breaking
+/// release. Build one with [`NetworkFetchError::new`], or convert the
+/// [`NetworkError`] a method crate reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct NetworkFetchError {
@@ -75,6 +77,9 @@ pub struct NetworkFetchError {
     pub status: Option<u16>,
     /// What went wrong, as reported by the method implementation.
     pub message: String,
+    /// How long the host asked the caller to wait before trying again (its
+    /// `Retry-After`, in seconds), when it said.
+    pub retry_after: Option<Duration>,
 }
 
 impl NetworkFetchError {
@@ -87,7 +92,14 @@ impl NetworkFetchError {
             url: None,
             status: None,
             message: message.into(),
+            retry_after: None,
         }
+    }
+
+    /// Record how long the host asked the caller to wait.
+    pub fn with_retry_after(mut self, retry_after: Duration) -> Self {
+        self.retry_after = Some(retry_after);
+        self
     }
 
     /// Record the URL that was being fetched.
@@ -128,6 +140,25 @@ impl std::fmt::Display for NetworkFetchError {
 
 impl std::error::Error for NetworkFetchError {}
 
+/// The failed fetch a method crate reports, with its URL, status and
+/// `Retry-After` kept as data.
+impl From<NetworkError> for NetworkFetchError {
+    fn from(err: NetworkError) -> Self {
+        Self {
+            url: err.url,
+            status: err.status,
+            message: err.message,
+            retry_after: err.retry_after,
+        }
+    }
+}
+
+impl From<NetworkError> for ResolverError {
+    fn from(err: NetworkError) -> Self {
+        Self::NetworkFetch(err.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +185,20 @@ mod tests {
             err.to_string(),
             "DID host https://example.com/did.jsonl answered HTTP 404"
         );
+    }
+
+    #[test]
+    fn a_method_crates_network_error_keeps_its_fields() {
+        let err = NetworkError::new("HTTP 429")
+            .with_url("https://example.com/did.json")
+            .with_status(429)
+            .with_retry_after(Duration::from_secs(30));
+        let ResolverError::NetworkFetch(fetch) = ResolverError::from(err) else {
+            panic!("a network fetch error");
+        };
+        assert!(fetch.is_rate_limited());
+        assert_eq!(fetch.url.as_deref(), Some("https://example.com/did.json"));
+        assert_eq!(fetch.retry_after, Some(Duration::from_secs(30)));
     }
 
     #[test]

@@ -1,9 +1,20 @@
 /*! Implementation of the `did:scid` (Self-Certifying Identifier) DID method.
  *
  * Supported formats:
- *   - `did:scid:vh:1` — Verifiable History via did:webvh or did:cheqd
+ *   - `did:scid:vh:1` — Verifiable History via did:webvh
  *   - `did:scid:ke:1` — a KERI AID via did:webs (requires the `did-webs`
  *     feature)
+ *
+ * `did:cheqd` sources still parse behind the inert `did-cheqd` feature, but
+ * their resolution was retired in 0.2.6 and always fails.
+ *
+ * ### The document a did:scid resolves to
+ *
+ * For both formats the document is the DID's own: its `id` is the bare
+ * `did:scid:<format>:1:<scid>` DID, with no `src`, every reference the
+ * source document makes to itself is rewritten under that DID, and
+ * `alsoKnownAs` lists the did:scid DID URL of the source's location and the
+ * source DID (`did:webvh:…` or `did:webs:…`).
  *
  * ⚠️ The did:scid method type registry (Appendix A of the specification) is
  * still marked TODO, and `ke` is listed there as a *proposed* entry rather
@@ -13,7 +24,7 @@
  *
  * Two invocation modes are supported:
  *   - **URL mode**: `did:scid:vh:1:<scid>?src=<source>` — the `src` parameter
- *     encodes either a `did:cheqd:<network>` prefix or a WebVH host/path.
+ *     is a WebVH host/path (or, for `ke`, the did:webs host/path).
  *   - **Peer mode**: `did:scid:vh:1:<scid>` with the source supplied
  *     out-of-band via [`ScidMethod`].
  *
@@ -32,21 +43,52 @@
 use crate::errors::DIDSCIDError;
 use affinidi_did_common::Document;
 use didwebvh_rs::{DIDWebVHState, log_entry::LogEntryMethods};
-use regex::Regex;
-use std::sync::LazyLock;
 use std::time::Duration;
-use tracing::{debug, error};
+use tracing::debug;
 
 pub mod errors;
 
-/// `did:scid:<format>:<version>:<scid>[?src=<source>]`
+/// The parts of `did:scid:<format>:<version>:<scid>[?src=<source>]`.
 ///
 /// The format name is two characters by convention and the version is one or
-/// more digits; both are captured rather than hard-coded so an unknown format
+/// more digits; both are read rather than hard-coded so an unknown format
 /// produces a clear error instead of failing to match at all.
-static SCID_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^did:scid:([a-z0-9]+):([0-9]+):([^\?]*)(?:\?src=(.*))?$").unwrap()
-});
+struct ScidParts<'a> {
+    format: &'a str,
+    version: &'a str,
+    scid: &'a str,
+    src: Option<&'a str>,
+}
+
+impl<'a> ScidParts<'a> {
+    /// `None` when `id` is not of that shape: the prefix, a format of
+    /// lowercase letters and digits, a version of digits, and at most a
+    /// `src` query.
+    fn split(id: &'a str) -> Option<Self> {
+        let rest = id.strip_prefix("did:scid:")?;
+        let (format, rest) = rest.split_once(':')?;
+        let (version, rest) = rest.split_once(':')?;
+        if format.is_empty()
+            || !format
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            || version.is_empty()
+            || !version.bytes().all(|b| b.is_ascii_digit())
+        {
+            return None;
+        }
+        let (scid, src) = match rest.split_once('?') {
+            None => (rest, None),
+            Some((scid, query)) => (scid, Some(query.strip_prefix("src=")?)),
+        };
+        Some(Self {
+            format,
+            version,
+            scid,
+            src,
+        })
+    }
+}
 
 /// The verification metadata format a `did:scid` resolves through.
 ///
@@ -68,16 +110,17 @@ pub enum ScidMethod {
 ///
 /// * `did` — the `did:scid:vh:1:...` identifier to resolve.
 /// * `peer_src` — out-of-band source when `did` has no `?src=` query (peer mode):
-///   - [`ScidMethod::WebVH`]: host/path string. Accepts the same formats as
-///     URL-mode `src` (see `normalize_webvh_src`) — bare host, host with port,
-///     optional scheme/trailing slash, etc.
-///   - [`ScidMethod::Cheqd`]: the network name (`mainnet` or `testnet`).
-/// * `timeout` — optional resolution timeout.
+///   - [`ScidMethod::WebVH`] (`vh`) or [`ScidMethod::Webs`] (`ke`): host/path
+///     string. Accepts the same formats as URL-mode `src` (see
+///     `normalize_webvh_src`) — bare host, host with port, optional
+///     scheme/trailing slash, etc.
+/// * `timeout` — optional resolution timeout, for both formats.
 ///
-/// For the `vh` format the result is the DID's own document: its `id` is the
-/// bare `did:scid:vh:1:<scid>` DID, with no `src`, and every reference the
-/// did:webvh log makes to itself is under that DID. `alsoKnownAs` lists the
-/// did:scid DID URL of the log's location and the did:webvh DID.
+/// The result is the DID's own document: its `id` is the bare
+/// `did:scid:<format>:1:<scid>` DID, with no `src`, and every reference the
+/// source document makes to itself is under that DID. `alsoKnownAs` lists the
+/// did:scid DID URL of the source's location and the source DID
+/// (`did:webvh:…` or `did:webs:…`).
 pub async fn resolve(
     did: &str,
     peer_src: Option<ScidMethod>,
@@ -192,24 +235,58 @@ async fn resolve_webvh_native(
             })
         }
         Err(e) => {
-            error!("Error: {e:?}");
+            debug!("did:webvh resolution of {webvh_did} failed: {e}");
             Err(DIDSCIDError::WebVHError(e))
         }
     }
 }
 
-/// Resolve a SCID DID Method, passing `options` to the did:webvh resolution of
-/// the `vh` format.
+/// Resolve a SCID DID Method under `options`.
 ///
 /// [`resolve`] uses `ResolveOptions::default()`, whose host policy refuses
 /// non-public hosts; use this to resolve under the caller's own policy, such
 /// as a local stack serving `did:scid:vh:1:<scid>?src=localhost:8000`, the same
-/// way its `did:webvh` form would be. The options do not apply to other
-/// formats.
+/// way its `did:webvh` form would be.
+///
+/// Both formats honour the options' `timeout` and `host_policy`: the `vh`
+/// format passes them to the did:webvh resolution, and the `ke` format builds
+/// a did:webs resolver with them (`HostPolicy::AllowPrivate` maps to
+/// `affinidi_did_webs::HostPolicy::AllowPrivate`). The other options are
+/// did:webvh's own. To reuse one did:webs resolver and its connection pool
+/// across calls, use [`resolve_with_webs_resolver`].
 pub async fn resolve_with_options(
     did: &str,
     peer_src: Option<ScidMethod>,
     options: didwebvh_rs::resolve::ResolveOptions,
+) -> Result<Document, DIDSCIDError> {
+    resolve_inner(did, peer_src, options, None).await
+}
+
+/// As [`resolve_with_options`], resolving the `ke` format with `webs`, a
+/// did:webs resolver the caller holds, so its HTTP client and connection
+/// pool are reused across calls. `webs` carries its own host policy and
+/// timeouts; `options` then applies to the `vh` format only.
+#[cfg(feature = "did-webs")]
+pub async fn resolve_with_webs_resolver(
+    did: &str,
+    peer_src: Option<ScidMethod>,
+    options: didwebvh_rs::resolve::ResolveOptions,
+    webs: &affinidi_did_webs::WebsResolver,
+) -> Result<Document, DIDSCIDError> {
+    resolve_inner(did, peer_src, options, Some(webs)).await
+}
+
+/// A did:webs resolver the caller supplied, when the `did-webs` feature is on.
+#[cfg(feature = "did-webs")]
+type WebsHandle<'a> = Option<&'a affinidi_did_webs::WebsResolver>;
+#[cfg(not(feature = "did-webs"))]
+type WebsHandle<'a> = Option<&'a std::convert::Infallible>;
+
+async fn resolve_inner(
+    did: &str,
+    peer_src: Option<ScidMethod>,
+    options: didwebvh_rs::resolve::ResolveOptions,
+    webs: WebsHandle<'_>,
 ) -> Result<Document, DIDSCIDError> {
     // No prefix test here: `convert_scid_to_method` matches the whole
     // `did:scid:<format>:<version>:<scid>` shape and reports an unknown format
@@ -220,7 +297,7 @@ pub async fn resolve_with_options(
         ScidMethod::WebVH(webvh_did) => resolve_webvh_native(&webvh_did, options)
             .await
             .map(|resolution| resolution.document),
-        ScidMethod::Webs(webs_did) => resolve_webs(&webs_did).await,
+        ScidMethod::Webs(webs_did) => resolve_webs(&webs_did, &options, webs).await,
         // Retired in 0.2.6. The `did:cheqd` shape still parses and this arm still
         // exists, so nothing a consumer named has gone away — only the
         // implementation. It came from `did-resolver-cheqd`, a crate with no
@@ -252,18 +329,61 @@ fn derive_cheqd_url(src: &str, scid: &str) -> Result<ScidMethod, DIDSCIDError> {
     Ok(ScidMethod::Cheqd(cheqd))
 }
 
-/// Resolve a derived `did:webs` DID.
+/// Resolve a derived `did:webs` DID with `webs`, or with a resolver built
+/// from `options` when the caller supplied none.
 #[cfg(feature = "did-webs")]
-async fn resolve_webs(webs_did: &str) -> Result<Document, DIDSCIDError> {
+async fn resolve_webs(
+    webs_did: &str,
+    options: &didwebvh_rs::resolve::ResolveOptions,
+    webs: WebsHandle<'_>,
+) -> Result<Document, DIDSCIDError> {
     debug!("Resolving Webs DID: {webs_did}");
-    let resolution = affinidi_did_webs::WebsResolver::new()
+    let built;
+    let resolver = match webs {
+        Some(resolver) => resolver,
+        None => {
+            built = webs_resolver(options)?;
+            &built
+        }
+    };
+    let resolution = resolver
         .resolve_with_metadata(webs_did)
         .await
         .map_err(|e| {
-            error!("did:webs resolution error: {e:?}");
-            DIDSCIDError::WebsError(e.to_string())
+            debug!("did:webs resolution of {webs_did} failed: {e}");
+            webs_error(e)
         })?;
     webs_document(webs_did, resolution)
+}
+
+/// A did:webs resolver under the timeout and host policy of `options`.
+#[cfg(feature = "did-webs")]
+fn webs_resolver(
+    options: &didwebvh_rs::resolve::ResolveOptions,
+) -> Result<affinidi_did_webs::WebsResolver, DIDSCIDError> {
+    let policy = match options.host_policy {
+        didwebvh_rs::resolve::HostPolicy::AllowPrivate => {
+            affinidi_did_webs::HostPolicy::AllowPrivate
+        }
+        _ => affinidi_did_webs::HostPolicy::PublicOnly,
+    };
+    affinidi_did_webs::WebsResolver::with_client_builder_and_timeout(
+        reqwest::Client::builder(),
+        policy,
+        options
+            .timeout
+            .unwrap_or(affinidi_did_webs::fetch::DEFAULT_TIMEOUT),
+    )
+    .map_err(webs_error)
+}
+
+/// A failed did:webs resolution: an unsuccessful HTTP status stays data.
+#[cfg(feature = "did-webs")]
+fn webs_error(e: affinidi_did_webs::DidWebsError) -> DIDSCIDError {
+    match e {
+        affinidi_did_webs::DidWebsError::Network(network) => DIDSCIDError::Network(network),
+        other => DIDSCIDError::WebsError(other.to_string()),
+    }
 }
 
 /// The document of a resolved `did:webs` DID, unless it is deactivated.
@@ -273,6 +393,9 @@ async fn resolve_webs(webs_did: &str) -> Result<Document, DIDSCIDError> {
 /// usable. It is refused here whichever `affinidi-did-webs` 0.13 release
 /// resolved it. Compiled for tests too, where `affinidi-did-webs` is a
 /// dev-dependency, so its test runs without the feature.
+///
+/// The document returned is the did:scid DID's own, as for `vh` (see
+/// [`to_scid_ke_document`]).
 #[cfg(any(feature = "did-webs", test))]
 fn webs_document(
     webs_did: &str,
@@ -281,7 +404,7 @@ fn webs_document(
     if resolution.metadata.deactivated {
         return Err(DIDSCIDError::Deactivated(webs_did.to_string()));
     }
-    Ok(resolution.document)
+    to_scid_ke_document(webs_did, &resolution.document)
 }
 
 /// `did-webs` is optional so that `did-scid` does not pull the KERI stack into
@@ -289,10 +412,80 @@ fn webs_document(
 /// still parsed — so the error says what is missing rather than looking like a
 /// malformed DID.
 #[cfg(not(feature = "did-webs"))]
-async fn resolve_webs(_webs_did: &str) -> Result<Document, DIDSCIDError> {
+async fn resolve_webs(
+    _webs_did: &str,
+    _options: &didwebvh_rs::resolve::ResolveOptions,
+    _webs: WebsHandle<'_>,
+) -> Result<Document, DIDSCIDError> {
     Err(DIDSCIDError::WebsError(
         "did:scid:ke resolution requires the `did-webs` feature".to_string(),
     ))
+}
+
+/// The `did:scid:ke:1` DID and DID URL a `did:webs` DID corresponds to: the
+/// bare DID, and the DID URL whose `src` names the location (the did:webs
+/// host and path, `:` read as `/`, a port kept `%3A`-encoded as did:webvh's
+/// conversion keeps it).
+#[cfg(any(feature = "did-webs", test))]
+fn webs_to_scid_ids(webs_did: &str) -> Option<(String, String)> {
+    let rest = webs_did.strip_prefix("did:webs:")?;
+    let (location, aid) = rest.rsplit_once(':')?;
+    if location.is_empty() || aid.is_empty() {
+        return None;
+    }
+    let bare = format!("did:scid:{FORMAT_WEBS}:1:{aid}");
+    let with_src = format!("{bare}?src={}", location.replace(':', "/"));
+    Some((bare, with_src))
+}
+
+/// Convert a resolved `did:webs` document into the `did:scid:ke:1` DID's own
+/// document, as `vh` does for did:webvh: the `id` and every reference the
+/// document makes to itself move to the bare did:scid DID, and `alsoKnownAs`
+/// gains the did:scid DID URL of the location and the did:webs DID.
+#[cfg(any(feature = "did-webs", test))]
+fn to_scid_ke_document(webs_did: &str, document: &Document) -> Result<Document, DIDSCIDError> {
+    use serde_json::Value;
+
+    fn rewrite(value: &mut Value, from: &str, to: &str) {
+        match value {
+            Value::String(s) => {
+                if s == from {
+                    *s = to.to_string();
+                } else if let Some(fragment) =
+                    s.strip_prefix(from).and_then(|rest| rest.strip_prefix('#'))
+                {
+                    *s = format!("{to}#{fragment}");
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|item| rewrite(item, from, to)),
+            Value::Object(map) => map.values_mut().for_each(|item| rewrite(item, from, to)),
+            _ => {}
+        }
+    }
+
+    let (scid_did, scid_url) = webs_to_scid_ids(webs_did).ok_or_else(|| {
+        DIDSCIDError::DidUrlError(format!("{webs_did} is not a did:webs DID with an AID"))
+    })?;
+    let mut value = serde_json::to_value(document)?;
+    rewrite(&mut value, webs_did, &scid_did);
+
+    let mut aliases: Vec<Value> = match value.get("alsoKnownAs") {
+        Some(Value::Array(aliases)) => aliases
+            .iter()
+            .filter(|alias| alias.as_str() != Some(scid_did.as_str()))
+            .cloned()
+            .collect(),
+        _ => Vec::new(),
+    };
+    for alias in [scid_url.as_str(), webs_did] {
+        if !aliases.iter().any(|a| a.as_str() == Some(alias)) {
+            aliases.push(Value::String(alias.to_string()));
+        }
+    }
+    if let Some(object) = value.as_object_mut() {
+        object.insert("alsoKnownAs".to_string(), Value::Array(aliases));
+    }
+    Ok(serde_json::from_value(value)?)
 }
 
 #[cfg(not(feature = "did-cheqd"))]
@@ -315,13 +508,15 @@ fn convert_scid_to_method(
     id: &str,
     peer_src: Option<ScidMethod>,
 ) -> Result<ScidMethod, DIDSCIDError> {
-    let Some(caps) = SCID_RE.captures(id) else {
+    let Some(ScidParts {
+        format,
+        version,
+        scid,
+        src,
+    }) = ScidParts::split(id)
+    else {
         return Err(DIDSCIDError::UnsupportedFormat);
     };
-
-    let format = &caps[1];
-    let version = &caps[2];
-    let scid = &caps[3];
 
     if version != "1" {
         return Err(DIDSCIDError::UnsupportedVersion(format!(
@@ -330,8 +525,8 @@ fn convert_scid_to_method(
     }
 
     match format {
-        FORMAT_WEBVH => convert_webvh(scid, caps.get(4).map(|m| m.as_str()), peer_src),
-        FORMAT_WEBS => convert_webs(scid, caps.get(4).map(|m| m.as_str()), peer_src),
+        FORMAT_WEBVH => convert_webvh(scid, src, peer_src),
+        FORMAT_WEBS => convert_webs(scid, src, peer_src),
         other => Err(DIDSCIDError::UnknownFormat(other.to_string())),
     }
 }
@@ -784,6 +979,74 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn shapes_that_are_not_a_did_scid() {
+        for id in [
+            "did:scid:VH:1:abc?src=example.com",
+            "did:scid::1:abc?src=example.com",
+            "did:scid:vh::abc?src=example.com",
+            "did:scid:vh:1a:abc?src=example.com",
+            "did:scid:vh:1:abc?other=example.com",
+            "did:scidx:vh:1:abc",
+            "did:scid:vh",
+        ] {
+            assert!(
+                matches!(
+                    convert_scid_to_method(id, None),
+                    Err(DIDSCIDError::UnsupportedFormat)
+                ),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn webs_ids_map_to_scid_ids() {
+        assert_eq!(
+            crate::webs_to_scid_ids(&format!("did:webs:localhost%3A3000:dids:{AID}")),
+            Some((
+                format!("did:scid:ke:1:{AID}"),
+                format!("did:scid:ke:1:{AID}?src=localhost%3A3000/dids"),
+            ))
+        );
+        assert_eq!(crate::webs_to_scid_ids("did:web:example.com"), None);
+    }
+
+    #[test]
+    fn a_webs_document_becomes_the_scid_dids_own() {
+        let webs = format!("did:webs:example.com:{AID}");
+        let document: affinidi_did_common::Document = serde_json::from_value(serde_json::json!({
+            "id": webs,
+            "alsoKnownAs": [format!("did:keri:{AID}")],
+            "verificationMethod": [{
+                "id": format!("{webs}#key-1"),
+                "type": "Multikey",
+                "controller": webs,
+                "publicKeyMultibase": "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+            }],
+            "authentication": [format!("{webs}#key-1")]
+        }))
+        .unwrap();
+
+        let scid = crate::to_scid_ke_document(&webs, &document).unwrap();
+        let bare = format!("did:scid:ke:1:{AID}");
+        assert_eq!(scid.id.as_str(), bare);
+        assert_eq!(
+            scid.verification_method[0].id.as_str(),
+            format!("{bare}#key-1")
+        );
+        assert_eq!(scid.verification_method[0].controller.as_str(), bare);
+        assert_eq!(scid.authentication[0].get_id(), format!("{bare}#key-1"));
+        assert_eq!(
+            scid.also_known_as,
+            vec![
+                format!("did:keri:{AID}"),
+                format!("{bare}?src=example.com"),
+                webs.clone(),
+            ]
+        );
+    }
+
     // -- prefix tightening / robustness ------------------------------------
 
     #[test]
@@ -871,6 +1134,34 @@ mod tests {
         }
     }
 
+    /// The `ke` format runs under the options' host policy: the default
+    /// refuses a loopback source before fetching, and `AllowPrivate` gets
+    /// past the policy to the (absent) server.
+    #[cfg(feature = "did-webs")]
+    #[tokio::test]
+    async fn ke_honours_the_host_policy() {
+        use didwebvh_rs::resolve::{HostPolicy, ResolveOptions};
+
+        let did = format!("did:scid:ke:1:{AID}?src=localhost:1");
+        let refused = crate::resolve_with_options(&did, None, ResolveOptions::default())
+            .await
+            .expect_err("loopback under PublicOnly");
+        assert!(refused.to_string().contains("host policy"), "{refused:?}");
+
+        let options = ResolveOptions {
+            timeout: Some(std::time::Duration::from_secs(5)),
+            ..Default::default()
+        }
+        .with_host_policy(HostPolicy::AllowPrivate);
+        let unreachable = crate::resolve_with_options(&did, None, options)
+            .await
+            .expect_err("nothing listens on port 1");
+        assert!(
+            !unreachable.to_string().contains("host policy"),
+            "{unreachable:?}"
+        );
+    }
+
     #[tokio::test]
     #[ignore = "requires external network (identity.foundation)"]
     async fn test_scid_webvh_resolution() {
@@ -892,6 +1183,37 @@ mod webs_tests {
     use affinidi_keri::config::{InceptionConfig, RotationConfig};
 
     const SALT: &[u8] = &[3u8; 16];
+
+    #[test]
+    fn an_active_webs_did_resolves_to_the_scid_dids_document() {
+        let created = create(
+            CreateConfig::builder("example.com")
+                .inception(InceptionConfig::builder().salt(SALT.to_vec()).build())
+                .build(),
+        )
+        .expect("create");
+        let did = DidWebs::parse(created.did()).expect("parse");
+        let resolution =
+            resolve_with_metadata(&did, &created.artifacts().keri_cesr, None).expect("resolves");
+        let document = webs_document(created.did(), resolution).expect("an active DID");
+
+        let aid = did.aid();
+        let bare = format!("did:scid:ke:1:{aid}");
+        assert_eq!(document.id.as_str(), bare);
+        assert!(
+            document
+                .verification_method
+                .iter()
+                .all(|vm| vm.id.as_str().starts_with(&format!("{bare}#"))),
+            "{document:?}"
+        );
+        assert!(document.also_known_as.contains(&created.did().to_string()));
+        assert!(
+            document
+                .also_known_as
+                .contains(&format!("{bare}?src=example.com"))
+        );
+    }
 
     #[test]
     fn a_deactivated_webs_did_is_refused_and_an_active_one_returned() {

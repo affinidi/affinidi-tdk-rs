@@ -85,8 +85,12 @@ impl WebsResolver {
             .expect("the did:webs HTTP client can be built")
     }
 
-    /// A resolver over a client the caller configures (timeouts, user agent,
-    /// TLS, connection pool), under an explicit [`HostPolicy`].
+    /// A resolver over a client the caller configures (TLS, headers,
+    /// connection pool), under an explicit [`HostPolicy`].
+    ///
+    /// The request timeout is set to [`DEFAULT_TIMEOUT`] and the user agent
+    /// to this crate's, replacing any set on `builder`; to choose the timeout,
+    /// use [`WebsResolver::with_client_builder_and_timeout`].
     ///
     /// The guard settings are applied last, so nothing set on `builder` can
     /// undo them: redirects are never followed, and under
@@ -101,6 +105,19 @@ impl WebsResolver {
         builder: reqwest::ClientBuilder,
         policy: HostPolicy,
     ) -> Result<Self, DidWebsError> {
+        Self::with_client_builder_and_timeout(builder, policy, DEFAULT_TIMEOUT)
+    }
+
+    /// As [`WebsResolver::with_client_builder`], with `timeout` as the
+    /// request timeout.
+    ///
+    /// # Errors
+    /// Returns [`DidWebsError::Fetch`] if `reqwest` cannot build the client.
+    pub fn with_client_builder_and_timeout(
+        builder: reqwest::ClientBuilder,
+        policy: HostPolicy,
+        timeout: Duration,
+    ) -> Result<Self, DidWebsError> {
         if policy == HostPolicy::AllowPrivate {
             warn!(
                 "did:webs resolver built with HostPolicy::AllowPrivate: it will fetch from \
@@ -108,7 +125,7 @@ impl WebsResolver {
                  DIDs resolved are trusted."
             );
         }
-        let client = guard(default_settings(builder), policy)
+        let client = guard(default_settings(builder, timeout), policy)
             .build()
             .map_err(|e| DidWebsError::Fetch {
                 url: String::new(),
@@ -228,11 +245,18 @@ impl WebsResolver {
             }
         })?;
 
-        if !response.status().is_success() {
-            return Err(DidWebsError::Fetch {
-                url: url.to_string(),
-                reason: format!("HTTP {}", response.status()),
-            });
+        let status = response.status();
+        if !status.is_success() {
+            let retry_after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok());
+            return Err(DidWebsError::Network(
+                affinidi_did_common::NetworkError::new(format!("HTTP {status}"))
+                    .with_url(url)
+                    .with_status(status.as_u16())
+                    .with_retry_after_header(retry_after),
+            ));
         }
 
         read_capped(response, url, MAX_ARTIFACT_BYTES).await
@@ -297,12 +321,12 @@ fn vet_public(url: &reqwest::Url) -> Result<(), DidWebsError> {
         .map_err(|e| DidWebsError::BlockedHost(e.to_string()))
 }
 
-/// The defaults a caller's builder starts from. Applied first, so the caller
-/// may override them.
-fn default_settings(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+/// The user agent and request timeout. They replace any the caller's
+/// builder set; the guard settings are applied after them.
+fn default_settings(builder: reqwest::ClientBuilder, timeout: Duration) -> reqwest::ClientBuilder {
     builder
         .user_agent(concat!("affinidi-did-webs/", env!("CARGO_PKG_VERSION")))
-        .timeout(DEFAULT_TIMEOUT)
+        .timeout(timeout)
 }
 
 /// The guard settings. Applied last, so nothing set before can undo them.

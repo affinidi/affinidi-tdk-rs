@@ -22,6 +22,7 @@ pub mod did_method;
 pub mod document;
 #[cfg(feature = "key-agreement")]
 pub mod key_negotiation;
+pub mod network;
 pub mod one_or_many;
 pub mod scid;
 pub mod service;
@@ -37,6 +38,7 @@ pub use did_method::peer::{
     PeerServiceEndpointShort,
 };
 pub use document::DocumentExt;
+pub use network::NetworkError;
 
 /// This type is `#[non_exhaustive]`: callers must include a wildcard arm when
 /// matching, so future additions do not constitute breaking changes.
@@ -127,7 +129,14 @@ where
 }
 
 impl Default for Document {
-    /// Creates a default example DID Document that is blank except for the id field
+    /// A blank document whose `id` is the placeholder
+    /// `did:example:123456789abcdefghi`.
+    ///
+    /// The placeholder is a real, parseable DID, so a document built with
+    /// `..Default::default()` and no `id` of its own silently names that
+    /// subject. Set `id` (or use [`Document::new`] / [`DocumentBuilder`]),
+    /// never rely on the default one. It is kept for compatibility: `id` is a
+    /// `Url`, which has no empty value.
     fn default() -> Self {
         Self {
             id: Url::parse("did:example:123456789abcdefghi").unwrap(),
@@ -153,6 +162,47 @@ impl Document {
             ..Default::default()
         })
     }
+
+    /// Parse a DID document in JSON form, resolving relative ids and
+    /// references against the document's own `id`.
+    ///
+    /// DID Core allows a verification method or service to be identified, and
+    /// a verification relationship to refer to one, by a relative DID URL
+    /// such as `"#key-1"`. Deserializing straight into [`Document`] refuses
+    /// those (its ids are absolute URLs), and leaves a relative relationship
+    /// reference that never matches its method's absolute id. This makes them
+    /// absolute first; see [`document::absolutize_references`] for what is
+    /// rewritten. A document whose `id` is not a string is left as it is, and
+    /// fails to deserialize.
+    ///
+    /// # Errors
+    /// The `serde_json` error when the result is not a valid [`Document`].
+    pub fn from_json(mut value: Value) -> Result<Self, serde_json::Error> {
+        if let Some(base) = value.get("id").and_then(Value::as_str).map(str::to_owned) {
+            document::absolutize_references(&mut value, &base);
+        }
+        serde_json::from_value(value)
+    }
+
+    /// As [`Document::from_json`], resolving relative ids and references
+    /// against `base` (the DID being resolved) rather than the document's
+    /// own `id`.
+    ///
+    /// # Errors
+    /// The `serde_json` error when the result is not a valid [`Document`].
+    pub fn from_json_with_base(mut value: Value, base: &str) -> Result<Self, serde_json::Error> {
+        document::absolutize_references(&mut value, base);
+        serde_json::from_value(value)
+    }
+
+    /// As [`Document::from_json`], from the bytes of a JSON body.
+    ///
+    /// # Errors
+    /// The `serde_json` error when the bytes are not JSON or the result is not
+    /// a valid [`Document`].
+    pub fn from_json_slice(bytes: &[u8]) -> Result<Self, serde_json::Error> {
+        Self::from_json(serde_json::from_slice(bytes)?)
+    }
 }
 
 #[cfg(test)]
@@ -177,6 +227,91 @@ mod tests {
     #[test]
     fn document_new_invalid() {
         assert!(Document::new("not a url").is_err());
+    }
+
+    #[test]
+    fn from_json_resolves_relative_ids_and_references() {
+        let value = serde_json::json!({
+            "id": "did:web:example.com",
+            "verificationMethod": [{
+                "id": "#key-1",
+                "type": "Multikey",
+                "controller": "did:web:example.com",
+                "publicKeyMultibase": "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+            }],
+            "authentication": ["#key-1"],
+            "assertionMethod": ["did:web:example.com#key-1"],
+            "keyAgreement": [{
+                "id": "#key-2",
+                "type": "Multikey",
+                "controller": "#",
+                "publicKeyMultibase": "z6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc"
+            }],
+            "service": [{
+                "id": "#didcomm",
+                "type": "DIDCommMessaging",
+                "serviceEndpoint": "https://example.com/didcomm"
+            }]
+        });
+        assert!(
+            serde_json::from_value::<Document>(value.clone()).is_err(),
+            "a relative id does not deserialize directly"
+        );
+
+        let doc = Document::from_json(value).unwrap();
+        assert_eq!(
+            doc.verification_method[0].id.as_str(),
+            "did:web:example.com#key-1"
+        );
+        assert!(doc.contains_authentication("did:web:example.com#key-1"));
+        assert!(doc.contains_assertion_method("did:web:example.com#key-1"));
+        assert!(doc.contains_key_agreement("did:web:example.com#key-2"));
+        assert_eq!(
+            doc.service[0].id.as_ref().map(Url::as_str),
+            Some("did:web:example.com#didcomm")
+        );
+    }
+
+    #[test]
+    fn from_json_with_base_uses_the_base() {
+        let value = serde_json::json!({
+            "id": "did:web:example.com",
+            "authentication": ["#key-1", "key-2", "did:web:other.example#key-3"]
+        });
+        let doc = Document::from_json_with_base(value, "did:web:base.example").unwrap();
+        let ids: Vec<&str> = doc.authentication.iter().map(|a| a.get_id()).collect();
+        assert_eq!(
+            ids,
+            [
+                "did:web:base.example#key-1",
+                "did:web:base.example#key-2",
+                "did:web:other.example#key-3"
+            ]
+        );
+    }
+
+    #[test]
+    fn absolutize_reference_forms() {
+        use crate::document::absolutize_reference;
+        let base = "did:example:123";
+        assert_eq!(
+            absolutize_reference("#k", base).as_deref(),
+            Some("did:example:123#k")
+        );
+        assert_eq!(
+            absolutize_reference("?service=x", base).as_deref(),
+            Some("did:example:123?service=x")
+        );
+        assert_eq!(
+            absolutize_reference("/p", base).as_deref(),
+            Some("did:example:123/p")
+        );
+        assert_eq!(
+            absolutize_reference("said", base).as_deref(),
+            Some("did:example:123#said")
+        );
+        assert_eq!(absolutize_reference("did:example:9#k", base), None);
+        assert_eq!(absolutize_reference("", base), None);
     }
 
     #[test]

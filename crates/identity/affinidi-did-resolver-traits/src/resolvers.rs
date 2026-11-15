@@ -16,7 +16,7 @@ impl Resolver for KeyResolver {
     }
 
     fn resolve(&self, did: &DID) -> Resolution {
-        match did.method() {
+        match did.method_ref() {
             DIDMethod::Key { .. } => Some(did.resolve().map_err(ResolverError::from)),
             _ => None,
         }
@@ -35,7 +35,7 @@ impl Resolver for PeerResolver {
     }
 
     fn resolve(&self, did: &DID) -> Resolution {
-        match did.method() {
+        match did.method_ref() {
             DIDMethod::Peer { .. } => Some(
                 did.resolve()
                     .map_err(ResolverError::from)
@@ -110,6 +110,17 @@ mod tests {
         assert_eq!(doc.verification_method.len(), 2);
         assert_eq!(doc.authentication.len(), 1);
         assert_eq!(doc.key_agreement.len(), 1);
+        // ...under the peer DID, not the did:key it wraps.
+        assert_eq!(doc.id.as_str(), did.to_string());
+        assert!(
+            doc.verification_method
+                .iter()
+                .all(|vm| vm.id.as_str().starts_with(&format!("{did}#"))
+                    && vm.controller.as_str() == did.to_string())
+        );
+        assert!(doc.contains_authentication(&format!(
+            "{did}#z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+        )));
     }
 
     #[test]

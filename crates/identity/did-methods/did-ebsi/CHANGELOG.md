@@ -1,5 +1,25 @@
 # did:ebsi
 
+## Unreleased (0.1.8) — a reusable resolver, HTTP status as data, relative ids
+
+- **Added (#1043):** `EbsiResolver { client, api_base }`, built with
+  `EbsiResolver::new(api_base)` or `with_client_builder(builder, api_base)`,
+  resolves with one HTTP client and connection pool across lookups.
+  `resolve_ebsi_did` keeps its signature and builds one per call. New
+  `DEFAULT_TIMEOUT` constant (20 s, as before).
+- **Changed (#1043):** an unsuccessful HTTP status from the registry fails
+  with the new `EbsiError::Network(NetworkError)`, carrying the URL, the
+  status and the registry's `Retry-After`, instead of
+  `EbsiError::ResolutionFailed("HTTP …")`, so a caller can tell a rate limit
+  from an unregistered DID. `ResolutionFailed` is no longer returned.
+- **Fixed (#1042):** a registry document whose verification method or
+  service ids, or relationship references, are relative DID URLs resolves,
+  with them made absolute against the document's `id`.
+- Docs (#1045): `resolve_ebsi_did` returns a `Document`, not a JSON value.
+- Compatibility (R3.6): no signature change. A caller matching
+  `EbsiError::ResolutionFailed` for an HTTP error status now gets
+  `EbsiError::Network` (the enum is `#[non_exhaustive]`).
+
 ## Unreleased (0.1.7) — a size limit on the fetched document
 
 - `resolve_ebsi_did` reads the registry's response under a 1 MiB limit (new
