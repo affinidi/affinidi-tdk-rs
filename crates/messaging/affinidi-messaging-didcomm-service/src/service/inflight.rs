@@ -70,6 +70,12 @@ impl InFlight {
     pub(crate) fn is_active(&self, id: &str) -> bool {
         self.lock().active.contains(id)
     }
+
+    /// Whether `id` was handled and acked recently.
+    #[cfg(all(test, feature = "tsp"))]
+    pub(crate) fn is_recent(&self, id: &str) -> bool {
+        self.lock().recent.contains(id)
+    }
 }
 
 /// Ownership of one queued message. Dropping it without

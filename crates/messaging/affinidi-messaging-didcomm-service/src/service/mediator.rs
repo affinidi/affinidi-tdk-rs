@@ -237,8 +237,6 @@ impl OfflineSync {
     /// DIDComm-unpacked and left to poison-loop.
     #[cfg(feature = "tsp")]
     async fn sync_batch(&self) -> Result<BatchOutcome, SyncError> {
-        use affinidi_messaging_sdk::protocols::message_pickup::InboundFrame;
-
         if self.queued_count().await? == 0 {
             return Ok(BatchOutcome {
                 fetched: 0,
@@ -246,15 +244,37 @@ impl OfflineSync {
             });
         }
 
-        let alias = &self.profile.inner.alias;
         let frames = self
             .atm
             .message_pickup()
             .send_delivery_request_frames(&self.profile, Some(OFFLINE_BATCH_LIMIT), true)
             .await?;
         let fetched = frames.len();
-        debug!(profile = %alias, count = fetched, "Retrieved offline frames");
+        debug!(profile = %self.profile.inner.alias, count = fetched, "Retrieved offline frames");
 
+        let (set, handled, dropped) = self.route_frames(frames).await?;
+        self.join_all(set).await;
+        let acked = self.ack(handled, dropped).await?;
+        Ok(BatchOutcome { fetched, acked })
+    }
+
+    /// Claim and dispatch one fetched batch, keyed by each frame's attachment
+    /// id (the mediator's id for it, equal to `InboundFrame::ack_id` on the
+    /// live path). Returns the spawned DIDComm handlers, the claims handled,
+    /// and the claims dropped as undeliverable; a frame the live stream holds,
+    /// or acked a moment ago, is in neither (R1.7).
+    #[cfg(feature = "tsp")]
+    #[allow(clippy::type_complexity)]
+    pub(crate) async fn route_frames(
+        &self,
+        frames: Vec<(
+            Option<affinidi_messaging_sdk::protocols::message_pickup::InboundFrame>,
+            String,
+        )>,
+    ) -> Result<(JoinSet<()>, Vec<Claim>, Vec<Claim>), SyncError> {
+        use affinidi_messaging_sdk::protocols::message_pickup::InboundFrame;
+
+        let alias = &self.profile.inner.alias;
         let mut set = JoinSet::new();
         let mut handled = Vec::new();
         let mut dropped = Vec::new();
@@ -313,9 +333,7 @@ impl OfflineSync {
             }
         }
 
-        self.join_all(set).await;
-        let acked = self.ack(handled, dropped).await?;
-        Ok(BatchOutcome { fetched, acked })
+        Ok((set, handled, dropped))
     }
 
     #[cfg(not(feature = "tsp"))]

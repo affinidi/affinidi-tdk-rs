@@ -52,7 +52,7 @@ let tdk = Arc::new(TDKSharedState::new(TDKConfig::builder().build()?).await?);
 // 2. The SDK.
 let config = ATMConfig::builder()
     // Optional: trust a private CA for the mediator websocket (wss://).
-    .with_ssl_certificates(&mut vec!["certs/ca.pem".to_string()])
+    .with_ssl_certificate_paths(["certs/ca.pem"])
     .build()?;
 let atm = ATM::new(config, tdk.clone()).await?;
 
@@ -160,7 +160,7 @@ deleted and skipped.
 
 | Builder method | Default | What it does |
 |---|---|---|
-| `with_ssl_certificates` | none | Extra trust roots (PEM files) for the mediator websocket, on top of the platform's. REST trust comes from the `TDKConfig`. |
+| `with_ssl_certificate_paths` | none | Extra trust roots (PEM files) for the mediator websocket, on top of the platform's. REST trust comes from the `TDKConfig`. |
 | `with_request_timeout` | 15s | Bound on each REST call. |
 | `with_websocket_ready_timeout` | 60s | Bound on waiting for the first websocket connect attempt. |
 | `with_fetch_cache_limit_count` / `_bytes` | 100 / 10 MB | Per-profile limit on inbound messages held for the application, measured in wire bytes. Reading pauses when reached. |

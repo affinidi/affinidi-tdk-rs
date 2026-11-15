@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use affinidi_messaging_core::ConnState;
 use affinidi_messaging_sdk::config::ATMConfigBuilder;
+#[cfg(feature = "tsp")]
+use affinidi_messaging_sdk::protocols::message_pickup::InboundFrame;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_tdk_common::TDKSharedState;
@@ -18,6 +20,8 @@ use crate::error::{DIDCommServiceError, StartupError};
 use crate::handler::{DIDCommHandler, HandlerContext, TspHandler};
 use crate::response::DIDCommResponse;
 use crate::service::ListenerEvent;
+#[cfg(feature = "tsp")]
+use crate::service::inflight::Claim;
 use crate::service::inflight::InFlight;
 use crate::service::mediator::OfflineSync;
 use crate::transport;
@@ -421,54 +425,73 @@ impl Listener {
 
     /// Multiplexed receive: pull the next inbound frame (DIDComm *or* TSP) off
     /// the shared websocket and dispatch by transport.
+    ///
+    /// Like the DIDComm-only path, the frame is pulled WITHOUT acking it
+    /// (`auto_delete = false`) and acked only after its handler has returned
+    /// (R1.6), so a teardown between receipt and handling leaves it queued at
+    /// the mediator for redelivery instead of losing it (#1150).
     #[cfg(feature = "tsp")]
     async fn process_next_frame(&self, tasks: &mut JoinSet<()>) -> Result<(), DIDCommServiceError> {
-        use affinidi_messaging_sdk::protocols::message_pickup::InboundFrame;
-
         let wait_duration = Duration::from_secs(self.config.message_wait_duration_secs);
-        let auto_delete = self.config.auto_delete;
         let atm = self.atm()?;
         let profile = self.profile()?;
         let permit = self.acquire_permit().await?;
 
         let next = atm
             .message_pickup()
-            .live_stream_next_frame(profile, Some(wait_duration), auto_delete)
+            .live_stream_next_frame(profile, Some(wait_duration), false)
             .await
             .map_err(DIDCommServiceError::ATM)?;
 
-        match next {
-            Some(InboundFrame::DidComm(_, meta)) if !self.config.protocols.didcomm() => {
-                // A TSP-only listener: ack and skip. With `auto_delete` on the
-                // SDK acked it on receipt; otherwise ack it here so it is not
-                // redelivered forever to a listener that will never take it.
+        if let Some(frame) = next {
+            self.route_frame(frame, permit, tasks).await?;
+        }
+        Ok(())
+    }
+
+    /// Claim and dispatch one frame taken off the live stream.
+    ///
+    /// Every frame — TSP included — is claimed in the in-flight record shared
+    /// with the offline drain, keyed by the mediator's id for it
+    /// ([`InboundFrame::ack_id`], which equals the delivery attachment id the
+    /// drain keys by), so a queued message is dispatched by one path only
+    /// (R1.7). A frame no handler here will ever take is acked at once, as the
+    /// offline drain does; a handled frame is acked after its handler, and only
+    /// with `auto_delete`.
+    #[cfg(feature = "tsp")]
+    async fn route_frame(
+        &self,
+        frame: InboundFrame,
+        permit: OwnedSemaphorePermit,
+        tasks: &mut JoinSet<()>,
+    ) -> Result<(), DIDCommServiceError> {
+        let atm = self.atm()?;
+        let profile = self.profile()?;
+        let ack_on = self
+            .config
+            .auto_delete
+            .then(|| (atm.clone(), profile.clone()));
+
+        let Some(claim) = self.in_flight.claim(&frame.ack_id()) else {
+            debug!(profile = %profile.inner.alias, "Message already being handled; skipped");
+            return Ok(());
+        };
+
+        match frame {
+            InboundFrame::DidComm(..) if !self.config.protocols.didcomm() => {
                 debug!(
                     profile = %profile.inner.alias,
-                    "DIDComm frame on a listener with DIDComm disabled; dropped"
+                    "DIDComm frame on a listener with DIDComm disabled; dropped (acked)"
                 );
-                if !auto_delete
-                    && let Err(e) = atm
-                        .delete_message_background(profile, &meta.sha256_hash)
-                        .await
-                {
-                    warn!(profile = %profile.inner.alias, error = %e, "Failed to ack a dropped DIDComm frame");
-                }
+                Self::drop_frame(atm, profile, claim).await;
             }
-            Some(InboundFrame::DidComm(message, meta)) => {
-                let Some(claim) = self.in_flight.claim(&meta.sha256_hash) else {
-                    debug!(profile = %profile.inner.alias, "Message already being handled; skipped");
-                    return Ok(());
-                };
+            InboundFrame::DidComm(message, meta) => {
                 let meta = convert_meta(*meta);
                 let listener_id = self.config.id.clone();
                 let atm = atm.clone();
                 let profile = profile.clone();
                 let handler = self.handler.clone();
-                tasks.spawn(async move {
-                    let _permit = permit;
-                    // TSP-multiplexed path (phase 4): still acks on receipt via
-                    // `auto_delete` in `live_stream_next_frame`, so no
-                    // post-handoff ack here yet.
+                Self::spawn_then_ack(tasks, permit, claim, ack_on, async move {
                     Self::dispatch_message(
                         &listener_id,
                         &atm,
@@ -479,93 +502,145 @@ impl Listener {
                         None,
                     )
                     .await;
-                    claim.finish(auto_delete);
                 });
             }
-            Some(InboundFrame::Tsp(packed)) => {
-                if let Some(tsp_handler) = self.tsp_handler.clone() {
-                    let qb2 = match atm.tsp().decode(&packed) {
-                        Ok(bytes) => bytes,
-                        Err(e) => {
-                            warn!(profile = %profile.inner.alias, error = %e, "Failed to decode TSP frame");
-                            return Ok(());
-                        }
-                    };
-                    // Each frame is handled on its own task, but one peer's
-                    // frames must be unpacked in the order they arrived: an
-                    // invite admits the payload sent right behind it only once
-                    // it is recorded, and a payload unpacked first is discarded
-                    // by the relationship gate. So a frame waits for the
-                    // previous frame *from the same sender* to be unpacked
-                    // (and, for a control message, recorded) — not for its
-                    // handler to run. Frames from different peers never wait on
-                    // each other.
-                    //
-                    // The key is the envelope's cleartext sender, read before
-                    // any key is used, so it can be forged. Ordering only ever
-                    // makes a frame wait; it never admits one. A frame that lies
-                    // about its sender queues behind that VID's unpack, which is
-                    // cheap, and is refused at unpack anyway. What forged
-                    // senders could cost is memory and head-of-line delay, so
-                    // `SenderOrder` bounds both: past its limits a frame is
-                    // handled unordered, as it was before ordering existed.
-                    let slot = affinidi_tsp::MetaEnvelope::parse(&qb2)
-                        .ok()
-                        .and_then(|meta| {
-                            self.tsp_order
-                                .lock()
-                                .unwrap_or_else(|p| p.into_inner())
-                                .enqueue(&meta.sender)
-                        });
-                    let listener_id = self.config.id.clone();
-                    let atm = atm.clone();
-                    let profile = profile.clone();
-                    tasks.spawn(async move {
-                        let _permit = permit;
-                        let (prev, done) = match slot {
-                            Some((prev, done)) => (prev, Some(done)),
-                            None => (None, None),
-                        };
-                        if let Some(prev) = prev
-                            && tokio::time::timeout(TSP_ORDER_WAIT, prev).await.is_err()
-                        {
-                            warn!(
-                                profile = %profile.inner.alias,
-                                wait_secs = TSP_ORDER_WAIT.as_secs(),
-                                "The previous TSP frame from this sender is still being unpacked; \
-                                 handling this one without waiting further, so it may be \
-                                 unpacked out of order"
-                            );
-                        }
-                        Self::dispatch_tsp_bytes(
-                            &listener_id,
-                            &atm,
-                            &profile,
-                            &tsp_handler,
-                            &qb2,
-                            done,
-                        )
-                        .await;
-                    });
-                } else {
+            InboundFrame::Tsp(packed) => {
+                let Some(tsp_handler) = self.tsp_handler.clone() else {
                     warn!(
                         profile = %profile.inner.alias,
-                        "received TSP frame but no TspHandler configured — dropping"
+                        "received TSP frame but no TspHandler configured — dropping (acked)"
                     );
-                }
+                    Self::drop_frame(atm, profile, claim).await;
+                    return Ok(());
+                };
+                let qb2 = match atm.tsp().decode(&packed) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        warn!(
+                            profile = %profile.inner.alias,
+                            error = %e,
+                            "Failed to decode TSP frame; dropping (acked)"
+                        );
+                        Self::drop_frame(atm, profile, claim).await;
+                        return Ok(());
+                    }
+                };
+                // Each frame is handled on its own task, but one peer's
+                // frames must be unpacked in the order they arrived: an
+                // invite admits the payload sent right behind it only once
+                // it is recorded, and a payload unpacked first is discarded
+                // by the relationship gate. So a frame waits for the
+                // previous frame *from the same sender* to be unpacked
+                // (and, for a control message, recorded) — not for its
+                // handler to run. Frames from different peers never wait on
+                // each other.
+                //
+                // The key is the envelope's cleartext sender, read before
+                // any key is used, so it can be forged. Ordering only ever
+                // makes a frame wait; it never admits one. A frame that lies
+                // about its sender queues behind that VID's unpack, which is
+                // cheap, and is refused at unpack anyway. What forged
+                // senders could cost is memory and head-of-line delay, so
+                // `SenderOrder` bounds both: past its limits a frame is
+                // handled unordered, as it was before ordering existed.
+                let slot = affinidi_tsp::MetaEnvelope::parse(&qb2)
+                    .ok()
+                    .and_then(|meta| {
+                        self.tsp_order
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .enqueue(&meta.sender)
+                    });
+                let listener_id = self.config.id.clone();
+                let atm = atm.clone();
+                let profile = profile.clone();
+                Self::spawn_then_ack(tasks, permit, claim, ack_on, async move {
+                    let (prev, done) = match slot {
+                        Some((prev, done)) => (prev, Some(done)),
+                        None => (None, None),
+                    };
+                    if let Some(prev) = prev
+                        && tokio::time::timeout(TSP_ORDER_WAIT, prev).await.is_err()
+                    {
+                        warn!(
+                            profile = %profile.inner.alias,
+                            wait_secs = TSP_ORDER_WAIT.as_secs(),
+                            "The previous TSP frame from this sender is still being unpacked; \
+                             handling this one without waiting further, so it may be \
+                             unpacked out of order"
+                        );
+                    }
+                    Self::dispatch_tsp_bytes(
+                        &listener_id,
+                        &atm,
+                        &profile,
+                        &tsp_handler,
+                        &qb2,
+                        done,
+                    )
+                    .await;
+                });
             }
             // `InboundFrame` is `#[non_exhaustive]`; tolerate a future frame
             // kind this build doesn't yet route.
-            Some(_) => {
+            _ => {
                 warn!(
                     profile = %profile.inner.alias,
-                    "received unrecognised inbound frame kind — dropping"
+                    "received unrecognised inbound frame kind — dropping (acked)"
                 );
+                Self::drop_frame(atm, profile, claim).await;
             }
-            None => {}
         }
 
         Ok(())
+    }
+
+    /// Run `work` — one frame's handler — on its own task holding `permit`,
+    /// then ack the claimed message: only once `work` has returned (R1.6), and
+    /// only when `ack_on` names the connection to ack on (`auto_delete`). The
+    /// claim is released either way, recording the ack so a copy the offline
+    /// drain fetched before it landed is skipped. A task aborted before then
+    /// (teardown past the drain timeout) drops its claim unacked: the message
+    /// is still queued at the mediator and is redelivered.
+    #[cfg(feature = "tsp")]
+    fn spawn_then_ack<F>(
+        tasks: &mut JoinSet<()>,
+        permit: OwnedSemaphorePermit,
+        claim: Claim,
+        ack_on: Option<(ATM, Arc<ATMProfile>)>,
+        work: F,
+    ) where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        tasks.spawn(async move {
+            let _permit = permit;
+            work.await;
+            let acked = match ack_on {
+                Some((atm, profile)) => Self::ack(&atm, &profile, claim.id()).await,
+                None => false,
+            };
+            claim.finish(acked);
+        });
+    }
+
+    /// Ack a frame no handler here will take, so the mediator stops
+    /// redelivering it, and release its claim.
+    #[cfg(feature = "tsp")]
+    async fn drop_frame(atm: &ATM, profile: &Arc<ATMProfile>, claim: Claim) {
+        let acked = Self::ack(atm, profile, claim.id()).await;
+        claim.finish(acked);
+    }
+
+    /// Ack (delete) `id` at the mediator. Returns whether the delete was
+    /// queued; a failure is logged and the message is redelivered.
+    async fn ack(atm: &ATM, profile: &Arc<ATMProfile>, id: &str) -> bool {
+        match atm.delete_message_background(profile, id).await {
+            Ok(()) => true,
+            Err(e) => {
+                warn!(profile = %profile.inner.alias, error = %e, "Failed to ack (delete) message");
+                false
+            }
+        }
     }
 
     /// Unpack a TSP frame (yielding cleartext payload + authenticated sender VID)
@@ -868,13 +943,7 @@ impl Listener {
         // pickup, rather than being lost. A failed ack is non-fatal: the message
         // is redelivered and de-duplicated by the receiver instead.
         match ack_id {
-            Some(sha256_hash) => match atm.delete_message_background(profile, &sha256_hash).await {
-                Ok(_) => true,
-                Err(e) => {
-                    warn!(profile = %profile_alias, error = %e, "Failed to ack (delete) message after handoff");
-                    false
-                }
-            },
+            Some(sha256_hash) => Self::ack(atm, profile, &sha256_hash).await,
             None => false,
         }
     }
@@ -1303,5 +1372,283 @@ mod connection_and_dispatch_tests {
         .into_message(&seen)
         .unwrap();
         assert_eq!(reply.thid.as_deref(), Some("req-1"));
+    }
+}
+
+/// #1150: the TSP-multiplexed live path acks after the handler, and its TSP
+/// frames share the in-flight record with the offline drain (R1.6/R1.7).
+#[cfg(all(test, feature = "tsp"))]
+mod multiplexed_path_tests {
+    use super::*;
+    use crate::config::Protocols;
+    use crate::handler::TspResponse;
+    use affinidi_messaging_didcomm::{Message, UnpackMetadata};
+    use affinidi_messaging_sdk::messages::compat::UnpackMetadata as SdkMeta;
+    use affinidi_tdk_common::profiles::TDKProfile;
+    use async_trait::async_trait;
+    use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Notify;
+
+    /// A DIDComm handler that blocks until released.
+    #[derive(Default)]
+    struct Gate {
+        entered: Notify,
+        release: Notify,
+        finished: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl DIDCommHandler for Arc<Gate> {
+        async fn handle(
+            &self,
+            _ctx: HandlerContext,
+            _message: Message,
+            _meta: UnpackMetadata,
+        ) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            self.finished.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }
+    }
+
+    struct NoopTsp;
+
+    #[async_trait]
+    impl TspHandler for NoopTsp {
+        async fn handle(
+            &self,
+            _ctx: HandlerContext,
+            _payload: Vec<u8>,
+            _sender_vid: String,
+        ) -> Result<Option<TspResponse>, DIDCommServiceError> {
+            Ok(None)
+        }
+    }
+
+    /// A connected multiplexing listener (DIDComm + TSP, `auto_delete` on).
+    async fn listener(gate: Arc<Gate>, drain_timeout: Duration) -> Listener {
+        let ctx = crate::handler::test_context().await;
+        let mut config = ListenerConfig::new(
+            "l1",
+            TDKProfile::new("svc", "did:example:service", None, vec![]),
+        );
+        config.protocols = Protocols::BOTH;
+        config.shutdown_drain_timeout = drain_timeout;
+        let (connection_tx, _) = watch::channel(None);
+        let (events_tx, _) = broadcast::channel(16);
+        let mut l = Listener::new(
+            config,
+            Arc::new(gate),
+            Some(Arc::new(NoopTsp)),
+            CancellationToken::new(),
+            connection_tx,
+            events_tx,
+        );
+        l.atm = Some(ctx.atm);
+        l.profile = Some(ctx.profile);
+        l
+    }
+
+    fn offline_sync(l: &Listener) -> OfflineSync {
+        OfflineSync {
+            listener_id: l.config.id.clone(),
+            atm: l.atm.clone().unwrap(),
+            profile: l.profile.clone().unwrap(),
+            handler: l.handler.clone(),
+            tsp_handler: l.tsp_handler.clone(),
+            in_flight: l.in_flight.clone(),
+            permits: l.handler_permits.clone(),
+            auto_delete: l.config.auto_delete,
+            protocols: l.config.protocols,
+        }
+    }
+
+    /// A stored-form TSP frame (`base64url(qb2)`, leading magic byte) that
+    /// classifies and decodes as TSP but does not unpack.
+    fn tsp_frame(l: &Listener, n: u8) -> String {
+        l.atm.as_ref().unwrap().tsp().encode(&[
+            affinidi_messaging_sdk::tsp_wire::TSP_MAGIC_BYTE,
+            0x41,
+            0x42,
+            n,
+        ])
+    }
+
+    fn didcomm_frame(hash: &str) -> InboundFrame {
+        let msg = Message::build("m1".to_string(), "example/v1".to_string(), json!({})).finalize();
+        let mut meta = SdkMeta::default();
+        meta.sha256_hash = hash.to_string();
+        InboundFrame::DidComm(Box::new(msg), Box::new(meta))
+    }
+
+    async fn join(tasks: &mut JoinSet<()>) {
+        while let Some(r) = tasks.join_next().await {
+            r.expect("task did not panic");
+        }
+    }
+
+    /// The mediator id of a live TSP frame is what the offline drain keys the
+    /// same message by (its delivery attachment id, sha256 of the body).
+    #[tokio::test]
+    async fn a_live_tsp_frame_is_keyed_by_its_mediator_id() {
+        let l = listener(Arc::new(Gate::default()), Duration::from_secs(5)).await;
+        let packed = tsp_frame(&l, 1);
+        let frame = InboundFrame::Tsp(Box::new(packed.clone()));
+        assert_eq!(frame.ack_id(), sha256::digest(packed.as_str()));
+    }
+
+    /// A DIDComm frame on the multiplexed path is not acked until its handler
+    /// returns (it used to be acked on receipt).
+    #[tokio::test]
+    async fn a_multiplexed_didcomm_frame_is_acked_only_after_its_handler() {
+        let gate = Arc::new(Gate::default());
+        let l = listener(gate.clone(), Duration::from_secs(5)).await;
+        let mut tasks = JoinSet::new();
+
+        let permit = l.acquire_permit().await.unwrap();
+        l.route_frame(didcomm_frame("h-dc"), permit, &mut tasks)
+            .await
+            .unwrap();
+        gate.entered.notified().await;
+
+        assert!(l.in_flight.is_active("h-dc"), "held while the handler runs");
+        assert!(!l.in_flight.is_recent("h-dc"), "not acked yet");
+
+        gate.release.notify_one();
+        join(&mut tasks).await;
+        assert_eq!(gate.finished.load(Ordering::SeqCst), 1);
+        assert!(!l.in_flight.is_active("h-dc"));
+        assert!(l.in_flight.is_recent("h-dc"), "acked after the handler");
+    }
+
+    /// A TSP frame's ack waits for its handler too: the work spawned for it
+    /// runs to completion before the ack is made and recorded.
+    #[tokio::test]
+    async fn a_tsp_frame_is_acked_only_after_its_handler() {
+        let l = listener(Arc::new(Gate::default()), Duration::from_secs(5)).await;
+        let frame = InboundFrame::Tsp(Box::new(tsp_frame(&l, 2)));
+        let id = frame.ack_id();
+        let claim = l.in_flight.claim(&id).unwrap();
+        let release = Arc::new(Notify::new());
+        let ack_on = Some((l.atm.clone().unwrap(), l.profile.clone().unwrap()));
+
+        let mut tasks = JoinSet::new();
+        let permit = l.acquire_permit().await.unwrap();
+        let r = release.clone();
+        Listener::spawn_then_ack(&mut tasks, permit, claim, ack_on, async move {
+            r.notified().await;
+        });
+        tokio::task::yield_now().await;
+
+        assert!(l.in_flight.is_active(&id));
+        assert!(!l.in_flight.is_recent(&id), "not acked while handling");
+
+        release.notify_one();
+        join(&mut tasks).await;
+        assert!(!l.in_flight.is_active(&id));
+        assert!(l.in_flight.is_recent(&id), "acked once handled");
+    }
+
+    /// A TSP frame the live stream dispatched is skipped by the offline drain,
+    /// both while it is being handled and after it was acked (it used to be
+    /// outside the record, so the drain could dispatch it again).
+    #[tokio::test]
+    async fn a_live_tsp_frame_is_skipped_by_the_offline_drain() {
+        let l = listener(Arc::new(Gate::default()), Duration::from_secs(5)).await;
+        let sync = offline_sync(&l);
+        let packed = tsp_frame(&l, 3);
+        // The drain keys by the delivery attachment id: sha256 of the body.
+        let id = sha256::digest(packed.as_str());
+
+        // While the live path holds it.
+        let held = l
+            .in_flight
+            .claim(&InboundFrame::Tsp(Box::new(packed.clone())).ack_id())
+            .expect("live claim");
+        let (set, handled, dropped) = sync
+            .route_frames(vec![(
+                Some(InboundFrame::Tsp(Box::new(packed.clone()))),
+                id.clone(),
+            )])
+            .await
+            .unwrap();
+        assert!(set.is_empty() && handled.is_empty() && dropped.is_empty());
+        drop(held);
+
+        // Through the live router: claimed, handled (it does not unpack, so the
+        // handler is never reached), acked and recorded.
+        let mut tasks = JoinSet::new();
+        let permit = l.acquire_permit().await.unwrap();
+        l.route_frame(
+            InboundFrame::Tsp(Box::new(packed.clone())),
+            permit,
+            &mut tasks,
+        )
+        .await
+        .unwrap();
+        join(&mut tasks).await;
+        assert!(l.in_flight.is_recent(&id), "acked by the live path");
+
+        let (set, handled, dropped) = sync
+            .route_frames(vec![(Some(InboundFrame::Tsp(Box::new(packed))), id)])
+            .await
+            .unwrap();
+        assert!(
+            set.is_empty() && handled.is_empty() && dropped.is_empty(),
+            "a copy fetched before the live ack landed is not dispatched again"
+        );
+    }
+
+    /// A frame pulled just as the socket drops is not lost: nothing acked it on
+    /// receipt, and when the connection is torn down before its handler
+    /// finishes, its claim is released unacked, so the redelivered copy can be
+    /// dispatched.
+    #[tokio::test]
+    async fn a_frame_pulled_as_the_socket_drops_is_redelivered() {
+        let gate = Arc::new(Gate::default());
+        let l = listener(gate.clone(), Duration::from_millis(50)).await;
+        let handle = ConnectionHandle {
+            atm: l.atm.clone().unwrap(),
+            profile: l.profile.clone().unwrap(),
+        };
+        let (conn_tx, conn_rx) = watch::channel(Some(handle.clone()));
+        let (events_tx, _events) = broadcast::channel(16);
+        let (state_tx, state_rx) = watch::channel(ConnState::Connected);
+        let mut state_rx = Some(state_rx);
+        let mut connected = true;
+
+        // Pulled (a DIDComm frame and a TSP frame), handlers still running.
+        let mut tasks = JoinSet::new();
+        let permit = l.acquire_permit().await.unwrap();
+        l.route_frame(didcomm_frame("h-drop"), permit, &mut tasks)
+            .await
+            .unwrap();
+        gate.entered.notified().await;
+        let tsp = InboundFrame::Tsp(Box::new(tsp_frame(&l, 4)));
+        let tsp_id = tsp.ack_id();
+        let claim = l.in_flight.claim(&tsp_id).unwrap();
+        let permit = l.acquire_permit().await.unwrap();
+        let ack_on = Some((handle.atm.clone(), handle.profile.clone()));
+        Listener::spawn_then_ack(&mut tasks, permit, claim, ack_on, std::future::pending());
+
+        // The socket drops.
+        state_tx.send(ConnState::Disconnected).unwrap();
+        let s = next_conn_change(&mut state_rx).await.unwrap();
+        apply_conn_state(s, &mut connected, &handle, &conn_tx, &events_tx, "l1");
+        assert!(!connected && conn_rx.borrow().is_none());
+
+        // The connection is torn down before the handlers finish.
+        l.drain_tasks(&mut tasks).await;
+        assert_eq!(gate.finished.load(Ordering::SeqCst), 0);
+
+        for id in ["h-drop", tsp_id.as_str()] {
+            assert!(!l.in_flight.is_recent(id), "{id}: never acked");
+            assert!(
+                l.in_flight.claim(id).is_some(),
+                "{id}: released unacked, so its redelivered copy is dispatched"
+            );
+        }
     }
 }

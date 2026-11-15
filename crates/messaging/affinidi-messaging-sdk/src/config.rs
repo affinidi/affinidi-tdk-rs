@@ -93,7 +93,7 @@ impl UnpackPolicy {
 #[derive(Clone)]
 pub struct ATMConfig {
     /// Extra trust roots for the mediator websocket's TLS, on top of the
-    /// platform's. See [`ATMConfigBuilder::with_ssl_certificates`].
+    /// platform's. See [`ATMConfigBuilder::with_ssl_certificate_paths`].
     pub(crate) ssl_certificates: Vec<CertificateDer<'static>>,
     /// The TLS client config the websocket connects with when
     /// `ssl_certificates` is non-empty: the platform's roots plus those.
@@ -347,7 +347,7 @@ impl ATMConfig {
     }
 
     /// The extra trust roots parsed from
-    /// [`ATMConfigBuilder::with_ssl_certificates`]; the websocket TLS
+    /// [`ATMConfigBuilder::with_ssl_certificate_paths`]; the websocket TLS
     /// connector trusts these in addition to the platform's roots.
     pub fn get_ssl_certificates(&'_ self) -> &'_ Vec<CertificateDer<'_>> {
         &self.ssl_certificates
@@ -490,15 +490,38 @@ impl ATMConfigBuilder {
     /// Each entry is a file path to PEM encoded certificate(s); every
     /// certificate in each file becomes a trust root, in addition to the
     /// platform's native roots (which are still trusted). `build()` fails with
-    /// `ATMError::SSLError` if a file cannot be opened or parsed. The paths
-    /// are moved out of `ssl_certificates`.
+    /// `ATMError::SSLError` if a file cannot be opened or parsed. Paths add up
+    /// across calls.
+    ///
+    /// ```
+    /// # use affinidi_messaging_sdk::config::ATMConfig;
+    /// let builder = ATMConfig::builder().with_ssl_certificate_paths(["certs/ca.pem"]);
+    /// ```
     ///
     /// REST calls to the mediator (and DID resolution, authentication) use the
     /// HTTP client of the `TDKSharedState` passed to [`crate::ATM::new`], so
     /// their trust comes from the TDK configuration, not from this setting.
-    pub fn with_ssl_certificates(mut self, ssl_certificates: &mut Vec<String>) -> Self {
-        self.ssl_certificates.append(ssl_certificates);
+    pub fn with_ssl_certificate_paths<I, S>(mut self, paths: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.ssl_certificates
+            .extend(paths.into_iter().map(Into::into));
         self
+    }
+
+    /// Trust extra CA certificates for the mediator **websocket** connection.
+    ///
+    /// Same as [`with_ssl_certificate_paths`](Self::with_ssl_certificate_paths),
+    /// but drains the caller's vector: the paths are moved out of
+    /// `ssl_certificates`, leaving it empty.
+    #[deprecated(
+        since = "0.49.2",
+        note = "use `with_ssl_certificate_paths`, which takes any iterator of paths and leaves the caller's collection alone"
+    )]
+    pub fn with_ssl_certificates(self, ssl_certificates: &mut Vec<String>) -> Self {
+        self.with_ssl_certificate_paths(ssl_certificates.drain(..))
     }
 
     /// Set the maximum number of messages to cache in the fetch task

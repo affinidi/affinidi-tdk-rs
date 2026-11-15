@@ -280,7 +280,7 @@ pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// `tls` is the TLS client config for a `wss://` endpoint; `None` uses
 /// tokio-tungstenite's default (the platform's native roots). The SDK passes
-/// one when `ATMConfigBuilder::with_ssl_certificates` added trust roots.
+/// one when `ATMConfigBuilder::with_ssl_certificate_paths` added trust roots.
 pub(crate) async fn connect_websocket<R>(
     request: R,
     target_host: &str,
@@ -427,7 +427,7 @@ mod tests {
 
     /// A `wss://` mediator whose certificate chains to a private root is
     /// refused with the default (platform) roots, and accepted once that root
-    /// is configured with `with_ssl_certificates` (#1013).
+    /// is configured with `with_ssl_certificate_paths` (#1013).
     #[tokio::test]
     // The env lock is held across the connects on purpose: the proxy tests set
     // HTTPS_PROXY process-wide, and this connect must go direct.

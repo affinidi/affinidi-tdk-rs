@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.36.0] - 2026-11-15
+
+TSP-multiplexed live path: ack after the handler, TSP frames in the in-flight record
+
+Behaviour changes for consumers (R3.6) are marked **Behaviour**; read them
+before upgrading. Requires `affinidi-messaging-sdk` 0.49.2.
+
+- **Behaviour (#1150, R1.6):** a listener with TSP enabled (`tsp` feature,
+  `Protocols::TSP_ONLY` or `BOTH`) now pulls live frames without acking them
+  and acks each one only after its handler returns, as the DIDComm-only live
+  path already did. Before, `live_stream_next_frame(.., auto_delete)` acked
+  every frame on receipt, so a teardown between receipt and the handler lost
+  it. A frame whose handler is still running when the connection is torn down
+  (past `shutdown_drain_timeout`) is now redelivered rather than lost. Handlers
+  must already tolerate redelivery (at-least-once).
+- **Behaviour (#1150, R1.7):** live TSP frames are claimed in the record of
+  mediator ids the live stream and the offline drain share, keyed by
+  `InboundFrame::ack_id()` (sha256 of the stored frame, the same id the
+  offline drain's delivery attachment carries). A TSP frame the live stream is
+  handling, or acked a moment ago, is no longer dispatched a second time by the
+  offline drain.
+- **Behaviour:** on the multiplexed live path a frame no handler here will take
+  — a DIDComm frame on a TSP-only listener, a TSP frame with no `TspHandler`,
+  a TSP frame that does not decode, or an unknown frame kind — is acked at once
+  regardless of `auto_delete`, as the offline drain already did. Before, with
+  `auto_delete = false`, only the first of these was acked. A handled frame is
+  still acked only with `auto_delete`.
+
 ## [0.35.1] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.
