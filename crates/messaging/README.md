@@ -1,6 +1,6 @@
 # Affinidi Messaging
 
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-messaging)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 Secure, private, and trusted messaging built on the
@@ -46,13 +46,13 @@ The mediator itself — `affinidi-messaging-mediator`, `-mediator-common`, the
 [affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator).
 
 **Dependencies:**
-[affinidi-did-resolver](../affinidi-did-resolver/) for DID Document resolution.
+[affinidi-did-resolver](../identity/affinidi-did-resolver-cache-sdk/) for DID Document resolution.
 
 ## Getting Started
 
 ### Prerequisites
 
-- Rust 1.90.0+ (2024 Edition)
+- Rust 1.95.0+ (2024 Edition)
 - A running mediator. To run your own, follow the setup guide in
   [affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator) — its
   `mediator-setup` wizard generates the mediator DID, secrets, admin
@@ -72,10 +72,10 @@ mediator in [affinidi/affinidi-messaging-mediator](https://github.com/affinidi/a
 
 ## Related Crates
 
-- [`affinidi-did-resolver`](../affinidi-did-resolver/) — DID resolution and caching
-- [`affinidi-tdk`](../affinidi-tdk/) — Unified TDK entry point
-- [`affinidi-meeting-place`](../affinidi-meeting-place/) — Secure discovery and connection
-- [`affinidi-cesr`](../affinidi-tdk/common/affinidi-cesr/) — CESR codec used by TSP
+- [`affinidi-did-resolver`](../identity/affinidi-did-resolver-cache-sdk/) — DID resolution and caching
+- [`affinidi-tdk`](../tdk/affinidi-tdk/) — Unified TDK entry point
+- [`affinidi-meeting-place`](../applications/affinidi-meeting-place/) — Secure discovery and connection
+- [`affinidi-cesr`](../core/affinidi-cesr/) — CESR codec used by TSP
 
 ## License
 

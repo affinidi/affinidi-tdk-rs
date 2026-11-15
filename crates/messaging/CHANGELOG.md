@@ -790,7 +790,7 @@ that prompted them, shipped together so the version bumps line up.
   ignored for ephemeral.
 - Error Handling enhanced to make it easier for developers to figure out what is
   happening during error conditions
-  - See [Error Documentation](affinidi-messaging-mediator/ERRORS.md) for more information
+  - See [Error Documentation](https://github.com/affinidi/affinidi-messaging-mediator/blob/main/crates/affinidi-messaging-mediator/ERRORS.md) for more information
 - **FIX:** Access List rules now applied to forwarded messages correctly.
 
 ## 1st April 2025 (0.10.3)

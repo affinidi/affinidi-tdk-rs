@@ -1,6 +1,6 @@
 # affinidi-tsp
 
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-tsp)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-tsp)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 A Rust implementation of the
@@ -11,18 +11,18 @@ Verifiable Identifiers (VIDs).
 This crate speaks **TSP 1.0** (wire version `1.0`, `YTSP-BAA`). Section numbers
 in these docs cite Rev 3 of the specification where 1.0 left them unchanged.
 1.0 does not interoperate with Rev 3 or Rev 2 peers — see the
-[interop notes](../../../docs/tsp/interop.md#the-version-field).
+[interop notes](https://github.com/affinidi/affinidi-tdk-rs/blob/main/docs/tsp/interop.md#the-version-field).
 
 > **Reference Implementation:** The official TSP reference implementation is
 > maintained at [github.com/trustoverip/tsp](https://github.com/trustoverip/tsp).
 > This crate provides an independent implementation tailored for the Affinidi TDK
 > ecosystem. It **wire-interoperates** with the reference (`tsp-sdk`) for every
 > TSP message type (Direct, Routed, Nested, Control), both directions — see the
-> [interop status](../../../docs/tsp/interop.md) and the `interop/` harness.
+> [interop status](https://github.com/affinidi/affinidi-tdk-rs/blob/main/docs/tsp/interop.md) and the `interop/` harness.
 
 > **Using TSP through the TDK?** This crate is the low-level protocol. For sending,
 > receiving, relationships, WebSocket delivery, and authentication via the
-> messaging SDK (`atm.tsp()`), see the **[TSP cookbook](../../../docs/tsp/cookbook.md)**.
+> messaging SDK (`atm.tsp()`), see the **[TSP cookbook](https://github.com/affinidi/affinidi-tdk-rs/blob/main/docs/tsp/cookbook.md)**.
 
 ## Feature Flags
 
@@ -30,7 +30,7 @@ in these docs cite Rev 3 of the specification where 1.0 left them unchanged.
 |---|---|---|
 | `did-resolver` | Yes | DID-based VID resolution via `affinidi-did-resolver-cache-sdk` |
 | `messaging-core` | No | Protocol-agnostic adapter for `affinidi-messaging-core` traits |
-| `pq` | No | Post-quantum PKAE and signatures: the MLKEM768-X25519 hybrid KEM and ML-DSA-65 (provisional code points; see [`post-quantum.md`](../../../docs/tsp/post-quantum.md)) |
+| `pq` | No | Post-quantum PKAE and signatures: the MLKEM768-X25519 hybrid KEM and ML-DSA-65 (provisional code points; see [`post-quantum.md`](https://github.com/affinidi/affinidi-tdk-rs/blob/main/docs/tsp/post-quantum.md)) |
 | `test-vectors` | No | Byte-reproducible packing with caller-fixed ephemeral keys, to regenerate the specification's vectors. **Destroys confidentiality** — tests only |
 
 ## Cryptographic Suite
@@ -163,7 +163,7 @@ an identifier in its own payload, or on the delivery layer's idempotency key.
 
 For applications that need to support multiple messaging protocols (e.g. both
 DIDComm and TSP), enable the `messaging-core` feature to use the
-[`affinidi-messaging-core`](../affinidi-messaging-core/) abstraction layer.
+[`affinidi-messaging-core`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-core/) abstraction layer.
 This provides a unified interface for packing, unpacking, identity resolution,
 and relationship management across protocols.
 
@@ -216,9 +216,9 @@ TSP adapter: they cannot hand back the control message the peer needs.
 
 | Crate | Description |
 |---|---|
-| [`affinidi-messaging-core`](../affinidi-messaging-core/) | Protocol-agnostic messaging traits and types |
-| [`affinidi-messaging-didcomm`](../affinidi-messaging-didcomm/) | DIDComm v2.1 implementation |
-| [`affinidi-messaging-sdk`](../affinidi-messaging-sdk/) | High-level messaging client SDK |
+| [`affinidi-messaging-core`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-core/) | Protocol-agnostic messaging traits and types |
+| [`affinidi-messaging-didcomm`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-didcomm/) | DIDComm v2.1 implementation |
+| [`affinidi-messaging-sdk`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-sdk/) | High-level messaging client SDK |
 
 ## License
 

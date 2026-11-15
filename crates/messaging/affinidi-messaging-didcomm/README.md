@@ -17,4 +17,4 @@ A lean DIDComm v2.1 implementation for the Affinidi TDK.
 
 ## License
 
-See [LICENSE](../../../LICENSE) for details.
+See [LICENSE](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE) for details.

@@ -2,13 +2,13 @@
 
 [![Crates.io](https://img.shields.io/crates/v/affinidi-did-resolver-cache-sdk.svg)](https://crates.io/crates/affinidi-did-resolver-cache-sdk)
 [![Documentation](https://docs.rs/affinidi-did-resolver-cache-sdk/badge.svg)](https://docs.rs/affinidi-did-resolver-cache-sdk)
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-did-resolver/affinidi-did-resolver-cache-sdk)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-resolver-cache-sdk/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 SDK for resolving [Decentralised Identifiers (DIDs)](https://www.w3.org/TR/did-1.0/)
 with built-in local caching. Operates in **local mode** (resolving happens in
 your process) or **network mode** (requests are forwarded to a remote
-[cache server](../affinidi-did-resolver-cache-server/)).
+[cache server](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-resolver-cache-server/)).
 
 ## Installation
 
@@ -193,7 +193,7 @@ registered resolver (the concrete name is preserved in `ResolveResponse::did`).
 If no resolver is registered for the method, `resolve()` returns
 `UnsupportedMethod`.
 
-Runnable example: [`examples/custom_resolver.rs`](examples/custom_resolver.rs) —
+Runnable example: [`examples/custom_resolver.rs`](https://github.com/affinidi/affinidi-tdk-rs/blob/main/crates/identity/affinidi-did-resolver-cache-sdk/examples/custom_resolver.rs) —
 `cargo run --example custom_resolver`.
 
 [`Resolver`]: https://docs.rs/affinidi-did-resolver-traits
@@ -229,9 +229,9 @@ cargo test --features network
 
 ## Related Crates
 
-- [`affinidi-did-resolver-cache-server`](../affinidi-did-resolver-cache-server/) — Remote cache server
-- [`affinidi-did-common`](../affinidi-did-common/) — DID Document types (dependency)
-- [`affinidi-did-resolver-traits`](../affinidi-did-resolver-traits/) — Pluggable resolver traits (dependency)
+- [`affinidi-did-resolver-cache-server`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-resolver-cache-server/) — Remote cache server
+- [`affinidi-did-common`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-common/) — DID Document types (dependency)
+- [`affinidi-did-resolver-traits`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-resolver-traits/) — Pluggable resolver traits (dependency)
 
 ## License
 

@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/affinidi-trust-lists.svg)](https://crates.io/crates/affinidi-trust-lists)
 [![Documentation](https://docs.rs/affinidi-trust-lists/badge.svg)](https://docs.rs/affinidi-trust-lists)
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/trust/affinidi-trust-lists)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/trust/affinidi-trust-lists)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 EU Trusted Lists implementation per [ETSI TS 119 612](https://www.etsi.org/deliver/etsi_ts/119600_119699/119612/)
@@ -88,9 +88,9 @@ if result.valid {
 
 ## Related Crates
 
-- [`affinidi-vc`](../../credentials/affinidi-vc/) — SD-JWT VC format (`affinidi_vc::sd_jwt_vc`)
-- [`affinidi-mdoc`](../../credentials/affinidi-mdoc/) — mdoc format (IACA cert trust validation)
-- [`affinidi-tdk`](../../tdk/affinidi-tdk/) — Unified TDK entry point
+- [`affinidi-vc`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/credentials/affinidi-vc/) — SD-JWT VC format (`affinidi_vc::sd_jwt_vc`)
+- [`affinidi-mdoc`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/credentials/affinidi-mdoc/) — mdoc format (IACA cert trust validation)
+- [`affinidi-tdk`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/tdk/affinidi-tdk/) — Unified TDK entry point
 
 ## License
 

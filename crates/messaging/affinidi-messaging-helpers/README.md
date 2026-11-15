@@ -1,10 +1,10 @@
 # affinidi-messaging-helpers
 
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-helpers)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-helpers)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 Administration tooling and example runners for
-[Affinidi Messaging](../). The mediator itself ships its own setup
+[Affinidi Messaging](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/). The mediator itself ships its own setup
 wizard — see
 [affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator)
 and its setup guide to provision a mediator end to end.
@@ -79,20 +79,20 @@ export RUST_LOG=none,affinidi_messaging_helpers=debug,affinidi_messaging_sdk=inf
 
 ## Examples
 
-Explore the [examples folder](./examples/) for available examples, including:
+Explore the [examples folder](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-helpers/examples/) for available examples, including:
 
 - `mediator_ping` — Send a trust ping to the mediator
 - Sending and receiving messages
 - Message pickup
-- `protocol_comparison` — Benchmark comparing [TSP](../affinidi-tsp/) vs [DIDComm](../affinidi-messaging-didcomm/) message packing
-- `unified_messaging` — Demonstrates [messaging-core](../affinidi-messaging-core/) trait abstraction across both protocols
+- `protocol_comparison` — Benchmark comparing [TSP](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-tsp/) vs [DIDComm](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-didcomm/) message packing
+- `unified_messaging` — Demonstrates [messaging-core](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-core/) trait abstraction across both protocols
 
 ## Related Crates
 
-- [`affinidi-messaging-sdk`](../affinidi-messaging-sdk/) — Messaging SDK (dependency)
-- [`affinidi-tsp`](../affinidi-tsp/) — Trust Spanning Protocol
+- [`affinidi-messaging-sdk`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-sdk/) — Messaging SDK (dependency)
+- [`affinidi-tsp`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-tsp/) — Trust Spanning Protocol
 - [`affinidi-messaging-mediator`](https://github.com/affinidi/affinidi-messaging-mediator) — Mediator service
-- [`affinidi-tdk`](../../affinidi-tdk/affinidi-tdk/) — Unified TDK entry point (dependency)
+- [`affinidi-tdk`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/tdk/affinidi-tdk/) — Unified TDK entry point (dependency)
 
 ## License
 

@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/affinidi-did-resolver-traits.svg)](https://crates.io/crates/affinidi-did-resolver-traits)
 [![Documentation](https://docs.rs/affinidi-did-resolver-traits/badge.svg)](https://docs.rs/affinidi-did-resolver-traits)
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-did-resolver/affinidi-did-resolver-traits)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-resolver-traits/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 Pluggable DID resolution traits for the Affinidi TDK. Implement these traits to
@@ -68,8 +68,8 @@ impl AsyncResolver for MyResolver {
 
 ## Related Crates
 
-- [`affinidi-did-common`](../affinidi-did-common/) — DID Document types (dependency)
-- [`affinidi-did-resolver-cache-sdk`](../affinidi-did-resolver-cache-sdk/) — SDK that uses these traits
+- [`affinidi-did-common`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-common/) — DID Document types (dependency)
+- [`affinidi-did-resolver-cache-sdk`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-resolver-cache-sdk/) — SDK that uses these traits
 
 ## License
 

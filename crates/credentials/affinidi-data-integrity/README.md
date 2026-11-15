@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/affinidi-data-integrity.svg)](https://crates.io/crates/affinidi-data-integrity)
 [![Documentation](https://docs.rs/affinidi-data-integrity/badge.svg)](https://docs.rs/affinidi-data-integrity)
-[![Rust](https://img.shields.io/badge/rust-1.94%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 A production-grade implementation of the
@@ -207,7 +207,7 @@ SLH-DSA trades signature speed for tiny keys (32 B public, 64 B private) and sta
 
 Also: `DataIntegrityError` gained structured variants (`KeyTypeMismatch`, `InvalidSignature`, etc.). The old `InputDataError(String)` / `CryptoError(String)` / `VerificationError(String)` / `SecretsError(String)` / `RdfEncodingError(String)` variants are kept as `#[deprecated]` for the same deprecation window.
 
-See [CHANGELOG.md](CHANGELOG.md) for the full breaking-change list.
+See [CHANGELOG.md](https://github.com/affinidi/affinidi-tdk-rs/blob/main/crates/credentials/affinidi-data-integrity/CHANGELOG.md) for the full breaking-change list.
 
 ## Security considerations
 
@@ -215,7 +215,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full breaking-change list.
 - **Deterministic signing.** All supported suites (Ed25519, P-256, ML-DSA, SLH-DSA) sign deterministically in this crate — the same input produces the same signature. This is required for W3C interop and for reproducible test vectors. If you need randomised signatures for side-channel reasons, drop to the underlying primitive crates directly.
 - **Zeroize coverage.** Private key bytes held by `Secret` are zeroized on drop via its `ZeroizeOnDrop` derive. The ML-DSA crate zeroizes its expanded matrix (we enable its `zeroize` feature). Intermediate stack copies inside this crate are wrapped in `Zeroizing`. Your own `Signer` implementations should match this.
 - **Timing channels.** Ed25519 and ML-DSA signing are constant-time in the underlying RustCrypto crates. SLH-DSA has branching tied to public material only. BBS-2023 has selective-disclosure-specific side-channel considerations — see its spec.
-- See [SECURITY.md](SECURITY.md) for vulnerability reporting.
+- See [SECURITY.md](https://github.com/affinidi/affinidi-tdk-rs/blob/main/crates/credentials/affinidi-data-integrity/SECURITY.md) for vulnerability reporting.
 
 ## Out of scope
 
@@ -225,10 +225,10 @@ See [CHANGELOG.md](CHANGELOG.md) for the full breaking-change list.
 
 ## Related crates
 
-- [`affinidi-crypto`](../../core/affinidi-crypto/) — classical and post-quantum primitives.
-- [`affinidi-encoding`](../../core/affinidi-encoding/) — multicodec / multibase.
-- [`affinidi-secrets-resolver`](../../core/affinidi-secrets-resolver/) — key material and multikey codec.
-- [`affinidi-rdf-encoding`](../affinidi-rdf-encoding/) — RDFC-1.0 canonicalization.
+- [`affinidi-crypto`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/core/affinidi-crypto/) — classical and post-quantum primitives.
+- [`affinidi-encoding`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/core/affinidi-encoding/) — multicodec / multibase.
+- [`affinidi-secrets-resolver`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/core/affinidi-secrets-resolver/) — key material and multikey codec.
+- [`affinidi-rdf-encoding`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/credentials/affinidi-rdf-encoding/) — RDFC-1.0 canonicalization.
 
 ## License
 

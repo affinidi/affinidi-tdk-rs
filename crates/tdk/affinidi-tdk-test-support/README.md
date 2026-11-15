@@ -38,7 +38,7 @@ the mediator in its own repository.
 Copy-paste scenarios for both crates — three-line in-process mediator, two-hop
 forward, did:web rotation, seeded identities, issue / present / verify,
 revocation — plus the language-agnostic `docker compose` path are in
-[`docs/testing/cookbook.md`](../../../docs/testing/cookbook.md). Every Rust
+[`docs/testing/cookbook.md`](https://github.com/affinidi/affinidi-tdk-rs/blob/main/docs/testing/cookbook.md). Every Rust
 snippet there mirrors a runnable, CI-compiled doc example on the corresponding
 module.
 

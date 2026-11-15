@@ -253,7 +253,7 @@ generic alias for `Sec1Point<C>` so it needs a per-module binding, and the
 deprecated `SigningKey::random(rng)` is now `Generate::generate()` (system
 CSPRNG, panics on failure).
 
-Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) point 3: `vta-sdk` and `didwebvh-rs` redirect
+Patch bump, per [ADR 0003](../../../../docs/adr/0003-public-api-semver-policy.md) point 3: `vta-sdk` and `didwebvh-rs` redirect
 this crate through `[patch.crates-io]`, and a minor bump breaks the redirect.
 
 Crypto behaviour is unchanged — the golden/KAT vectors (`p256_sign_verify_roundtrip`,

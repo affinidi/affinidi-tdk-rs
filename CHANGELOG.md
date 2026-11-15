@@ -286,7 +286,7 @@ Per-crate version history is summarised here; for the full code history see
   **`affinidi-messaging-mediator-config` 0.2.0**,
   **`affinidi-messaging-mediator-common` 0.15.29**,
   **`affinidi-messaging-test-mediator` 0.2.39**. New operator reference:
-  [docs/memory-tuning.md](crates/messaging/affinidi-messaging-mediator/docs/memory-tuning.md).
+  [docs/memory-tuning.md](https://github.com/affinidi/affinidi-messaging-mediator/blob/main/crates/affinidi-messaging-mediator/docs/memory-tuning.md).
 
   Measured on the Fjall backend: **~23 MB idle**, and **~44 MB after writing
   500 MB of message bodies** (previously ~546 MB for the same load — resident

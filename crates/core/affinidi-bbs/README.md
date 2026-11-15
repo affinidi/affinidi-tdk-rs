@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/affinidi-bbs.svg)](https://crates.io/crates/affinidi-bbs)
 [![Documentation](https://docs.rs/affinidi-bbs/badge.svg)](https://docs.rs/affinidi-bbs)
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/core/affinidi-bbs)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/core/affinidi-bbs)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 BBS Signatures implementation per
@@ -70,8 +70,8 @@ assert!(proof_verify(&pk, &proof, b"header", b"ph", &[b"msg1".as_ref()], &[0])?)
 
 ## Related Crates
 
-- [`affinidi-data-integrity`](../../credentials/affinidi-data-integrity/) — bbs-2023 cryptosuite for VCs
-- [`affinidi-crypto`](../affinidi-crypto/) — Other cryptographic primitives
+- [`affinidi-data-integrity`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/credentials/affinidi-data-integrity/) — bbs-2023 cryptosuite for VCs
+- [`affinidi-crypto`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/core/affinidi-crypto/) — Other cryptographic primitives
 
 ## License
 

@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/affinidi-vc.svg)](https://crates.io/crates/affinidi-vc)
 [![Documentation](https://docs.rs/affinidi-vc/badge.svg)](https://docs.rs/affinidi-vc)
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/credentials/affinidi-vc)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/credentials/affinidi-vc)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 W3C Verifiable Credentials Data Model implementation supporting both
@@ -32,9 +32,9 @@ affinidi-vc = "0.3"
 
 ## Related Crates
 
-- [`affinidi-sd-jwt`](../affinidi-sd-jwt/) - Base SD-JWT (RFC 9901), backs `sd_jwt_vc`
-- [`affinidi-data-integrity`](../affinidi-data-integrity/) - W3C Data Integrity proofs
-- [`affinidi-status-list`](../affinidi-status-list/) - Credential status/revocation
+- [`affinidi-sd-jwt`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/credentials/affinidi-sd-jwt/) - Base SD-JWT (RFC 9901), backs `sd_jwt_vc`
+- [`affinidi-data-integrity`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/credentials/affinidi-data-integrity/) - W3C Data Integrity proofs
+- [`affinidi-status-list`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/credentials/affinidi-status-list/) - Credential status/revocation
 
 ## License
 

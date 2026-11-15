@@ -1,6 +1,6 @@
 # Affinidi Trust Development Kit (TDK) for Rust
 
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
 [![GitHub Issues](https://img.shields.io/github/issues/affinidi/affinidi-tdk-rs)](https://github.com/affinidi/affinidi-tdk-rs/issues)
 

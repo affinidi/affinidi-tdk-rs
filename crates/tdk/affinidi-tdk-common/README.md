@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/affinidi-tdk-common.svg)](https://crates.io/crates/affinidi-tdk-common)
 [![Documentation](https://docs.rs/affinidi-tdk-common/badge.svg)](https://docs.rs/affinidi-tdk-common)
-[![Rust](https://img.shields.io/badge/rust-1.94.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/tdk/affinidi-tdk-common)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/tdk/affinidi-tdk-common)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 Shared building blocks for Affinidi Trust Development Kit (TDK) crates.
@@ -73,22 +73,22 @@ The keyring backend is selected at compile time:
 
 ## Migrating from 0.5.x
 
-See [`CHANGELOG.md`](CHANGELOG.md) for the full breaking-change list and
+See [`CHANGELOG.md`](https://github.com/affinidi/affinidi-tdk-rs/blob/main/crates/tdk/affinidi-tdk-common/CHANGELOG.md) for the full breaking-change list and
 side-by-side migration snippets.
 
 ## Key dependencies
 
 This crate aggregates several TDK libraries:
 
-- [`affinidi-did-resolver-cache-sdk`](../../identity/affinidi-did-resolver-cache-sdk/) — DID resolution
-- [`affinidi-did-authentication`](../../identity/affinidi-did-authentication/) — DID authentication
-- [`affinidi-data-integrity`](../../credentials/affinidi-data-integrity/) — Data integrity proofs
-- [`affinidi-secrets-resolver`](../../core/affinidi-secrets-resolver/) — Secret management
+- [`affinidi-did-resolver-cache-sdk`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-resolver-cache-sdk/) — DID resolution
+- [`affinidi-did-authentication`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-authentication/) — DID authentication
+- [`affinidi-data-integrity`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/credentials/affinidi-data-integrity/) — Data integrity proofs
+- [`affinidi-secrets-resolver`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/core/affinidi-secrets-resolver/) — Secret management
 
 ## Related crates
 
-- [`affinidi-tdk`](../affinidi-tdk/) — Unified TDK entry point
-- [`affinidi-meeting-place`](../../applications/affinidi-meeting-place/) — Meeting Place SDK
+- [`affinidi-tdk`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/tdk/affinidi-tdk/) — Unified TDK entry point
+- [`affinidi-meeting-place`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/applications/affinidi-meeting-place/) — Meeting Place SDK
 
 ## License
 
