@@ -37,8 +37,10 @@
 //! * **Key state is kept** across a cancellation. The freshness bookkeeping
 //!   (last seen, refresh failures and their back-off) for a peer is not
 //!   dropped when a relationship with it ends, so cancelling and re-forming a
-//!   relationship cannot reset a refresh back-off. It grows with the peers
-//!   this endpoint has held a relationship with, as the invite history does.
+//!   relationship cannot reset a refresh back-off. It is retired
+//!   ([`KeyStateTracker::retire`]) instead: the tracker keeps a bounded number
+//!   of retired peers, forgetting the oldest, so peers that come and go cannot
+//!   grow it without limit.
 //!
 //! Every refusal is [`TspError::Discarded`] (Rev 3 §3.7: discard silently, send
 //! nothing back); an invalid state transition is [`TspError::Relationship`].
@@ -400,9 +402,12 @@ where
     })?;
     store.set_state(our_vid, their_vid, state).await?;
     // The receive path measures silence only inside a relationship, so a
-    // control message that just formed one starts the measurement.
+    // control message that just formed one starts the measurement. One that
+    // ended it keeps the peer's bookkeeping, as a bounded retired entry.
     if !prior.admits_application_message() && state.admits_application_message() {
         ctx.key_state.record_seen(their_vid, ctx.now_ms);
+    } else if prior.admits_application_message() && !state.admits_application_message() {
+        ctx.key_state.retire(their_vid);
     }
 
     // Record the digests as the handshake produces them: the invite's

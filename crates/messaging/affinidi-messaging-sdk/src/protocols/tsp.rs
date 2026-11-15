@@ -321,13 +321,56 @@ pub trait RelationshipStore: Send + Sync {
 /// who need relationship state to survive restarts should implement
 /// [`RelationshipStore`] against durable storage and inject it via
 /// [`crate::config::ATMConfigBuilder::with_relationship_store`].
-#[derive(Default)]
+///
+/// Its invite history is bounded: at most
+/// [`DEFAULT_INVITE_HISTORY_PAIRS`] VID pairs (or the limit given to
+/// [`with_invite_history_limit`](Self::with_invite_history_limit)), forgetting
+/// the pair first recorded longest ago.
 pub struct InMemoryRelationshipStore {
     inner: RwLock<HashMap<(String, String), RelationshipState>>,
     capabilities: RwLock<HashMap<(String, String), PeerCapability>>,
     digests: RwLock<HashMap<(String, String), ThreadDigests>>,
     reply_paths: RwLock<HashMap<(String, String), Vec<String>>>,
-    seen_invites: RwLock<HashMap<(String, String), InviteHistory>>,
+    seen_invites: RwLock<SeenInvites>,
+    invite_history_limit: usize,
+}
+
+/// How many VID pairs' invite histories an [`InMemoryRelationshipStore`]
+/// remembers by default. Past it the pair first recorded longest ago is
+/// forgotten: a copy of one of its *earlier* invites is then treated as new
+/// (a copy of the invite its current relationship records is still refused,
+/// from the thread digests).
+pub const DEFAULT_INVITE_HISTORY_PAIRS: usize = 10_000;
+
+/// Invite histories per pair, with the order pairs were first recorded in.
+#[derive(Default)]
+struct SeenInvites {
+    pairs: HashMap<(String, String), InviteHistory>,
+    order: std::collections::VecDeque<(String, String)>,
+}
+
+impl Default for InMemoryRelationshipStore {
+    fn default() -> Self {
+        Self {
+            inner: RwLock::default(),
+            capabilities: RwLock::default(),
+            digests: RwLock::default(),
+            reply_paths: RwLock::default(),
+            seen_invites: RwLock::default(),
+            invite_history_limit: DEFAULT_INVITE_HISTORY_PAIRS,
+        }
+    }
+}
+
+impl InMemoryRelationshipStore {
+    /// An empty store remembering the invite history of at most `limit` VID
+    /// pairs.
+    pub fn with_invite_history_limit(limit: usize) -> Self {
+        Self {
+            invite_history_limit: limit,
+            ..Self::default()
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -413,6 +456,7 @@ impl RelationshipStore for InMemoryRelationshipStore {
             .seen_invites
             .read()
             .await
+            .pairs
             .get(&key)
             .is_some_and(|seen| seen.contains(digest)))
     }
@@ -424,10 +468,17 @@ impl RelationshipStore for InMemoryRelationshipStore {
         digest: [u8; 32],
     ) -> Result<(), ATMError> {
         let key = (our_vid.to_string(), their_vid.to_string());
-        remember_invite(
-            self.seen_invites.write().await.entry(key).or_default(),
-            digest,
-        );
+        let mut seen = self.seen_invites.write().await;
+        if !seen.pairs.contains_key(&key) {
+            seen.order.push_back(key.clone());
+        }
+        remember_invite(seen.pairs.entry(key).or_default(), digest);
+        while seen.pairs.len() > self.invite_history_limit {
+            let Some(oldest) = seen.order.pop_front() else {
+                break;
+            };
+            seen.pairs.remove(&oldest);
+        }
         Ok(())
     }
 
@@ -2466,6 +2517,9 @@ impl TspOps<'_> {
         self.send_control(profile, their_did, &ControlMessage::cancel(thread_digest))
             .await?;
         store.set(our_did, their_did, next).await?;
+        // Kept, as a bounded retired entry, so a re-formed relationship does
+        // not reset the peer's refresh back-off.
+        self.atm.inner.tsp_key_state.retire(their_did);
         Ok(next)
     }
 
@@ -2640,6 +2694,7 @@ impl TspOps<'_> {
         store
             .set_thread_digests(our_did, their_did, ThreadDigests::default())
             .await?;
+        self.atm.inner.tsp_key_state.retire(their_did);
         Ok(())
     }
 
@@ -6101,6 +6156,30 @@ mod repeated_invite_tests {
             .await
             .unwrap();
         assert!(kv.0.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_in_memory_history_is_bounded_by_pairs() {
+        let store = InMemoryRelationshipStore::with_invite_history_limit(2);
+        for i in 0..5u8 {
+            store
+                .record_seen_invite(BOB, &format!("did:key:z{i}"), [i; 32])
+                .await
+                .unwrap();
+        }
+        assert_eq!(store.seen_invites.read().await.pairs.len(), 2);
+        assert!(
+            store
+                .has_seen_invite(BOB, "did:key:z4", &[4; 32])
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .has_seen_invite(BOB, "did:key:z0", &[0; 32])
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

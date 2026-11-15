@@ -173,12 +173,53 @@ pub struct RefreshToken {
     attempt: u64,
 }
 
+/// How many peers whose relationships have all ended a [`KeyStateTracker`]
+/// keeps the bookkeeping of, by default (see
+/// [`KeyStateTracker::retire`]).
+pub const DEFAULT_RETAINED_KEY_STATE: usize = 10_000;
+
+/// Peers whose relationship ended, oldest retirement first, so the oldest can
+/// be forgotten once there are more than the limit.
+#[derive(Debug, Default)]
+struct Retired {
+    order: std::collections::BTreeMap<u64, String>,
+    seq_of: std::collections::HashMap<String, u64>,
+    next: u64,
+}
+
 /// Per-peer freshness bookkeeping: when we last heard from a VID, when we last
 /// tried to resolve it, and whether that worked.
-#[derive(Debug, Default)]
+///
+/// # Bounded
+///
+/// Entries are created only for peers this endpoint holds a relationship
+/// with. When the relationship ends the entry is kept — so cancelling and
+/// re-forming a relationship cannot reset a refresh back-off or the silence
+/// measurement — but it is *retired* ([`retire`](Self::retire)): at most
+/// [`retained_limit`](Self::retained_limit) retired peers are kept (default
+/// [`DEFAULT_RETAINED_KEY_STATE`]), and past that the one retired longest ago
+/// is forgotten. A forgotten peer that re-forms a relationship starts again
+/// with no record: no silence to measure and no back-off, so its key state is
+/// confirmed afresh as the relationship forms — the behaviour before key
+/// state was retained. A peer whose message is accepted again inside a
+/// relationship ([`record_seen`](Self::record_seen)) is no longer retired.
+#[derive(Debug)]
 pub struct KeyStateTracker {
     last_seen_ms: Mutex<std::collections::HashMap<String, u64>>,
     resolutions: Mutex<std::collections::HashMap<String, ResolutionRecord>>,
+    retired: Mutex<Retired>,
+    retained_limit: std::sync::atomic::AtomicUsize,
+}
+
+impl Default for KeyStateTracker {
+    fn default() -> Self {
+        Self {
+            last_seen_ms: Mutex::default(),
+            resolutions: Mutex::default(),
+            retired: Mutex::default(),
+            retained_limit: std::sync::atomic::AtomicUsize::new(DEFAULT_RETAINED_KEY_STATE),
+        }
+    }
 }
 
 impl KeyStateTracker {
@@ -186,8 +227,87 @@ impl KeyStateTracker {
         Self::default()
     }
 
+    /// A tracker that keeps the bookkeeping of at most `limit` peers whose
+    /// relationships have ended ([`retire`](Self::retire)).
+    pub fn with_retained_limit(limit: usize) -> Self {
+        let tracker = Self::default();
+        tracker.set_retained_limit(limit);
+        tracker
+    }
+
+    /// Keep the bookkeeping of at most `limit` retired peers from now on,
+    /// forgetting the oldest at once if more are held.
+    pub fn set_retained_limit(&self, limit: usize) {
+        self.retained_limit
+            .store(limit, std::sync::atomic::Ordering::Relaxed);
+        self.evict_retired_over_limit();
+    }
+
+    /// How many retired peers' bookkeeping is kept at most.
+    pub fn retained_limit(&self) -> usize {
+        self.retained_limit
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// How many retired peers' bookkeeping is held now.
+    pub fn retired_len(&self) -> usize {
+        self.retired.lock().unwrap().seq_of.len()
+    }
+
+    /// The relationship with `vid` ended: keep its bookkeeping, but as one of
+    /// at most [`retained_limit`](Self::retained_limit) retired peers,
+    /// forgetting the one retired longest ago past that. A peer with no
+    /// bookkeeping is not recorded.
+    pub fn retire(&self, vid: &str) {
+        let known = self.last_seen_ms.lock().unwrap().contains_key(vid)
+            || self.resolutions.lock().unwrap().contains_key(vid);
+        if !known {
+            return;
+        }
+        {
+            let mut retired = self.retired.lock().unwrap();
+            let seq = retired.next;
+            retired.next += 1;
+            if let Some(old) = retired.seq_of.insert(vid.to_string(), seq) {
+                retired.order.remove(&old);
+            }
+            retired.order.insert(seq, vid.to_string());
+        }
+        self.evict_retired_over_limit();
+    }
+
+    /// `vid` is related again: its bookkeeping is no longer evictable.
+    fn revive(&self, vid: &str) {
+        let mut retired = self.retired.lock().unwrap();
+        if let Some(seq) = retired.seq_of.remove(vid) {
+            retired.order.remove(&seq);
+        }
+    }
+
+    fn evict_retired_over_limit(&self) {
+        let limit = self.retained_limit();
+        let victims: Vec<String> = {
+            let mut retired = self.retired.lock().unwrap();
+            let mut victims = Vec::new();
+            while retired.seq_of.len() > limit {
+                let Some((_, vid)) = retired.order.pop_first() else {
+                    break;
+                };
+                retired.seq_of.remove(&vid);
+                victims.push(vid);
+            }
+            victims
+        };
+        // Outside the retired lock: the tracker's locks are never nested.
+        for vid in victims {
+            self.last_seen_ms.lock().unwrap().remove(&vid);
+            self.resolutions.lock().unwrap().remove(&vid);
+        }
+    }
+
     /// Record that a message from `vid` was accepted.
     pub fn record_seen(&self, vid: &str, now_ms: u64) {
+        self.revive(vid);
         self.last_seen_ms
             .lock()
             .unwrap()
@@ -347,6 +467,7 @@ impl KeyStateTracker {
 
     /// Forget everything about `vid`.
     pub fn forget(&self, vid: &str) {
+        self.revive(vid);
         self.last_seen_ms.lock().unwrap().remove(vid);
         self.resolutions.lock().unwrap().remove(vid);
     }
@@ -355,6 +476,52 @@ impl KeyStateTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Retired peers are capped, oldest retirement first; live ones never
+    /// are; and a forgotten peer falls back to having no record.
+    #[test]
+    fn retired_key_state_is_bounded_and_eviction_falls_back_safely() {
+        let t = KeyStateTracker::with_retained_limit(3);
+        let limit = Duration::from_secs(60);
+        t.record_seen("live", 0);
+        for i in 0..10 {
+            let vid = format!("gone-{i}");
+            t.record_seen(&vid, 0);
+            let token = t.try_begin_refresh(&vid, limit, 0).unwrap();
+            t.record_refresh_failed(&token);
+            t.retire(&vid);
+            assert!(t.retired_len() <= 3, "the cap holds");
+        }
+        assert_eq!(t.retired_len(), 3);
+        // The most recently retired keep their back-off; the oldest are gone.
+        assert_eq!(t.consecutive_refresh_failures("gone-9"), 1);
+        assert_eq!(t.consecutive_refresh_failures("gone-0"), 0);
+        assert!(t.silent_longer_than("gone-9", Duration::ZERO, 1));
+        // Evicted: no silence to measure and no back-off — the state of a
+        // peer never seen, so its key state is confirmed afresh.
+        assert!(!t.silent_longer_than("gone-0", Duration::ZERO, 1));
+        assert!(t.may_resolve("gone-0", limit, 0));
+        assert_eq!(t.refresh_status("gone-0"), RefreshStatus::NeverAttempted);
+        // A live peer is never evicted.
+        assert!(t.silent_longer_than("live", Duration::ZERO, 1));
+
+        // Related again: no longer counted, so it is not evicted.
+        t.record_seen("gone-7", 5);
+        assert_eq!(t.retired_len(), 2);
+        for i in 10..20 {
+            let vid = format!("gone-{i}");
+            t.record_seen(&vid, 0);
+            t.retire(&vid);
+        }
+        assert!(t.silent_longer_than("gone-7", Duration::ZERO, 6));
+
+        // Lowering the limit evicts at once; a peer with no record is not
+        // retired.
+        t.set_retained_limit(1);
+        assert_eq!(t.retired_len(), 1);
+        t.retire("never-seen");
+        assert_eq!(t.retired_len(), 1);
+    }
 
     #[test]
     fn a_peer_with_no_record_has_no_silence_to_measure() {

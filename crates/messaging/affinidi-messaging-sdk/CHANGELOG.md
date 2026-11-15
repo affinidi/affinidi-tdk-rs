@@ -24,6 +24,16 @@ opt-in refusal of signed-only TSP messages (#1168)
   signed-only (Rev 3 §3.5) message — control messages included, which then
   never change relationship state — as a non-transient unpack failure. The
   default accepts them, as before.
+- **TSP key state is retired, bounded, when a relationship ends** (on a
+  received cancellation, `cancel_relationship` and `reset_relationship`): it
+  is kept so a re-formed relationship cannot reset the peer's refresh
+  back-off, but at most 10 000 retired peers are kept, oldest first
+  (`ATMConfigBuilder::with_tsp_retained_key_state_limit`). A forgotten peer
+  re-confirms its key state when a relationship re-forms.
+- **`InMemoryRelationshipStore`'s invite history is bounded** to
+  `DEFAULT_INVITE_HISTORY_PAIRS` (10 000) VID pairs, oldest first
+  (`InMemoryRelationshipStore::with_invite_history_limit`). Durable stores
+  keep their own policy.
 - Requires `affinidi-tsp` 0.4.3.
 
 ## [0.49.4] - 2026-11-15

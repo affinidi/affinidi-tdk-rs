@@ -110,6 +110,24 @@ impl TspAgent {
         self
     }
 
+    /// Keep the key-state bookkeeping of at most `limit` peers whose
+    /// relationships have ended (default
+    /// [`keystate::DEFAULT_RETAINED_KEY_STATE`]); past it the one whose
+    /// relationship ended longest ago is forgotten, and re-forming a
+    /// relationship with it confirms its key state afresh.
+    pub fn with_retained_key_state_limit(self, limit: usize) -> Self {
+        self.key_state.set_retained_limit(limit);
+        self
+    }
+
+    /// Remember the invite history (repeated-invite refusal) of at most
+    /// `limit` VID pairs (default [`store::DEFAULT_INVITE_HISTORY_PAIRS`]),
+    /// forgetting the pair first recorded longest ago.
+    pub fn with_invite_history_limit(self, limit: usize) -> Self {
+        self.store.set_invite_history_limit(limit);
+        self
+    }
+
     /// Set how this endpoint keeps a peer's key state fresh (Rev 3 §7.4.2).
     pub fn with_key_state_policy(mut self, policy: KeyStatePolicy) -> Self {
         self.key_state_policy = policy;
@@ -258,6 +276,7 @@ impl TspAgent {
             .transition_relationship(our_vid, their_vid, RelationshipEvent::SendCancel)?;
         self.store.clear_thread_digest(our_vid, their_vid);
         self.store.set_reply_path(our_vid, their_vid, Vec::new());
+        self.key_state.retire(their_vid);
 
         Ok(packed)
     }
@@ -1999,6 +2018,61 @@ mod tests {
                 u64::MAX
             ),
             "the bookkeeping survives the cancellation"
+        );
+    }
+
+    /// Peers whose relationships ended are retired, and retired key state is
+    /// capped: past the limit the oldest is forgotten, and a re-formed
+    /// relationship with it starts from no record (the pre-#1168 behaviour).
+    #[test]
+    fn retained_key_state_after_cancellations_is_bounded() {
+        let bob = TspAgent::new().with_retained_key_state_limit(2);
+        let b = PrivateVid::generate("did:example:bob");
+        let bob_public = b.to_resolved();
+        bob.add_private_vid(b);
+        for i in 0..5 {
+            let peer = TspAgent::new();
+            let id = format!("did:example:peer-{i}");
+            let p = PrivateVid::generate(id.as_str());
+            bob.add_verified_vid(p.to_resolved());
+            peer.add_private_vid(p);
+            peer.add_verified_vid(bob_public.clone());
+            let invite = peer
+                .send_relationship_invite(&id, "did:example:bob")
+                .unwrap();
+            bob.receive("did:example:bob", &invite.bytes).unwrap();
+            let accept = bob
+                .send_relationship_accept("did:example:bob", &id)
+                .unwrap();
+            peer.receive(&id, &accept.bytes).unwrap();
+            let cancel = peer
+                .send_relationship_cancel(&id, "did:example:bob")
+                .unwrap();
+            bob.receive("did:example:bob", &cancel.bytes).unwrap();
+            assert!(bob.key_state.retired_len() <= 2, "the cap holds");
+        }
+        assert_eq!(bob.key_state.retired_len(), 2);
+        let seen = |vid: &str| {
+            bob.key_state
+                .silent_longer_than(vid, std::time::Duration::ZERO, u64::MAX)
+        };
+        assert!(seen("did:example:peer-4"), "the most recent is kept");
+        assert!(!seen("did:example:peer-0"), "the oldest is forgotten");
+    }
+
+    /// The invite history is capped by pairs, oldest first.
+    #[test]
+    fn the_invite_history_is_bounded() {
+        let store = TspStore::new();
+        store.set_invite_history_limit(3);
+        for i in 0..10u8 {
+            store.record_seen_invite("did:example:bob", &format!("did:key:z{i}"), [i; 32]);
+            assert!(store.invite_history_pairs() <= 3);
+        }
+        assert!(store.has_seen_invite("did:example:bob", "did:key:z9", &[9; 32]));
+        assert!(
+            !store.has_seen_invite("did:example:bob", "did:key:z0", &[0; 32]),
+            "forgotten: a copy of it is treated as new"
         );
     }
 

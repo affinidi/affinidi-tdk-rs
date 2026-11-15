@@ -44,11 +44,24 @@ refusal of signed-only messages (#1168)
   the relationship is already gone, so `send_relationship_cancel` refused to
   answer; `answer_cancellation` packs the answer without running the state
   machine.
-- **Key state is kept across a cancellation.** Cancelling (sending or
-  receiving) the last relationship with a peer no longer drops its key-state
+- **Key state is kept across a cancellation, bounded.** Cancelling (sending
+  or receiving) a relationship with a peer no longer drops its key-state
   bookkeeping, so cancelling and re-forming a relationship cannot reset a
-  refresh back-off or the silence measurement. The tracker grows with the
-  peers ever related to, as the invite history does.
+  refresh back-off or the silence measurement. It is *retired* instead (new
+  `KeyStateTracker::retire`): state for live relationships is kept
+  unconditionally, and at most `retained_limit` retired peers are kept
+  (default `keystate::DEFAULT_RETAINED_KEY_STATE` = 10 000; configurable with
+  `KeyStateTracker::with_retained_limit` / `set_retained_limit` and
+  `TspAgent::with_retained_key_state_limit`), forgetting the one retired
+  longest ago. A forgotten peer that re-forms a relationship starts from no
+  record and has its key state confirmed afresh — the behaviour before this
+  release. A message accepted inside a relationship un-retires the peer.
+- **The invite history is bounded by pairs.** `TspStore` remembers the
+  invite history of at most `store::DEFAULT_INVITE_HISTORY_PAIRS` (10 000)
+  VID pairs, forgetting the pair first recorded longest ago
+  (`TspStore::set_invite_history_limit`, `TspAgent::with_invite_history_limit`).
+  A copy of an earlier invite of a forgotten pair is treated as new; a copy of
+  the invite its current relationship records is still refused.
 - Refusal messages inside `TspError::Discarded` are worded as the SDK's were.
 
 ## [0.4.2] - 2026-11-15
