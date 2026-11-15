@@ -19,7 +19,6 @@ use crate::{
 };
 pub use affinidi_crypto::KeyType;
 use affinidi_crypto::{JWK, OctectParams, Params};
-use base58::ToBase58;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -108,6 +107,30 @@ impl TryFrom<SecretShadow> for Secret {
 /// multicodec-encoded compressed form (`parity || x`), wrapped with
 /// the given public-key codec. Returns `KeyError` if `public_bytes` is
 /// too short for the claimed curve instead of panicking.
+/// Decodes a base58btc multibase string (`z` prefix) into a buffer that is
+/// wiped when dropped.
+fn decode_base58btc_zeroizing(
+    key: &str,
+) -> std::result::Result<Zeroizing<Vec<u8>>, affinidi_encoding::EncodingError> {
+    affinidi_encoding::decode_base58btc(key).map(Zeroizing::new)
+}
+
+/// Refuses key bytes whose length differs from what their multicodec requires
+/// (codecs without a fixed length pass).
+fn check_key_length(encoded: &MultiEncoded) -> Result<()> {
+    let codec = encoded.codec_type();
+    match codec.expected_key_length() {
+        Some(expected) if encoded.data().len() != expected => {
+            Err(SecretsResolverError::KeyError(format!(
+                "Invalid key length for codec 0x{:x}: expected {expected} bytes, got {}",
+                codec.to_u64(),
+                encoded.data().len()
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
 fn compress_ec_point(
     public_bytes: &[u8],
     compressed_len: usize,
@@ -375,15 +398,12 @@ impl Secret {
     /// kid: Optional Key ID (or random if not provided)
     ///
     pub fn from_multibase(private: &str, kid: Option<&str>) -> Result<Self> {
-        let decoded = Zeroizing::new(
-            multibase::decode(private)
-                .map_err(|e| {
-                    SecretsResolverError::KeyError(format!("Failed to decode private key: {e}"))
-                })?
-                .1,
-        );
+        let decoded = decode_base58btc_zeroizing(private).map_err(|e| {
+            SecretsResolverError::KeyError(format!("Failed to decode private key: {e}"))
+        })?;
 
         let private_bytes = MultiEncoded::new(decoded.as_slice())?;
+        check_key_length(private_bytes)?;
 
         match private_bytes.codec() {
             ED25519_PRIV => {
@@ -480,17 +500,21 @@ impl Secret {
 
     /// Decodes a multikey to raw bytes held in [`Zeroizing`], so a decoded
     /// private key is wiped when it is dropped.
+    ///
+    /// The key must be base58btc multibase (`z` prefix), the encoding every
+    /// multikey uses, and for a codec with a known key length
+    /// ([`Codec::expected_key_length`](affinidi_encoding::Codec::expected_key_length))
+    /// carry exactly that many bytes: the same checks as
+    /// [`affinidi_encoding::decode_multikey_checked`], with the intermediate
+    /// buffers wiped.
     pub fn decode_multikey_zeroizing(key: &str) -> Result<Zeroizing<Vec<u8>>> {
-        let decoded = Zeroizing::new(
-            multibase::decode(key)
-                .map_err(|e| {
-                    SecretsResolverError::KeyError(format!("Failed to multibase.decode key: {e}"))
-                })?
-                .1,
-        );
+        let decoded = decode_base58btc_zeroizing(key).map_err(|e| {
+            SecretsResolverError::KeyError(format!("Failed to multibase.decode key: {e}"))
+        })?;
         let bytes = MultiEncoded::new(decoded.as_slice()).map_err(|e| {
             SecretsResolverError::KeyError(format!("Failed to load decoded key: {e}"))
         })?;
+        check_key_length(bytes)?;
         Ok(Zeroizing::new(bytes.data().to_vec()))
     }
 
@@ -519,10 +543,7 @@ impl Secret {
                 ));
             }
         };
-        Ok(multibase::encode(
-            multibase::Base::Base58Btc,
-            encoded.into_bytes(),
-        ))
+        Ok(affinidi_encoding::encode_base58btc(&encoded.into_bytes()))
     }
 
     /// Generates a hash of the multikey - useful where you want to pre-rotate keys
@@ -547,7 +568,10 @@ impl Secret {
         bytes.extend_from_slice(code_varint);
         bytes.extend_from_slice(len_varint);
         bytes.extend_from_slice(&hash);
-        Ok(bytes.to_base58())
+        // Bare base58btc: the multibase `z` prefix is not part of this format.
+        let mut encoded = affinidi_encoding::encode_base58btc(&bytes);
+        encoded.remove(0);
+        Ok(encoded)
     }
 
     /// Get the multibase (Base58btc) encoded private key
@@ -588,10 +612,7 @@ impl Secret {
             }
         };
         let encoded = Zeroizing::new(encoded.into_bytes());
-        Ok(multibase::encode(
-            multibase::Base::Base58Btc,
-            encoded.as_slice(),
-        ))
+        Ok(affinidi_encoding::encode_base58btc(encoded.as_slice()))
     }
 
     /// Get the public key bytes
@@ -887,6 +908,37 @@ mod tests {
     }
 
     #[test]
+    fn decode_multikey_checks_the_key_length() {
+        // An Ed25519 public key one byte short.
+        let short = affinidi_encoding::encode_multikey(crate::multicodec::ED25519_PUB, &[7u8; 31]);
+        let err = Secret::decode_multikey(&short).unwrap_err();
+        assert!(
+            err.to_string().contains("expected 32 bytes, got 31"),
+            "{err}"
+        );
+        // A codec without a fixed length passes through.
+        let unknown = affinidi_encoding::encode_multikey(0x3f, &[1, 2, 3]);
+        assert_eq!(Secret::decode_multikey(&unknown).unwrap(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn decode_multikey_requires_base58btc() {
+        // The same key in base16 multibase (`f` prefix).
+        let key = Secret::generate_ed25519(None, Some(&[3u8; 32]));
+        let multikey = key.get_public_keymultibase().unwrap();
+        let bytes = affinidi_encoding::decode_base58btc(&multikey).unwrap();
+        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        assert!(Secret::decode_multikey(&format!("f{hex}")).is_err());
+        assert!(Secret::from_multibase(&format!("f{hex}"), None).is_err());
+    }
+
+    #[test]
+    fn from_multibase_refuses_a_short_private_key() {
+        let short = affinidi_encoding::encode_multikey(crate::multicodec::ED25519_PRIV, &[7u8; 31]);
+        assert!(Secret::from_multibase(&short, None).is_err());
+    }
+
+    #[test]
     fn check_secret_deserialize() {
         let txt = r#"{
         "id": "did:web:localhost%3A7037:mediator:v1:.well-known#key-2",
@@ -1157,7 +1209,7 @@ mod tests {
             };
 
             let pub_mb = s.get_public_keymultibase().unwrap();
-            let (_, pub_raw) = multibase::decode(&pub_mb).unwrap();
+            let pub_raw = affinidi_encoding::decode_base58btc(&pub_mb).unwrap();
             let expected = varint_prefix(*pub_code);
             assert_eq!(
                 &pub_raw[..expected.len()],
@@ -1167,7 +1219,7 @@ mod tests {
             assert_eq!(pub_raw.len() - expected.len(), *pub_len);
 
             let priv_mb = s.get_private_keymultibase().unwrap();
-            let (_, priv_raw) = multibase::decode(&priv_mb).unwrap();
+            let priv_raw = affinidi_encoding::decode_base58btc(&priv_mb).unwrap();
             let expected = varint_prefix(*priv_code);
             assert_eq!(
                 &priv_raw[..expected.len()],
@@ -1184,7 +1236,7 @@ mod tests {
         use crate::multicodec::SLH_DSA_SHA2_128S_PUB;
         let s = Secret::generate_slh_dsa_sha2_128s(None);
         let pub_mb = s.get_public_keymultibase().unwrap();
-        let (_, raw) = multibase::decode(&pub_mb).unwrap();
+        let raw = affinidi_encoding::decode_base58btc(&pub_mb).unwrap();
         let expected = varint_prefix(SLH_DSA_SHA2_128S_PUB);
         assert_eq!(&raw[..expected.len()], expected.as_slice());
         assert_eq!(raw.len() - expected.len(), 32);

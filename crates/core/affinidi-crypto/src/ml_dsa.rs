@@ -219,7 +219,7 @@ pub fn verify_ml_dsa_44(public_key: &[u8], data: &[u8], signature: &[u8]) -> Res
     let sig = Signature::<MlDsa44>::decode(&sig_enc)
         .ok_or_else(|| CryptoError::KeyError("Invalid ML-DSA-44 signature encoding".into()))?;
     vk.verify(data, &sig)
-        .map_err(|e| CryptoError::KeyError(format!("ML-DSA-44 verification failed: {e}")))
+        .map_err(|e| CryptoError::Verification(format!("ML-DSA-44 verification failed: {e}")))
 }
 
 /// Verifies an ML-DSA-65 signature.
@@ -237,7 +237,7 @@ pub fn verify_ml_dsa_65(public_key: &[u8], data: &[u8], signature: &[u8]) -> Res
     let sig = Signature::<MlDsa65>::decode(&sig_enc)
         .ok_or_else(|| CryptoError::KeyError("Invalid ML-DSA-65 signature encoding".into()))?;
     vk.verify(data, &sig)
-        .map_err(|e| CryptoError::KeyError(format!("ML-DSA-65 verification failed: {e}")))
+        .map_err(|e| CryptoError::Verification(format!("ML-DSA-65 verification failed: {e}")))
 }
 
 /// Verifies an ML-DSA-87 signature.
@@ -255,7 +255,7 @@ pub fn verify_ml_dsa_87(public_key: &[u8], data: &[u8], signature: &[u8]) -> Res
     let sig = Signature::<MlDsa87>::decode(&sig_enc)
         .ok_or_else(|| CryptoError::KeyError("Invalid ML-DSA-87 signature encoding".into()))?;
     vk.verify(data, &sig)
-        .map_err(|e| CryptoError::KeyError(format!("ML-DSA-87 verification failed: {e}")))
+        .map_err(|e| CryptoError::Verification(format!("ML-DSA-87 verification failed: {e}")))
 }
 
 #[cfg(test)]
@@ -334,7 +334,8 @@ mod tests {
         let kp = generate_ml_dsa_44(Some(&[1u8; 32]));
         let mut sig = sign_ml_dsa_44(&kp.private_bytes, b"m").unwrap();
         sig[0] ^= 0xff;
-        assert!(verify_ml_dsa_44(&kp.public_bytes, b"m", &sig).is_err());
+        let err = verify_ml_dsa_44(&kp.public_bytes, b"m", &sig).unwrap_err();
+        assert!(matches!(err, CryptoError::Verification(_)), "got {err:?}");
     }
 
     #[test]

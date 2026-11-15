@@ -1,5 +1,38 @@
 # Affinidi Crypto Changelog
 
+## [0.3.4] - 2026-11-15
+
+one verify-result shape and one Ed25519 policy (non-breaking part of #1143)
+
+**Behaviour changes (R3.6).** Released as a patch: no signature changes and
+nothing removed. Consumers should still read this list.
+
+- **Changed: strict Ed25519 for JWS.** `jose::signing::verify` (and the
+  `jose::traits::Ed25519` `JwsVerifier`, DIDComm's `jws::verify_ed25519` and
+  everything else built on them) now uses `ed25519-dalek`'s
+  `verify_strict`, the policy data-integrity, TSP and OpenID4VC already
+  used. It refuses small-order public keys and small-order `R` points, which
+  plain `verify` accepted. **A non-canonical or crafted signature that used to
+  verify is now refused**; signatures from any RFC 8032 signer verify as
+  before (the JOSE golden vectors are unchanged). No JWS interop test needed
+  the lenient check, so there is no lenient exception.
+- **Changed: ML-DSA and SLH-DSA report a failed verification as
+  `CryptoError::Verification`.** `ml_dsa::verify_ml_dsa_44/65/87` and
+  `slh_dsa::verify_slh_dsa_sha2_128s` returned `CryptoError::KeyError("…
+  verification failed")` for a signature that does not verify. A malformed
+  key or signature is still `KeyError`. Callers that matched on `KeyError` to
+  detect a bad signature must match `Verification`.
+- **Added:** `p256::verify_signature`, returning `Result<()>` with
+  `CryptoError::Verification` for a signature that does not verify, the shape
+  every other verify function here has. `p256::verify` (`Result<bool>`) is
+  **deprecated** in its favour and otherwise unchanged.
+- Changing the existing signatures (`p256::verify` to `Result<()>`) and the
+  other breaking parts of #1143 wait for affinidi-crypto 0.4: the published
+  `trust-tasks-proof` 0.39 requires affinidi-crypto 0.3 and
+  affinidi-did-resolver-cache-sdk 0.8 and mixes their types, so a 0.4 cascade
+  (which reaches did-common and cache-sdk) cannot build in this workspace
+  until it moves.
+
 ## [0.3.3] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

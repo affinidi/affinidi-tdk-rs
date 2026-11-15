@@ -73,6 +73,22 @@ pub struct EddsaJcs2022;
 /// `eddsa-rdfc-2022` — EdDSA signatures over RDFC-canonicalized documents.
 pub struct EddsaRdfc2022;
 
+/// Maps an `affinidi-crypto` verify error onto the suite's signature failure:
+/// a signature that does not verify is `CryptoError::Verification`
+/// (`Invalid`); anything else (bad key, malformed or wrong-length signature)
+/// is `Malformed`.
+fn crypto_verify_error(
+    suite: CryptoSuite,
+    error: &affinidi_crypto::CryptoError,
+) -> DataIntegrityError {
+    use crate::SignatureFailure;
+    let reason = match error {
+        affinidi_crypto::CryptoError::Verification(_) => SignatureFailure::Invalid,
+        _ => SignatureFailure::Malformed,
+    };
+    DataIntegrityError::InvalidSignature { suite, reason }
+}
+
 fn eddsa_verify(
     suite: CryptoSuite,
     key: &[u8],
@@ -152,23 +168,12 @@ impl CryptoSuiteOps for EcdsaJcs2019 {
         &[KeyType::P256]
     }
     fn verify(&self, key: &[u8], data: &[u8], sig: &[u8]) -> Result<(), DataIntegrityError> {
-        use crate::SignatureFailure;
-
         // `data` is the pipeline's `proof_hash || doc_hash`. ECDSA hashes its
         // input as part of signing, so ES256 applies SHA-256 over those 64
         // bytes — unlike Ed25519, which signs them directly. Both match their
         // respective specs; the difference is not a bug to be normalised away.
-        match affinidi_crypto::p256::verify(key, data, sig) {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(DataIntegrityError::InvalidSignature {
-                suite: CryptoSuite::EcdsaJcs2019,
-                reason: SignatureFailure::Invalid,
-            }),
-            Err(_) => Err(DataIntegrityError::InvalidSignature {
-                suite: CryptoSuite::EcdsaJcs2019,
-                reason: SignatureFailure::Malformed,
-            }),
-        }
+        affinidi_crypto::p256::verify_signature(key, data, sig)
+            .map_err(|e| crypto_verify_error(CryptoSuite::EcdsaJcs2019, &e))
     }
 }
 
@@ -218,13 +223,8 @@ fn ml_dsa_44_verify(
     data: &[u8],
     sig: &[u8],
 ) -> Result<(), DataIntegrityError> {
-    use crate::SignatureFailure;
-    affinidi_crypto::ml_dsa::verify_ml_dsa_44(key, data, sig).map_err(|_| {
-        DataIntegrityError::InvalidSignature {
-            suite,
-            reason: SignatureFailure::Invalid,
-        }
-    })
+    affinidi_crypto::ml_dsa::verify_ml_dsa_44(key, data, sig)
+        .map_err(|e| crypto_verify_error(suite, &e))
 }
 
 #[cfg(feature = "ml-dsa")]
@@ -277,13 +277,8 @@ fn slh_dsa_verify(
     data: &[u8],
     sig: &[u8],
 ) -> Result<(), DataIntegrityError> {
-    use crate::SignatureFailure;
-    affinidi_crypto::slh_dsa::verify_slh_dsa_sha2_128s(key, data, sig).map_err(|_| {
-        DataIntegrityError::InvalidSignature {
-            suite,
-            reason: SignatureFailure::Invalid,
-        }
-    })
+    affinidi_crypto::slh_dsa::verify_slh_dsa_sha2_128s(key, data, sig)
+        .map_err(|e| crypto_verify_error(suite, &e))
 }
 
 #[cfg(feature = "slh-dsa")]
@@ -356,5 +351,28 @@ mod tests {
                 other => panic!("expected a malformed signature, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn ecdsa_p256_tells_invalid_from_malformed() {
+        let key_pair = affinidi_crypto::p256::generate(None).unwrap();
+        let signature = affinidi_crypto::p256::sign(&key_pair.private_bytes, b"data").unwrap();
+        let ops = EcdsaJcs2019;
+        ops.verify(&key_pair.public_bytes, b"data", &signature)
+            .unwrap();
+        assert!(matches!(
+            ops.verify(&key_pair.public_bytes, b"other", &signature),
+            Err(DataIntegrityError::InvalidSignature {
+                suite: CryptoSuite::EcdsaJcs2019,
+                reason: SignatureFailure::Invalid,
+            })
+        ));
+        assert!(matches!(
+            ops.verify(&key_pair.public_bytes, b"data", &signature[..10]),
+            Err(DataIntegrityError::InvalidSignature {
+                suite: CryptoSuite::EcdsaJcs2019,
+                reason: SignatureFailure::Malformed,
+            })
+        ));
     }
 }
