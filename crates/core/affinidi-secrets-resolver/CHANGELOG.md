@@ -1,5 +1,30 @@
 # Affinidi Secrets Manager
 
+## Unreleased (0.5.19) — JWK-loaded EC secrets match generated ones; JWK key material is validated
+
+**Behaviour changes (R3.6)** (#1050). Released as a patch: no signature
+change, and the old behaviour was a bug (a JWK-loaded EC secret could not
+produce a multikey).
+
+- **Fixed:** `Secret::from_jwk` (and so every `Secret` deserialized from a
+  `privateKeyJwk`, e.g. from a keyring or environment file) stores EC public
+  bytes as the SEC1 uncompressed point `0x04 || x || y`, as the
+  `generate_*` constructors do. It stored `x || y`, so
+  `get_public_keymultibase()` / `get_public_keymultibase_hash()` failed with
+  "public_bytes too short to compress" and a serde round trip changed
+  `get_public_bytes()`. **`get_public_bytes()` for a JWK-loaded P-256,
+  P-384, P-521 or secp256k1 secret is now one byte longer** (65/97/133/65
+  bytes, leading `0x04`); a caller that worked around the old 64-byte form
+  must drop that workaround.
+- **Stricter:** `from_jwk` refuses key material of the wrong length (`d`,
+  `x`, `y` must be 32 bytes for Ed25519, X25519, P-256 and secp256k1, 48 for
+  P-384, 66 for P-521), an EC JWK naming a non-EC curve, and, where the curve
+  is compiled in, a JWK whose public part is not the public key of `d`. Such
+  JWKs used to load and then fail later (or panic, see below).
+- **Fixed:** `Secret::to_x25519` returns an error instead of panicking on an
+  Ed25519 private key shorter than 32 bytes.
+
+
 ## Unreleased (0.5.18) — affinidi-crypto 0.3
 
 - **Changed:** requires `affinidi-crypto` 0.3. `Secret::generate_ed25519`,

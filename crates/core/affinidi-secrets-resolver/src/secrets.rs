@@ -133,6 +133,87 @@ fn compress_ec_point(
     Ok(MultiEncodedBuf::encode_bytes(codec, &compressed))
 }
 
+/// Refuses a JWK member whose decoded length is not the curve's.
+fn check_len(curve: &str, member: &str, bytes: &[u8], expected: usize) -> Result<()> {
+    if bytes.len() != expected {
+        return Err(SecretsResolverError::KeyError(format!(
+            "{curve} JWK `{member}` must be {expected} bytes, got {}",
+            bytes.len()
+        )));
+    }
+    Ok(())
+}
+
+fn pair_mismatch(key_type: KeyType) -> SecretsResolverError {
+    SecretsResolverError::KeyError(format!(
+        "{key_type:?} JWK public key does not match its private key `d`"
+    ))
+}
+
+/// Checks that the SEC1 uncompressed `public` point is the public key of `d`.
+/// A curve whose feature is not compiled in is only length-checked.
+fn check_ec_pair(key_type: KeyType, d: &[u8], public: &[u8]) -> Result<()> {
+    let derived: Vec<u8> = match key_type {
+        #[cfg(feature = "p256")]
+        KeyType::P256 => {
+            affinidi_crypto::p256::generate(Some(d))?
+                .into_parts()
+                .public_bytes
+        }
+        #[cfg(feature = "k256")]
+        KeyType::Secp256k1 => {
+            affinidi_crypto::secp256k1::generate(Some(d))?
+                .into_parts()
+                .public_bytes
+        }
+        #[cfg(feature = "p384")]
+        KeyType::P384 => {
+            affinidi_crypto::p384::generate(Some(d))?
+                .into_parts()
+                .public_bytes
+        }
+        #[cfg(feature = "p521")]
+        KeyType::P521 => {
+            affinidi_crypto::p521::generate(Some(d))?
+                .into_parts()
+                .public_bytes
+        }
+        _ => {
+            let _ = d;
+            return Ok(());
+        }
+    };
+    if derived != public {
+        return Err(pair_mismatch(key_type));
+    }
+    Ok(())
+}
+
+/// Checks that `x` is the public key of `d` for Ed25519 / X25519.
+fn check_okp_pair(key_type: KeyType, d: &[u8], x: &[u8]) -> Result<()> {
+    let Some(seed) = d.first_chunk::<32>() else {
+        return Err(pair_mismatch(key_type));
+    };
+    let derived: [u8; 32] = match key_type {
+        KeyType::X25519 => PublicKey::from(&StaticSecret::from(*seed)).to_bytes(),
+        #[cfg(feature = "ed25519")]
+        KeyType::Ed25519 => {
+            let public = affinidi_crypto::ed25519::generate(Some(seed))
+                .into_parts()
+                .public_bytes;
+            match public.as_slice().try_into() {
+                Ok(public) => public,
+                Err(_) => return Err(pair_mismatch(key_type)),
+            }
+        }
+        _ => return Ok(()),
+    };
+    if derived != x {
+        return Err(pair_mismatch(key_type));
+    }
+    Ok(())
+}
+
 impl Secret {
     /// Helper function to get raw bytes
     fn convert_to_raw(input: &str) -> Result<Vec<u8>> {
@@ -142,36 +223,78 @@ impl Secret {
     }
 
     /// Converts a JWK to a Secret
+    ///
+    /// The key material is validated: `d`, `x` and `y` must have the lengths
+    /// the curve requires (32 bytes for Ed25519, X25519, P-256 and secp256k1
+    /// coordinates; 48 for P-384; 66 for P-521), an EC JWK must name one of
+    /// those four curves, and where the curve is compiled in, `x`/`y` must be
+    /// the public key of `d`.
+    ///
+    /// EC public bytes are held as the SEC1 uncompressed point
+    /// `0x04 || x || y`, the same form the `generate_*` constructors produce,
+    /// so a secret loaded from a JWK and one generated from the same scalar
+    /// are indistinguishable.
     pub fn from_jwk(jwk: &JWK) -> Result<Self> {
+        let missing_d =
+            || SecretsResolverError::KeyError("Must have secret key available".to_string());
         match &jwk.params {
             Params::EC(params) => {
-                let mut x = Secret::convert_to_raw(&params.x)?;
-                let mut y = Secret::convert_to_raw(&params.y)?;
+                let key_type = KeyType::try_from(params.curve.as_str())?;
+                let coord_len = match key_type {
+                    KeyType::P256 | KeyType::Secp256k1 => 32,
+                    KeyType::P384 => 48,
+                    KeyType::P521 => 66,
+                    other => {
+                        return Err(SecretsResolverError::KeyError(format!(
+                            "EC JWK names curve {:?} ({other:?}), which is not an EC curve",
+                            params.curve
+                        )));
+                    }
+                };
+                let x = Secret::convert_to_raw(&params.x)?;
+                let y = Secret::convert_to_raw(&params.y)?;
+                let d = Zeroizing::new(Secret::convert_to_raw(
+                    params.d.as_ref().ok_or_else(missing_d)?,
+                )?);
+                check_len(&params.curve, "x", &x, coord_len)?;
+                check_len(&params.curve, "y", &y, coord_len)?;
+                check_len(&params.curve, "d", &d, coord_len)?;
 
-                x.append(&mut y);
+                let mut public_bytes = Vec::with_capacity(1 + 2 * coord_len);
+                public_bytes.push(0x04);
+                public_bytes.extend_from_slice(&x);
+                public_bytes.extend_from_slice(&y);
+                check_ec_pair(key_type, &d, &public_bytes)?;
+
                 Ok(Secret {
-                    id: jwk.key_id.as_ref().unwrap_or(&"".to_string()).to_string(),
+                    id: jwk.key_id.clone().unwrap_or_default(),
                     type_: SecretType::JsonWebKey2020,
                     secret_material: SecretMaterial::JWK(jwk.to_owned()),
-                    private_bytes: Secret::convert_to_raw(params.d.as_ref().ok_or(
-                        SecretsResolverError::KeyError(
-                            "Must have secret key available".to_string(),
-                        ),
-                    )?)?,
-                    public_bytes: x,
-                    key_type: KeyType::try_from(params.curve.as_str())?,
+                    private_bytes: d.to_vec(),
+                    public_bytes,
+                    key_type,
                 })
             }
-            Params::OKP(params) => Ok(Secret {
-                id: jwk.key_id.as_ref().unwrap_or(&"".to_string()).to_string(),
-                type_: SecretType::JsonWebKey2020,
-                secret_material: SecretMaterial::JWK(jwk.to_owned()),
-                private_bytes: Secret::convert_to_raw(params.d.as_ref().ok_or(
-                    SecretsResolverError::KeyError("Must have secret key available".to_string()),
-                )?)?,
-                public_bytes: Secret::convert_to_raw(&params.x)?,
-                key_type: KeyType::try_from(params.curve.as_str())?,
-            }),
+            Params::OKP(params) => {
+                let key_type = KeyType::try_from(params.curve.as_str())?;
+                let x = Secret::convert_to_raw(&params.x)?;
+                let d = Zeroizing::new(Secret::convert_to_raw(
+                    params.d.as_ref().ok_or_else(missing_d)?,
+                )?);
+                if matches!(key_type, KeyType::Ed25519 | KeyType::X25519) {
+                    check_len(&params.curve, "x", &x, 32)?;
+                    check_len(&params.curve, "d", &d, 32)?;
+                    check_okp_pair(key_type, &d, &x)?;
+                }
+                Ok(Secret {
+                    id: jwk.key_id.clone().unwrap_or_default(),
+                    type_: SecretType::JsonWebKey2020,
+                    secret_material: SecretMaterial::JWK(jwk.to_owned()),
+                    private_bytes: d.to_vec(),
+                    public_bytes: x,
+                    key_type,
+                })
+            }
             // `Params` is `#[non_exhaustive]`; reject unknown future kinds.
             _ => Err(SecretsResolverError::KeyError(
                 "unsupported JWK parameter kind".to_string(),
@@ -500,7 +623,12 @@ impl Secret {
             // Convert to X25519 Secret bytes
             let x25519_secret =
                 Zeroizing::new(affinidi_crypto::ed25519::ed25519_private_to_x25519(
-                    self.private_bytes.first_chunk::<32>().unwrap(),
+                    self.private_bytes.first_chunk::<32>().ok_or_else(|| {
+                        SecretsResolverError::KeyError(format!(
+                            "Ed25519 private key must be 32 bytes, got {}",
+                            self.private_bytes.len()
+                        ))
+                    })?,
                 ));
 
             let x25519_sk = StaticSecret::from(*x25519_secret);
@@ -574,6 +702,97 @@ mod tests {
     use super::Secret;
     use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
     use serde_json::json;
+
+    /// generate -> serde -> deserialize keeps every EC secret's public bytes
+    /// and multikey (#1050).
+    #[test]
+    fn ec_secrets_round_trip_through_serde() {
+        let secrets = [
+            Secret::generate_p256(Some("k"), None).unwrap(),
+            Secret::generate_p384(Some("k"), None).unwrap(),
+            Secret::generate_p521(Some("k"), None).unwrap(),
+            Secret::generate_secp256k1(Some("k"), None).unwrap(),
+            Secret::generate_ed25519(Some("k"), None),
+            Secret::generate_x25519(Some("k"), None).unwrap(),
+        ];
+        for secret in secrets {
+            let json = serde_json::to_string(&secret).unwrap();
+            let back: Secret = serde_json::from_str(&json).unwrap();
+            let kt = secret.get_key_type();
+            assert_eq!(back.get_key_type(), kt);
+            assert_eq!(back.get_public_bytes(), secret.get_public_bytes(), "{kt:?}");
+            assert_eq!(
+                back.get_private_bytes(),
+                secret.get_private_bytes(),
+                "{kt:?}"
+            );
+            assert_eq!(
+                back.get_public_keymultibase().unwrap(),
+                secret.get_public_keymultibase().unwrap(),
+                "{kt:?}"
+            );
+            assert_eq!(
+                back.get_public_keymultibase_hash().unwrap(),
+                secret.get_public_keymultibase_hash().unwrap(),
+                "{kt:?}"
+            );
+        }
+    }
+
+    fn jwk_with(mut jwk: serde_json::Value, member: &str, bytes: &[u8]) -> serde_json::Value {
+        jwk[member] = json!(BASE64_URL_SAFE_NO_PAD.encode(bytes));
+        jwk
+    }
+
+    /// Wrong-length JWK members are refused up front, not left to panic
+    /// later (#1050).
+    #[test]
+    fn from_jwk_refuses_wrong_lengths() {
+        let ed = json!({
+            "crv": "Ed25519",
+            "d": "ymjvUTVuUPzGF5ui12LfreO8bjZ_LbnOrh0sk0xCxMM",
+            "kty": "OKP",
+            "x": "d17TbZmkoYHZUQpzJTcuOtq0tjWYm8CKvKGYHDW6ZaE"
+        });
+        assert!(Secret::from_jwk_value("k", &ed).is_ok());
+        // A short `d` used to panic in `to_x25519`.
+        assert!(Secret::from_jwk_value("k", &jwk_with(ed.clone(), "d", &[1u8; 16])).is_err());
+        assert!(Secret::from_jwk_value("k", &jwk_with(ed.clone(), "x", &[1u8; 31])).is_err());
+
+        let p256 = serde_json::to_value(Secret::generate_p256(None, None).unwrap()).unwrap();
+        assert!(serde_json::from_value::<Secret>(p256.clone()).is_ok());
+        for (member, len) in [("x", 31), ("y", 33), ("d", 16)] {
+            let mut bad = p256.clone();
+            bad["privateKeyJwk"][member] = json!(BASE64_URL_SAFE_NO_PAD.encode(vec![1u8; len]));
+            assert!(
+                serde_json::from_value::<Secret>(bad).is_err(),
+                "P-256 {member} of {len} bytes accepted"
+            );
+        }
+    }
+
+    /// A JWK whose public part does not belong to `d` is refused.
+    #[test]
+    fn from_jwk_refuses_mismatched_pairs() {
+        let a = serde_json::to_value(Secret::generate_p256(None, None).unwrap()).unwrap();
+        let b = serde_json::to_value(Secret::generate_p256(None, None).unwrap()).unwrap();
+        let mut mixed = a.clone();
+        mixed["privateKeyJwk"]["d"] = b["privateKeyJwk"]["d"].clone();
+        assert!(serde_json::from_value::<Secret>(mixed).is_err());
+
+        let a = serde_json::to_value(Secret::generate_ed25519(None, None)).unwrap();
+        let b = serde_json::to_value(Secret::generate_ed25519(None, None)).unwrap();
+        let mut mixed = a.clone();
+        mixed["privateKeyJwk"]["d"] = b["privateKeyJwk"]["d"].clone();
+        assert!(serde_json::from_value::<Secret>(mixed).is_err());
+    }
+
+    #[test]
+    fn from_jwk_refuses_okp_curve_in_ec_params() {
+        let mut v = serde_json::to_value(Secret::generate_p256(None, None).unwrap()).unwrap();
+        v["privateKeyJwk"]["crv"] = json!("Ed25519");
+        assert!(serde_json::from_value::<Secret>(v).is_err());
+    }
 
     #[test]
     fn check_hash() {

@@ -2,6 +2,32 @@
 
 ## Changelog history
 
+## Unreleased
+
+### 0.1.6 — variable-size primitives take their lead size from the code
+
+**Behaviour change (R3.6)** (#1005). Released as a patch: it brings
+variable-size primitives in line with the CESR spec and keripy, and no caller
+in this workspace or affinidi-keri-rs uses a variable-size code.
+
+- **Fixed:** the matter table gave lead size 0 to `5A`, `6A`, `5B`, `6B` and
+  the big forms `8AAA`, `9AAA`, `8AAB`, `9AAB`. The lead size is part of the
+  code: `4x`/`7AAx` 0, `5x`/`8AAx` 1, `6x`/`9AAx` 2 (keripy `StrB64_L0/L1/L2`,
+  `Bytes_L0/L1/L2`). The comments ("String variable length base2", ...) are
+  corrected too.
+- **Fixed:** `Matter::from_qb64` / `from_qb2` remove exactly the code's lead
+  bytes and refuse non-zero ones with `CesrError::NonCanonical`. They used to
+  strip up to two leading zero bytes whatever the code said, so a raw value
+  starting with `0x00` was silently shortened.
+- **Changed:** `Matter::new` with a variable-size code picks the family
+  member by lead size, as keripy does, and moves a value too long for a
+  two-character count to the big form. `Matter::new("4B", <2 bytes>)` now has
+  code `6B` (it emitted a `4B` that keripy reads as 3 bytes). `Matter::code()`
+  returns the chosen code.
+- The `matter` fuzz target now asserts the round trip for variable-size codes
+  too.
+
+
 ## 12th November 2026
 
 ### 0.1.5 — fixed-size primitives and indexed signatures refuse non-zero pad bits

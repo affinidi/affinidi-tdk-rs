@@ -19,4 +19,21 @@ pub enum EncodingError {
 
     #[error("Decoding error: {0}")]
     Decoding(String),
+
+    /// The key bytes under a known multicodec are not the length that codec
+    /// requires (see [`crate::Codec::expected_key_length`]).
+    #[error("Invalid key length for codec 0x{codec:x}: expected {expected} bytes, got {actual}")]
+    InvalidKeyLength {
+        codec: u64,
+        expected: usize,
+        actual: usize,
+    },
+
+    /// A multikey carried a different multicodec from the one required.
+    #[error("Unexpected codec: expected 0x{expected:x}, got 0x{actual:x}")]
+    UnexpectedCodec { expected: u64, actual: u64 },
+
+    /// The string is not a `did:key` DID.
+    #[error("Invalid did:key: {0}")]
+    InvalidDidKey(String),
 }

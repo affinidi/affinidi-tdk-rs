@@ -21,8 +21,23 @@ pub struct Matter {
 
 impl Matter {
     /// Create a new Matter from a code and raw bytes.
+    ///
+    /// For a variable-length code the code names a family (`4A`/`5A`/`6A`,
+    /// `4B`/`5B`/`6B` and their `7AAx`/`8AAx`/`9AAx` big forms), and the
+    /// member is chosen from the raw size, as keripy does: the lead size
+    /// (`0`, `1` or `2` zero bytes to reach whole triplets) picks `4`/`5`/`6`
+    /// (or `7`/`8`/`9`), and a value too long for a two-character count uses
+    /// the big form. So `Matter::new("4B", 2 bytes)` has code `6B`; see
+    /// [`Matter::code`].
     pub fn new(code: &str, raw: Vec<u8>) -> Result<Self, CesrError> {
         let sizage = matter_sizage(code).ok_or_else(|| CesrError::UnknownCode(code.to_string()))?;
+
+        if sizage.fs == 0 {
+            let code = variable_code_for(code, &sizage, raw.len())?;
+            let sizage =
+                matter_sizage(&code).ok_or_else(|| CesrError::UnknownCode(code.clone()))?;
+            return Ok(Self { code, raw, sizage });
+        }
 
         // Validate raw size for fixed-length codes
         if sizage.fs > 0 {
@@ -88,11 +103,7 @@ impl Matter {
             // Decode just the data portion (after code + count)
             let data_b64 = &qb64[hs + sizage.ss..fs];
             let all_bytes = codec::b64_decode(data_b64)?;
-
-            // Strip lead zero-bytes (padding prepended during encoding to
-            // reach a multiple of 3). Lead count is at most 2.
-            let lead = count_leading_zeros(&all_bytes, 2);
-            let raw = all_bytes[lead..].to_vec();
+            let raw = strip_lead(code, &all_bytes, sizage.ls)?;
 
             Ok(Self {
                 code: code.to_string(),
@@ -173,9 +184,7 @@ impl Matter {
             let full_b64 = codec::b64_encode(&qb2[..bs]);
             let data_b64 = &full_b64[header_chars..fs];
             let all_bytes = codec::b64_decode(data_b64)?;
-
-            let lead = count_leading_zeros(&all_bytes, 2);
-            let raw = all_bytes[lead..].to_vec();
+            let raw = strip_lead(code, &all_bytes, sizage.ls)?;
 
             Ok(Self {
                 code: code.to_string(),
@@ -217,9 +226,17 @@ impl Matter {
             Ok(result)
         } else {
             // Variable-length encoding: code (hs chars) + count (ss chars) + data (count * 4 chars)
-            // The raw bytes are padded to a multiple of 3, then base64-encoded.
-            // The count is the number of 4-char base64 groups in the data portion.
-            let ls = codec::lead_bytes(self.raw.len());
+            // The raw bytes are prefixed with the code's `ls` zero bytes to a
+            // multiple of 3, then base64-encoded. The count is the number of
+            // 4-char base64 groups in the data portion.
+            let ls = self.sizage.ls;
+            if !(ls + self.raw.len()).is_multiple_of(3) {
+                return Err(CesrError::Conversion(format!(
+                    "{} bytes with lead size {ls} under code {} are not whole triplets",
+                    self.raw.len(),
+                    self.code
+                )));
+            }
             let mut padded = vec![0u8; ls];
             padded.extend_from_slice(&self.raw);
 
@@ -360,9 +377,62 @@ impl Matter {
     }
 }
 
-/// Count leading zero bytes in a slice, up to a maximum.
-fn count_leading_zeros(data: &[u8], max: usize) -> usize {
-    data.iter().take(max).take_while(|&&b| b == 0).count()
+/// The member of a variable-length code family that fits `raw_len` bytes.
+///
+/// The family is the code's second character (`A`, `B`, ...) for a small
+/// code and its last three characters for a big one. The lead size picks the
+/// first character (`4`/`5`/`6` small, `7`/`8`/`9` big), and a value whose
+/// quadlet count does not fit a small code's two count characters is moved
+/// to the big form, as keripy does.
+fn variable_code_for(code: &str, sizage: &Sizage, raw_len: usize) -> Result<String, CesrError> {
+    let ls = codec::lead_bytes(raw_len);
+    let quadlets = (raw_len + ls) / 3;
+    let small_max = 64usize.pow(2) - 1;
+    let big_max = 64usize.pow(4) - 1;
+    const SMALL: [char; 3] = ['4', '5', '6'];
+    const BIG: [char; 3] = ['7', '8', '9'];
+    let code = if sizage.hs == 2 {
+        let family = &code[1..2];
+        if quadlets <= small_max {
+            format!("{}{family}", SMALL[ls])
+        } else if quadlets <= big_max {
+            format!("{}AA{family}", BIG[ls])
+        } else {
+            return Err(CesrError::InvalidRawSize {
+                expected: big_max * 3,
+                got: raw_len,
+            });
+        }
+    } else {
+        if quadlets > big_max {
+            return Err(CesrError::InvalidRawSize {
+                expected: big_max * 3,
+                got: raw_len,
+            });
+        }
+        format!("{}{}", BIG[ls], &code[1..])
+    };
+    Ok(code)
+}
+
+/// Remove the code's `ls` lead bytes from the decoded data of a
+/// variable-length primitive. They must be zero: anything else is refused
+/// with [`CesrError::NonCanonical`], as keripy does ("Nonzero midpad bytes").
+/// Raw data that itself begins with zero bytes is kept intact.
+fn strip_lead(code: &str, data: &[u8], ls: usize) -> Result<Vec<u8>, CesrError> {
+    if data.len() < ls {
+        return Err(CesrError::InvalidRawSize {
+            expected: ls,
+            got: data.len(),
+        });
+    }
+    let (lead, raw) = data.split_at(ls);
+    if lead.iter().any(|&b| b != 0) {
+        return Err(CesrError::NonCanonical(format!(
+            "lead bytes of variable-length code {code} are not zero"
+        )));
+    }
+    Ok(raw.to_vec())
 }
 
 /// Convert a Base64url string to a count value.
@@ -595,15 +665,17 @@ mod tests {
 
     #[test]
     fn test_variable_length_qb64_roundtrip() {
+        // 17 bytes need one lead byte, so the `4B` family member is `5B`.
         let raw = b"did:example:alice".to_vec();
         let m = Matter::new("4B", raw.clone()).unwrap();
+        assert_eq!(m.code(), "5B");
         let qb64 = m.qb64().unwrap();
 
-        // Code "4B" (2 chars) + count (2 chars) + data
-        assert!(qb64.starts_with("4B"));
+        // Code "5B" (2 chars) + count (2 chars) + data
+        assert!(qb64.starts_with("5B"));
 
         let m2 = Matter::from_qb64(&qb64).unwrap();
-        assert_eq!(m2.code(), "4B");
+        assert_eq!(m2, m);
         assert_eq!(m2.raw(), raw.as_slice());
     }
 
@@ -614,6 +686,7 @@ mod tests {
         let qb2 = m.qb2().unwrap();
 
         let m2 = Matter::from_qb2(&qb2).unwrap();
+        // 15 bytes are whole triplets: lead size 0, code stays `4B`.
         assert_eq!(m2.code(), "4B");
         assert_eq!(m2.raw(), raw.as_slice());
     }
@@ -645,11 +718,126 @@ mod tests {
     #[test]
     fn test_variable_length_string_code() {
         // "4A" is for string variable-length
+        // 11 bytes need one lead byte: `4A` becomes `5A`.
         let raw = b"hello world".to_vec();
         let m = Matter::new("4A", raw.clone()).unwrap();
+        assert_eq!(m.code(), "5A");
         let qb64 = m.qb64().unwrap();
         let m2 = Matter::from_qb64(&qb64).unwrap();
-        assert_eq!(m2.code(), "4A");
+        assert_eq!(m2.code(), "5A");
         assert_eq!(m2.raw(), raw.as_slice());
+    }
+
+    /// Vectors from keripy's `test_matter` (`tests/core/test_coring.py`):
+    /// `Bytes_L1` of `b'abcde'` is `5BACAGFiY2Rl` / `e4 10 02 00 'abcde'`.
+    /// The `Bytes_L0` and `Bytes_L2` values follow the same layout.
+    #[test]
+    fn keripy_variable_size_vectors() {
+        let cases: &[(&str, &[u8], &str, &str)] = &[
+            ("4B", b"abcde", "5B", "5BACAGFiY2Rl"),
+            ("4B", b"abcdef", "4B", "4BACYWJjZGVm"),
+            ("4B", b"abcd", "6B", "6BACAABhYmNk"),
+            ("6B", b"abcde", "5B", "5BACAGFiY2Rl"),
+        ];
+        for &(given, raw, code, qb64) in cases {
+            let m = Matter::new(given, raw.to_vec()).unwrap();
+            assert_eq!(m.code(), code, "{given} {raw:?}");
+            assert_eq!(m.qb64().unwrap(), qb64);
+            let parsed = Matter::from_qb64(qb64).unwrap();
+            assert_eq!(parsed, m);
+            assert_eq!(Matter::from_qb2(&m.qb2().unwrap()).unwrap(), m);
+        }
+        let m = Matter::new("5B", b"abcde".to_vec()).unwrap();
+        assert_eq!(m.qb2().unwrap(), b"\xe4\x10\x02\x00abcde");
+        assert_eq!(m.full_size(), 12);
+    }
+
+    /// A raw value that starts with zero bytes keeps them: only the code's
+    /// lead bytes are removed.
+    #[test]
+    fn variable_size_raw_starting_with_zero_bytes_round_trips() {
+        for raw in [
+            vec![0u8],
+            vec![0u8, 0],
+            vec![0u8, 0, 0],
+            vec![0u8, 1],
+            vec![0u8, 0, 7, 8],
+            vec![0u8; 5],
+            vec![0u8, 0, 0, 0, 0, 9],
+            vec![],
+        ] {
+            for family in ["4A", "4B", "7AAB"] {
+                let m = Matter::new(family, raw.clone()).unwrap();
+                assert_eq!(m.sizage().ls, codec::lead_bytes(raw.len()));
+                let qb64 = m.qb64().unwrap();
+                assert_eq!(qb64.len(), m.full_size());
+                let parsed = Matter::from_qb64(&qb64).unwrap();
+                assert_eq!(parsed.raw(), raw.as_slice(), "{family} {raw:?} {qb64}");
+                assert_eq!(parsed.code(), m.code());
+                let from_qb2 = Matter::from_qb2(&m.qb2().unwrap()).unwrap();
+                assert_eq!(from_qb2.raw(), raw.as_slice(), "{family} {raw:?}");
+            }
+        }
+        // Explicit: one zero data byte under 6B is `6BAB` + `AAAA`.
+        let m = Matter::new("4B", vec![0u8]).unwrap();
+        assert_eq!(m.qb64().unwrap(), "6BABAAAA");
+        assert_eq!(Matter::from_qb64("6BABAAAA").unwrap().raw(), &[0u8]);
+        // The same text under 4B is three zero data bytes.
+        assert_eq!(Matter::from_qb64("4BABAAAA").unwrap().raw(), &[0u8; 3]);
+    }
+
+    /// keripy refuses non-zero lead bytes ("Nonzero midpad bytes").
+    #[test]
+    fn variable_size_non_zero_lead_bytes_are_refused() {
+        for bad in ["5BAC_2FiY2Rl", "6BAC__9hYmNk", "6BACAP9hYmNk"] {
+            assert!(
+                matches!(Matter::from_qb64(bad), Err(CesrError::NonCanonical(_))),
+                "{bad}"
+            );
+            let qb2 = codec::qb64_to_qb2(bad).unwrap();
+            assert!(
+                matches!(Matter::from_qb2(&qb2), Err(CesrError::NonCanonical(_))),
+                "{bad}"
+            );
+        }
+    }
+
+    /// The lead size is part of the code, in the table and in big forms.
+    #[test]
+    fn variable_size_lead_sizes_come_from_the_code() {
+        for (code, ls) in [
+            ("4A", 0),
+            ("5A", 1),
+            ("6A", 2),
+            ("4B", 0),
+            ("5B", 1),
+            ("6B", 2),
+            ("7AAA", 0),
+            ("8AAA", 1),
+            ("9AAA", 2),
+            ("7AAB", 0),
+            ("8AAB", 1),
+            ("9AAB", 2),
+        ] {
+            assert_eq!(matter_sizage(code).unwrap().ls, ls, "{code}");
+        }
+        // Big family members are chosen by lead size too.
+        assert_eq!(Matter::new("7AAB", vec![1u8; 2]).unwrap().code(), "8AAB");
+        assert_eq!(Matter::new("9AAA", vec![1u8; 3]).unwrap().code(), "7AAA");
+    }
+
+    /// A value too long for a two-character count moves to the big form.
+    #[test]
+    fn variable_size_promotes_to_big_form() {
+        let raw = vec![0x41u8; 4096 * 3];
+        let m = Matter::new("4B", raw.clone()).unwrap();
+        assert_eq!(m.code(), "7AAB");
+        let qb64 = m.qb64().unwrap();
+        assert!(qb64.starts_with("7AABABAA"), "{}", &qb64[..8]);
+        assert_eq!(Matter::from_qb64(&qb64).unwrap(), m);
+
+        let m = Matter::new("4A", vec![0x41u8; 4095 * 3 + 1]).unwrap();
+        assert_eq!(m.code(), "9AAA");
+        assert_eq!(Matter::from_qb64(&m.qb64().unwrap()).unwrap(), m);
     }
 }

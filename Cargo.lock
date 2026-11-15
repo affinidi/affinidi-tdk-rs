@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-cesr"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "base64ct",
  "hex",
@@ -101,12 +101,11 @@ dependencies = [
 
 [[package]]
 name = "affinidi-crypto"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "aes 0.9.3",
  "aes-gcm",
  "affinidi-encoding",
- "base58",
  "base64 0.23.1",
  "cbc 0.2.1",
  "ed25519-dalek",
@@ -114,7 +113,6 @@ dependencies = [
  "hmac 0.13.0",
  "k256",
  "ml-dsa",
- "multibase",
  "p256",
  "p384",
  "p521",
@@ -131,12 +129,13 @@ dependencies = [
 
 [[package]]
 name = "affinidi-data-integrity"
-version = "0.8.7"
+version = "0.8.8"
 dependencies = [
  "affinidi-bbs",
  "affinidi-crypto",
  "affinidi-data-integrity",
  "affinidi-did-common",
+ "affinidi-encoding",
  "affinidi-rdf-encoding",
  "affinidi-secrets-resolver",
  "async-trait",
@@ -339,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-webs"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "affinidi-cesr",
  "affinidi-crypto",
@@ -363,7 +362,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-encoding"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "bs58",
  "serde",
@@ -811,7 +810,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-secrets-resolver"
-version = "0.5.18"
+version = "0.5.19"
 dependencies = [
  "affinidi-crypto",
  "affinidi-encoding",

@@ -1,5 +1,17 @@
 # Affinidi Data Integrity Changelog
 
+## Unreleased (0.8.8) — did:key decoding goes through affinidi-encoding
+
+- **Changed (#1056):** `resolve_did_key` / `DidKeyResolver` decode with
+  `affinidi_encoding::did_key::decode` instead of their own codec/length
+  table. Same key types and lengths, same error variants
+  (`InvalidPublicKey` for a wrong length or unsupported codec, `Resolver`
+  for bad framing). **Behaviour change (R3.6):** only base58btc (`z`)
+  did:key identifiers are accepted, as the did:key method requires; another
+  multibase used to be decoded.
+- **Dependencies:** adds `affinidi-encoding` 0.1.7.
+
+
 ## Unreleased (0.8.7) — affinidi-crypto 0.3
 
 - **Changed:** requires `affinidi-crypto` 0.3. No code change. `KeyType`

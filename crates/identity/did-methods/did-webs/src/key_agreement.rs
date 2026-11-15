@@ -142,10 +142,6 @@ impl KeyAgreementKey {
                 affinidi_crypto::secp256k1::public_jwk(raw).map_err(not_a_key)?,
             )?,
         };
-        // A public JWK serializes its absent private part as `"d": null`.
-        if let Some(obj) = jwk.as_object_mut() {
-            obj.retain(|_, v| !v.is_null());
-        }
         jwk["kid"] = json!(self.to_cesr()?);
         Ok(jwk)
     }

@@ -514,12 +514,10 @@ pub(crate) fn jwk_from_cesr_key(key_qb64: &str) -> Result<Value, DidWebsError> {
     }
     .map_err(|e| DidWebsError::Kel(format!("key {key_qb64:?} is not a valid public key: {e}")))?;
 
+    // affinidi-crypto >= 0.3.2 omits the absent private part, so a public JWK
+    // carries no `d` member.
     let mut value = serde_json::to_value(&jwk)?;
     if let Some(obj) = value.as_object_mut() {
-        // A public JWK serializes its absent private part as `"d": null`. That
-        // member does not belong in a published key, and a document carrying
-        // it differs from every other implementation's.
-        obj.retain(|_, v| !v.is_null());
         // The CESR form is the key's identity in a did:webs document, and it
         // is what the verification method id references.
         obj.insert("kid".to_string(), json!(key_qb64));

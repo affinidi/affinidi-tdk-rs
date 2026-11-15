@@ -1,12 +1,11 @@
 //! JWK (JSON Web Key) types per RFC 7517
 
-use affinidi_encoding::{
-    ED25519_PUB, MultiEncoded, P256_PUB, P384_PUB, P521_PUB, SECP256K1_PUB, X25519_PUB,
-};
+#[allow(unused_imports)] // `Codec` is only matched on when a curve feature is enabled.
+use affinidi_encoding::{Codec, decode_multikey_checked};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::{CryptoError, KeyType};
+use crate::{CryptoError, KeyType, error::key_decoding_error};
 
 /// RFC 7517 JWK Struct
 ///
@@ -61,30 +60,31 @@ impl JWK {
         }
     }
 
-    /// Converts a multikey string into a JWK struct
+    /// Converts a multikey string into a public JWK.
+    ///
+    /// The multikey must be base58btc (`z` prefix) and carry exactly the key
+    /// length its codec requires; EC keys are in compressed SEC1 form, as
+    /// the Multikey format specifies.
     pub fn from_multikey(key: &str) -> Result<Self, CryptoError> {
-        // decode multibase
-        let (_, data) = multibase::decode(key)
-            .map_err(|e| CryptoError::Decoding(format!("Failed to decode multibase: {e}")))?;
+        let (codec, data) = decode_multikey_checked(key).map_err(key_decoding_error)?;
 
-        // decode multicodec
-        let decoded = MultiEncoded::new(&data)?;
-
-        match decoded.codec() {
+        match codec {
             #[cfg(feature = "p256")]
-            P256_PUB => crate::p256::public_jwk(decoded.data()),
+            Codec::P256Pub => crate::p256::public_jwk(&data),
             #[cfg(feature = "p384")]
-            P384_PUB => crate::p384::public_jwk(decoded.data()),
+            Codec::P384Pub => crate::p384::public_jwk(&data),
             #[cfg(feature = "p521")]
-            P521_PUB => crate::p521::public_jwk(decoded.data()),
+            Codec::P521Pub => crate::p521::public_jwk(&data),
             #[cfg(feature = "k256")]
-            SECP256K1_PUB => crate::secp256k1::public_jwk(decoded.data()),
+            Codec::Secp256k1Pub => crate::secp256k1::public_jwk(&data),
             #[cfg(feature = "ed25519")]
-            ED25519_PUB => crate::ed25519::public_jwk(decoded.data()),
+            Codec::Ed25519Pub => crate::ed25519::public_jwk(&data),
             #[cfg(feature = "ed25519")]
-            X25519_PUB => crate::ed25519::x25519_public_jwk(decoded.data()),
+            Codec::X25519Pub => crate::ed25519::x25519_public_jwk(&data),
             codec => Err(CryptoError::UnsupportedKeyType(format!(
-                "Unsupported key type codec (0x{codec:x})"
+                "Unsupported key type codec (0x{:x}, {} key bytes)",
+                codec.to_u64(),
+                data.len()
             ))),
         }
     }
@@ -110,6 +110,9 @@ pub struct ECParams {
     pub curve: String,
     pub x: String,
     pub y: String,
+    /// The private scalar. Omitted from the serialized form when `None`, so a
+    /// public JWK carries no `d` member at all (never `"d": null`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub d: Option<String>,
 }
 
@@ -142,6 +145,9 @@ pub struct OctectParams {
     #[serde(rename = "crv")]
     pub curve: String,
     pub x: String,
+    /// The private key. Omitted from the serialized form when `None`, so a
+    /// public JWK carries no `d` member at all (never `"d": null`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub d: Option<String>,
 }
 
@@ -256,5 +262,65 @@ mod tests {
     #[test]
     fn from_multikey_ed25519() {
         assert!(JWK::from_multikey("z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp").is_ok());
+    }
+
+    /// A public JWK has no `d` member: not `"d": null` (#1054).
+    #[test]
+    fn public_jwk_serializes_without_d() {
+        for key in [
+            "z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp",
+            "zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169",
+            "zQ3shT2ynSjzY5XoTxhWHvYVZ6GiLWhBVincVekcEpZDRCBHV",
+        ] {
+            let jwk = JWK::from_multikey(key).unwrap();
+            let value = serde_json::to_value(&jwk).unwrap();
+            let obj = value.as_object().unwrap();
+            assert!(!obj.contains_key("d"), "{key}: {value}");
+            let text = serde_json::to_string(&jwk).unwrap();
+            assert!(!text.contains("\"d\""), "{key}: {text}");
+        }
+    }
+
+    /// A private JWK keeps `d`, and a JWK with `"d": null` still parses.
+    #[test]
+    fn private_jwk_keeps_d_and_null_d_parses() {
+        let jwk = crate::ed25519::generate(None).into_parts().jwk;
+        let value = serde_json::to_value(&jwk).unwrap();
+        assert!(value.get("d").is_some_and(|d| d.is_string()));
+
+        let raw = r#"{"kty":"OKP","crv":"Ed25519","x":"Xx4_L89E6RsyvDTzN9wuN3cDwgifPkXMgFJv_HMIxdk","d":null}"#;
+        let parsed: JWK = serde_json::from_str(raw).unwrap();
+        match &parsed.params {
+            Params::OKP(p) => assert!(p.d.is_none()),
+            other => panic!("unexpected params {other:?}"),
+        }
+        let raw = r#"{"kty":"EC","crv":"P-256","x":"sl56LMzaiR5efwwWU1jzC_dfbxQ8gzyLj_N1q2cJmkE","y":"UnAimUtlHMPj_T_wIDVPoJAolKHy8DoXXTb8wch4hgU"}"#;
+        let parsed: JWK = serde_json::from_str(raw).unwrap();
+        assert!(!serde_json::to_string(&parsed).unwrap().contains("\"d\""));
+    }
+
+    /// A truncated multikey is refused rather than turned into a JWK with a
+    /// short `x` (#1056).
+    #[test]
+    fn from_multikey_refuses_wrong_length() {
+        let short = affinidi_encoding::encode_multikey(affinidi_encoding::ED25519_PUB, &[1u8; 31]);
+        assert!(matches!(
+            JWK::from_multikey(&short),
+            Err(CryptoError::KeyError(_))
+        ));
+        let short = affinidi_encoding::encode_multikey(affinidi_encoding::X25519_PUB, &[1u8; 16]);
+        assert!(matches!(
+            JWK::from_multikey(&short),
+            Err(CryptoError::KeyError(_))
+        ));
+    }
+
+    #[test]
+    fn from_multikey_refuses_unknown_codec() {
+        let key = affinidi_encoding::encode_multikey(0x55, &[1u8; 32]);
+        assert!(matches!(
+            JWK::from_multikey(&key),
+            Err(CryptoError::UnsupportedKeyType(_))
+        ));
     }
 }

@@ -6,7 +6,7 @@
 //! See: <https://github.com/multiformats/multibase>
 
 use crate::EncodingError;
-use crate::multicodec::MultiEncoded;
+use crate::multicodec::{Codec, MultiEncoded};
 
 /// Multibase prefix for base58btc (Bitcoin alphabet)
 pub const BASE58BTC_PREFIX: char = 'z';
@@ -51,6 +51,60 @@ pub fn decode_multikey_with_codec(key: &str) -> Result<(u64, Vec<u8>), EncodingE
     let bytes = decode_base58btc(key)?;
     let multi_encoded = MultiEncoded::new(&bytes)?;
     Ok((multi_encoded.codec(), multi_encoded.data().to_vec()))
+}
+
+/// Decode a multikey string, returning its codec and key bytes, and enforce
+/// the codec's key length.
+///
+/// This is the validating counterpart of [`decode_multikey_with_codec`]: the
+/// string must be base58btc (`z` prefix), carry a well-formed multicodec
+/// prefix, and — for every codec with a known
+/// [`Codec::expected_key_length`] — exactly that many key bytes. A codec this
+/// crate does not know is returned as [`Codec::Unknown`] without a length
+/// check; the caller decides whether to accept it.
+///
+/// EC public keys are expected in compressed SEC1 form (33 bytes for P-256
+/// and secp256k1, 49 for P-384, 67 for P-521), as the Multikey format
+/// requires.
+pub fn decode_multikey_checked(key: &str) -> Result<(Codec, Vec<u8>), EncodingError> {
+    let bytes = decode_base58btc(key)?;
+    let multi_encoded = MultiEncoded::new(&bytes)?;
+    let codec = multi_encoded.codec_type();
+    let data = multi_encoded.data();
+    check_key_length(codec, data)?;
+    Ok((codec, data.to_vec()))
+}
+
+/// Decode a multikey string that must carry the `expected` codec, returning
+/// its key bytes with the codec's key length enforced.
+///
+/// Fails with [`EncodingError::UnexpectedCodec`] for any other codec, and
+/// with [`EncodingError::InvalidKeyLength`] for a key of the wrong length.
+pub fn decode_multikey_expecting(key: &str, expected: Codec) -> Result<Vec<u8>, EncodingError> {
+    let bytes = decode_base58btc(key)?;
+    let multi_encoded = MultiEncoded::new(&bytes)?;
+    let codec = multi_encoded.codec_type();
+    if codec != expected {
+        return Err(EncodingError::UnexpectedCodec {
+            expected: expected.to_u64(),
+            actual: codec.to_u64(),
+        });
+    }
+    let data = multi_encoded.data();
+    check_key_length(codec, data)?;
+    Ok(data.to_vec())
+}
+
+/// Refuse key bytes whose length differs from the codec's expected length.
+fn check_key_length(codec: Codec, data: &[u8]) -> Result<(), EncodingError> {
+    match codec.expected_key_length() {
+        Some(expected) if data.len() != expected => Err(EncodingError::InvalidKeyLength {
+            codec: codec.to_u64(),
+            expected,
+            actual: data.len(),
+        }),
+        _ => Ok(()),
+    }
 }
 
 /// Encode key bytes with a multicodec prefix as a multibase (base58btc) string
@@ -103,6 +157,70 @@ mod tests {
         assert!(matches!(
             result.unwrap_err(),
             EncodingError::InvalidBase58(_)
+        ));
+    }
+
+    #[test]
+    fn decode_multikey_checked_accepts_a_well_formed_key() {
+        let key = encode_multikey(crate::ED25519_PUB, &[7u8; 32]);
+        let (codec, bytes) = decode_multikey_checked(&key).unwrap();
+        assert_eq!(codec, Codec::Ed25519Pub);
+        assert_eq!(bytes, [7u8; 32]);
+    }
+
+    #[test]
+    fn decode_multikey_checked_refuses_a_truncated_key() {
+        let key = encode_multikey(crate::ED25519_PUB, &[7u8; 31]);
+        assert!(matches!(
+            decode_multikey_checked(&key).unwrap_err(),
+            EncodingError::InvalidKeyLength {
+                codec: crate::ED25519_PUB,
+                expected: 32,
+                actual: 31
+            }
+        ));
+        // An uncompressed P-256 point is not a Multikey.
+        let key = encode_multikey(crate::P256_PUB, &[4u8; 65]);
+        assert!(matches!(
+            decode_multikey_checked(&key).unwrap_err(),
+            EncodingError::InvalidKeyLength { expected: 33, .. }
+        ));
+    }
+
+    #[test]
+    fn decode_multikey_checked_passes_unknown_codecs_through() {
+        let key = encode_multikey(0x55, &[1, 2, 3]);
+        let (codec, bytes) = decode_multikey_checked(&key).unwrap();
+        assert_eq!(codec, Codec::Unknown(0x55));
+        assert_eq!(bytes, [1, 2, 3]);
+    }
+
+    #[test]
+    fn decode_multikey_checked_refuses_non_base58btc() {
+        assert!(matches!(
+            decode_multikey_checked("fed01").unwrap_err(),
+            EncodingError::InvalidMultibasePrefix('f')
+        ));
+    }
+
+    #[test]
+    fn decode_multikey_expecting_checks_codec_then_length() {
+        let key = encode_multikey(crate::X25519_PUB, &[0u8; 32]);
+        assert!(matches!(
+            decode_multikey_expecting(&key, Codec::Ed25519Pub).unwrap_err(),
+            EncodingError::UnexpectedCodec {
+                expected: crate::ED25519_PUB,
+                actual: crate::X25519_PUB
+            }
+        ));
+        assert_eq!(
+            decode_multikey_expecting(&key, Codec::X25519Pub).unwrap(),
+            [0u8; 32]
+        );
+        let short = encode_multikey(crate::X25519_PUB, &[0u8; 16]);
+        assert!(matches!(
+            decode_multikey_expecting(&short, Codec::X25519Pub).unwrap_err(),
+            EncodingError::InvalidKeyLength { .. }
         ));
     }
 
