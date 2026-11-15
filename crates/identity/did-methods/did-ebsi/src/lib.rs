@@ -329,6 +329,61 @@ fn verify_document_id(
     }
 }
 
+/// did:ebsi as an `affinidi-did-resolver-traits`
+/// [`AsyncResolver`](affinidi_did_resolver_traits::AsyncResolver).
+#[cfg(feature = "resolver-traits")]
+mod resolver_impl {
+    use std::future::Future;
+    use std::pin::Pin;
+
+    use affinidi_did_common::{DID, DIDMethod};
+    use affinidi_did_resolver_traits::{
+        AsyncResolver, NetworkFetchError, Resolution, ResolverError,
+    };
+
+    use crate::{EbsiError, EbsiResolver};
+
+    /// The [`ResolverError`] for a failed did:ebsi resolution: an
+    /// unsuccessful registry status (with its URL and `Retry-After`) and a
+    /// transport failure are [`ResolverError::NetworkFetch`], everything else
+    /// [`ResolverError::ResolutionFailed`].
+    pub(crate) fn resolver_error(err: EbsiError) -> ResolverError {
+        match err {
+            EbsiError::Network(network) => ResolverError::from(network),
+            EbsiError::Http(message) => {
+                ResolverError::NetworkFetch(NetworkFetchError::new(message))
+            }
+            other => ResolverError::ResolutionFailed(other.to_string()),
+        }
+    }
+
+    /// Resolves did:ebsi against the resolver's registry, and declines
+    /// (`None`) every other method. A DID URL resolves to the document of
+    /// its DID.
+    impl AsyncResolver for EbsiResolver {
+        fn name(&self) -> &str {
+            "EbsiResolver"
+        }
+
+        fn resolve<'a>(
+            &'a self,
+            did: &'a DID,
+        ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+            Box::pin(async move {
+                if !matches!(did.method_ref(), DIDMethod::Ebsi { .. }) {
+                    return None;
+                }
+                let bare = format!("did:ebsi:{}", did.method_specific_id_ref());
+                Some(
+                    EbsiResolver::resolve(self, &bare)
+                        .await
+                        .map_err(resolver_error),
+                )
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,6 +546,41 @@ mod tests {
         for _ in 0..2 {
             assert_eq!(resolver.resolve(DID).await.unwrap().id.as_str(), DID);
         }
+    }
+
+    #[cfg(feature = "resolver-traits")]
+    #[tokio::test]
+    async fn the_resolver_trait_resolves_ebsi_and_declines_other_methods() {
+        use affinidi_did_common::DID as ParsedDid;
+        use affinidi_did_resolver_traits::{AsyncResolver, ResolverError};
+
+        let document = format!(r#"{{"id":"{DID}"}}"#).into_bytes();
+        let resolver = EbsiResolver::new(serve(CHUNKED, document, Some(1)).await).unwrap();
+        assert_eq!(AsyncResolver::name(&resolver), "EbsiResolver");
+        let did: ParsedDid = format!("{DID}#key-1").parse().unwrap();
+        let resolved = AsyncResolver::resolve(&resolver, &did)
+            .await
+            .expect("handled")
+            .expect("resolves");
+        assert_eq!(resolved.id.as_str(), DID);
+        let web: ParsedDid = "did:web:example.com".parse().unwrap();
+        assert!(AsyncResolver::resolve(&resolver, &web).await.is_none());
+
+        let limited = EbsiResolver::new(
+            serve(
+                "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7\r\nTransfer-Encoding: chunked\r\n\r\n",
+                Vec::new(),
+                Some(0),
+            )
+            .await,
+        )
+        .unwrap();
+        let Some(Err(ResolverError::NetworkFetch(fetch))) =
+            AsyncResolver::resolve(&limited, &did).await
+        else {
+            panic!("a 429 is a network fetch failure");
+        };
+        assert!(fetch.is_rate_limited());
     }
 
     #[tokio::test]

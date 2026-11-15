@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.5] - 2026-11-15
+
+`resolve_did` and an optional resolver-trait impl
+
+### Added
+
+- `resolve_did(&DID)` (#1153): resolve a parsed `did:ethr` DID (or DID URL)
+  from the identifier its `DIDMethod::Ethr` holds, without splitting the
+  DID string again. `NotEthr` for another method.
+- Feature `resolver-traits` (off by default): `EthrResolver`, an
+  `affinidi_did_resolver_traits::Resolver` (and so `AsyncResolver`) that
+  resolves did:ethr and declines every other method. A failure is
+  `ResolverError::ResolutionFailed`.
+
 ## [0.1.4] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

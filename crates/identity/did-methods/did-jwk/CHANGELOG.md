@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.3] - 2026-11-15
+
+`resolve_did` and an optional resolver-trait impl
+
+### Added
+
+- `resolve_did(&DID)` (#1153): resolve a parsed `did:jwk` DID (or DID URL)
+  from the identifier its `DIDMethod::Jwk` holds, without splitting the DID
+  string again. `NotJwk` for another method.
+- Feature `resolver-traits` (off by default): `JwkResolver`, an
+  `affinidi_did_resolver_traits::Resolver` (and so `AsyncResolver`) that
+  resolves did:jwk and declines every other method. A failure is
+  `ResolverError::ResolutionFailed`.
+
 ## [0.1.2] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

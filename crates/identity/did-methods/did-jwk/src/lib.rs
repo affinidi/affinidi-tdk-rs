@@ -102,6 +102,20 @@ pub fn resolve(did: &str) -> Result<Document, DidJwkError> {
     resolve_identifier(identifier)
 }
 
+/// Resolve a parsed `did:jwk` DID (or DID URL, whose path, query and
+/// fragment are ignored) from the identifier its [`DIDMethod`] holds, without
+/// splitting the DID string again.
+///
+/// Returns [`DidJwkError::NotJwk`] when `did` is another method.
+///
+/// [`DIDMethod`]: affinidi_did_common::DIDMethod
+pub fn resolve_did(did: &affinidi_did_common::DID) -> Result<Document, DidJwkError> {
+    match did.method_ref() {
+        affinidi_did_common::DIDMethod::Jwk { identifier, .. } => resolve_identifier(identifier),
+        _ => Err(DidJwkError::NotJwk(did.to_string())),
+    }
+}
+
 /// Resolve the method-specific identifier of a `did:jwk` DID — everything after
 /// `did:jwk:` — into its DID Document.
 pub fn resolve_identifier(identifier: &str) -> Result<Document, DidJwkError> {
@@ -162,9 +176,78 @@ pub fn resolve_identifier(identifier: &str) -> Result<Document, DidJwkError> {
     Ok(builder.build())
 }
 
+/// did:jwk as an `affinidi-did-resolver-traits` [`Resolver`](affinidi_did_resolver_traits::Resolver).
+#[cfg(feature = "resolver-traits")]
+mod resolver_impl {
+    use affinidi_did_common::{DID, DIDMethod};
+    use affinidi_did_resolver_traits::{Resolution, Resolver, ResolverError};
+
+    /// Resolves did:jwk for a resolver chain, and declines (`None`) every
+    /// other method.
+    ///
+    /// Resolution is pure computation, so this is a sync [`Resolver`] (and
+    /// with it an `AsyncResolver`). A failure is
+    /// [`ResolverError::ResolutionFailed`] carrying the
+    /// [`DidJwkError`](crate::DidJwkError) text.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct JwkResolver;
+
+    impl Resolver for JwkResolver {
+        fn name(&self) -> &str {
+            "JwkResolver"
+        }
+
+        fn resolve(&self, did: &DID) -> Resolution {
+            if !matches!(did.method_ref(), DIDMethod::Jwk { .. }) {
+                return None;
+            }
+            Some(
+                crate::resolve_did(did).map_err(|e| ResolverError::ResolutionFailed(e.to_string())),
+            )
+        }
+    }
+}
+
+#[cfg(feature = "resolver-traits")]
+pub use resolver_impl::JwkResolver;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_did_reads_the_parsed_method() {
+        let did: affinidi_did_common::DID = "did:jwk:eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImFjYklRaXVNczNpOF91c3pFakoydHBUdFJNNEVVM3l6OTFQSDZDZEgyVjAiLCJ5IjoiX0tjeUxqOXZXTXB0bm1LdG00NkdxRHo4d2Y3NEk1TEtncmwyR3pIM25TRSJ9#frag".parse().unwrap();
+        let doc = resolve_did(&did).expect("resolves");
+        assert_eq!(
+            doc.id.as_str(),
+            "did:jwk:eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImFjYklRaXVNczNpOF91c3pFakoydHBUdFJNNEVVM3l6OTFQSDZDZEgyVjAiLCJ5IjoiX0tjeUxqOXZXTXB0bm1LdG00NkdxRHo4d2Y3NEk1TEtncmwyR3pIM25TRSJ9"
+        );
+        let other: affinidi_did_common::DID = "did:web:example.com".parse().unwrap();
+        assert!(matches!(resolve_did(&other), Err(DidJwkError::NotJwk(_))));
+    }
+
+    #[cfg(feature = "resolver-traits")]
+    #[test]
+    fn resolver_trait_resolves_its_method_and_declines_others() {
+        use affinidi_did_resolver_traits::Resolver;
+        let did: affinidi_did_common::DID = "did:jwk:eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImFjYklRaXVNczNpOF91c3pFakoydHBUdFJNNEVVM3l6OTFQSDZDZEgyVjAiLCJ5IjoiX0tjeUxqOXZXTXB0bm1LdG00NkdxRHo4d2Y3NEk1TEtncmwyR3pIM25TRSJ9".parse().unwrap();
+        let doc = JwkResolver
+            .resolve(&did)
+            .expect("handled")
+            .expect("resolves");
+        assert_eq!(doc, resolve("did:jwk:eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImFjYklRaXVNczNpOF91c3pFakoydHBUdFJNNEVVM3l6OTFQSDZDZEgyVjAiLCJ5IjoiX0tjeUxqOXZXTXB0bm1LdG00NkdxRHo4d2Y3NEk1TEtncmwyR3pIM25TRSJ9").unwrap());
+        assert_eq!(Resolver::name(&JwkResolver), "JwkResolver");
+        let other: affinidi_did_common::DID = "did:web:example.com".parse().unwrap();
+        assert!(JwkResolver.resolve(&other).is_none());
+        let bad: affinidi_did_common::DID = "did:jwk:abc".parse().unwrap();
+        assert!(matches!(
+            JwkResolver.resolve(&bad),
+            Some(Err(
+                affinidi_did_resolver_traits::ResolverError::ResolutionFailed(_)
+            ))
+        ));
+    }
 
     /// P-256 key from the did:jwk specification's own example.
     const P256_DID: &str = "did:jwk:eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImFjYklRaXVNczNpOF91c3pFakoydHBUdFJNNEVVM3l6OTFQSDZDZEgyVjAiLCJ5IjoiX0tjeUxqOXZXTXB0bm1LdG00NkdxRHo4d2Y3NEk1TEtncmwyR3pIM25TRSJ9";

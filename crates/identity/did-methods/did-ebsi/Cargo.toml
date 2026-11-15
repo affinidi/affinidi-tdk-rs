@@ -1,6 +1,6 @@
 [package]
 name = "did-ebsi"
-version = "0.1.9"
+version = "0.1.10"
 description = "Implementation of did:ebsi (EBSI DID method for legal entities) in Rust"
 repository.workspace = true
 edition.workspace = true
@@ -15,7 +15,15 @@ rust-version.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+# `EbsiResolver` as an `affinidi-did-resolver-traits` `AsyncResolver`, so a
+# resolver chain can hold it without an adapter.
+resolver-traits = ["dep:affinidi-did-resolver-traits"]
+
 [dependencies]
+# 0.1.6: `NetworkFetchError` converts from `NetworkError`.
+affinidi-did-resolver-traits = { version = "0.1.6", path = "../../affinidi-did-resolver-traits", optional = true }
 # 0.4.8: `NetworkError` and `Document::from_json_slice`.
 affinidi-did-common = "0.4.8"
 bs58 = "0.5"

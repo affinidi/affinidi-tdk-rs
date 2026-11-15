@@ -1,7 +1,7 @@
 
 [package]
 name = "did-scid"
-version = "0.4.10"
+version = "0.4.11"
 description = "Implementation of did:scid in Rust"
 repository.workspace = true
 edition.workspace = true
@@ -28,6 +28,9 @@ did-webvh = []
 # KERI stack into builds that never resolve it. `reqwest` builds the did:webs
 # resolver's client with the caller's timeout.
 did-webs = ["dep:affinidi-did-webs", "dep:reqwest"]
+# `ScidResolver`: did:scid as an `affinidi-did-resolver-traits`
+# `AsyncResolver`, so a resolver chain can hold it without an adapter.
+resolver-traits = ["dep:affinidi-did-resolver-traits"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -36,6 +39,8 @@ crate-type = ["cdylib", "rlib"]
 # 0.4.8: `NetworkError`.
 affinidi-did-common = "0.4.8"
 
+# 0.1.6: `NetworkFetchError` converts from `NetworkError`.
+affinidi-did-resolver-traits = { version = "0.1.6", path = "../../affinidi-did-resolver-traits", optional = true }
 # 0.13.6: `DidWebsError::Network`.
 affinidi-did-webs = { version = "0.13.6", optional = true }
 didwebvh-rs = "0.8.1"

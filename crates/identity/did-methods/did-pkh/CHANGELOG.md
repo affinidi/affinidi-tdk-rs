@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.1.5] - 2026-11-15
+
+`resolve_did` reads `DIDMethod::Pkh`'s parsed fields; optional resolver-trait
+impl
+
+### Added
+
+- `resolve_did(&DID)` (#1153): resolve a parsed `did:pkh` DID (or DID URL)
+  from the CAIP-10 namespace, reference and address its `DIDMethod::Pkh`
+  already holds, without splitting the identifier again. The result (and any
+  error) is the same as `resolve` on the DID string. A deprecated
+  single-token prefix (`did:pkh:eth:0x…`) has two labels, so it never parses
+  as a `DID`; `resolve` and `resolve_identifier` still accept it.
+- Feature `resolver-traits` (off by default): `PkhResolver`, an
+  `affinidi_did_resolver_traits::Resolver` (and so `AsyncResolver`) that
+  resolves did:pkh and declines every other method. A failure is
+  `ResolverError::ResolutionFailed`.
+
 ## [0.1.4] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

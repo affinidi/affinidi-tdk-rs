@@ -22,9 +22,28 @@ use thiserror::Error;
 #[derive(Error, Debug, Clone)]
 #[non_exhaustive]
 pub enum DIDAuthError {
-    /// Authentication error, can be retried
+    /// The authentication request could not be made or its answer could not
+    /// be read: a transport failure that may pass. Can be retried.
+    ///
+    /// An answer that arrived but cannot be used is
+    /// [`DIDAuthError::InvalidResponse`] (since 0.4.0).
     #[error("Authentication failed: {0}")]
     Authentication(String),
+
+    /// The authentication service answered successfully, but with something
+    /// this client cannot use: a body that does not deserialize, or tokens
+    /// whose expiry is not a valid RFC 3339 timestamp or is before the Unix
+    /// epoch. The same request would get the same answer, so it cannot be
+    /// retried.
+    #[error("Invalid authentication response: {0}")]
+    InvalidResponse(String),
+
+    /// There are no tokens to refresh, or the refresh token has expired too:
+    /// a refresh cannot succeed, and a full
+    /// [`DIDAuthentication::authenticate`](crate::DIDAuthentication::authenticate)
+    /// is needed. Cannot be retried as a refresh.
+    #[error("Authentication tokens unavailable: {0}")]
+    NoTokens(String),
 
     /// Authentication error, cannot be retried
     #[error("Authentication Aborted: {0}")]
@@ -96,7 +115,10 @@ impl DIDAuthError {
     /// [`DIDAuthError::DIDResolver`]), timeouts, and HTTP 408, 429 and 5xx.
     /// Not retryable: everything that will fail the same way again — an abort,
     /// an ACL denial, a DIDComm or secrets problem (no usable key, say), a DID
-    /// that cannot be resolved, any other 4xx, and retries already exhausted.
+    /// that cannot be resolved, an answer that cannot be used
+    /// ([`DIDAuthError::InvalidResponse`]), no tokens to refresh
+    /// ([`DIDAuthError::NoTokens`]), any other 4xx, and retries already
+    /// exhausted.
     pub fn is_retryable(&self) -> bool {
         match self {
             DIDAuthError::Authentication(_)
@@ -106,6 +128,8 @@ impl DIDAuthError {
                 err.status == 408 || err.status == 429 || err.status >= 500
             }
             DIDAuthError::AuthenticationAbort(_)
+            | DIDAuthError::InvalidResponse(_)
+            | DIDAuthError::NoTokens(_)
             | DIDAuthError::ACLDenied(_)
             | DIDAuthError::DIDComm(_)
             | DIDAuthError::Secrets(_)

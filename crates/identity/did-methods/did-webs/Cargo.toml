@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-webs"
-version = "0.13.7"
+version = "0.13.8"
 description = "Implementation of the did:webs DID method: did:web discovery with KERI-verified key state"
 repository.workspace = true
 edition.workspace = true
@@ -21,6 +21,9 @@ default = []
 # `affinidi-keri` (the controller, without its LMDB `store` feature: the key
 # event log lives in `keri.cesr`).
 create = ["dep:affinidi-keri", "dep:serde", "dep:getrandom", "chrono/clock"]
+# `WebsResolver` as an `affinidi-did-resolver-traits` `AsyncResolver`, so a
+# resolver chain can hold it without an adapter.
+resolver-traits = ["dep:affinidi-did-resolver-traits"]
 
 [dependencies]
 affinidi-cesr = "0.1.4"
@@ -35,6 +38,8 @@ affinidi-keri-core = "0.8"
 affinidi-keri-crypto = "0.8"
 # 0.4.8: `NetworkError` and `Document::from_json_with_base`.
 affinidi-did-common = { version = "0.4.8", path = "../../affinidi-did-common" }
+# 0.1.6: `NetworkFetchError` converts from `NetworkError`.
+affinidi-did-resolver-traits = { version = "0.1.6", path = "../../affinidi-did-resolver-traits", optional = true }
 # Converts a key-state Ed25519 key to its X25519 key (`key_agreement`).
 ed25519-dalek.workspace = true
 # A KERI 2.x registry's nonce and each update's blinding UUID (`create`).

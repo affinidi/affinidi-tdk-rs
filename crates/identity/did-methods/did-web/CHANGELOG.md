@@ -1,5 +1,43 @@
 # Affinidi DID Web
 
+## [0.1.11] - 2026-11-15
+
+`affinidi-net-guard` egress policies, a chosen timeout, and an optional
+resolver-trait impl
+
+### Added
+
+- `DIDWeb::with_egress_policy(builder, EgressPolicy)` (#1153): a resolver
+  that vets each fetch with `affinidi-net-guard`'s `EgressPolicy` in full —
+  before the request (`EgressPolicy::vet_url`: address class, special-use
+  names, operator allow-list, ports, userinfo) and at connect time (the
+  guarded DNS resolver under the same policy). Use it for what `HostPolicy`
+  cannot express: an allow-list, named private ranges, or net-guard's full set
+  of special-use names. It keeps the builder's own request timeout and user
+  agent (#1154); `reqwest` sets neither by default, so set a timeout.
+- `DIDWeb::with_client_builder_and_timeout(builder, policy, timeout)`
+  (#1154): `with_client_builder` with the request timeout chosen rather than
+  `DEFAULT_TIMEOUT`, matching `affinidi-did-webs`.
+- `DidWebError::network_error()`: the failed fetch as the `NetworkError` every
+  method crate reports (`ResolutionFailed` with its URL and status, `Http`
+  with its message).
+- Feature `resolver-traits` (off by default) (#1153): `DIDWeb` implements
+  `affinidi_did_resolver_traits::AsyncResolver` (name `"WebResolver"`),
+  declining every method but did:web. An unsuccessful status and a transport
+  failure are `ResolverError::NetworkFetch`; anything else is
+  `ResolverError::ResolutionFailed`. A DID URL resolves to the document of
+  its DID.
+
+### Unchanged
+
+- `HostPolicy::PublicOnly` keeps this crate's narrower set of refused names
+  (`localhost`, `*.localhost`, `*.local`); adopting net-guard's
+  (`*.internal`, `*.home.arpa`, single-label names) is a behaviour change left
+  for the next breaking release. `with_client_builder` still sets
+  `DEFAULT_TIMEOUT` and this crate's user agent, as documented.
+- An unsuccessful status is still `DidWebError::ResolutionFailed`, without
+  `Retry-After` (#1153 item 5 needs a breaking release).
+
 ## [0.1.10] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.
