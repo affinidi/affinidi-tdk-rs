@@ -1,5 +1,44 @@
 # Affinidi OpenID4VCI Changelog
 
+## [0.2.5] - 2026-11-15
+
+OpenID4VCI 1.0 Final support in a new `v1` module (#1152). Additive: the
+draft-13 types, helpers and crate-root re-exports are unchanged.
+
+- **New `v1` module** modelling
+  [OpenID4VCI 1.0 Final](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html)
+  wire types, each citing its spec section: Credential Issuer Metadata
+  (`nonce_endpoint`, `deferred_credential_endpoint`, `notification_endpoint`,
+  `batch_credential_issuance`, `credential_request_encryption` /
+  `credential_response_encryption`, `credential_metadata`, COSE algorithm
+  identifiers for mdoc), Credential Offer (`authorization_code` with
+  `issuer_state` / `authorization_server`, `pre-authorized_code` with the
+  `tx_code` object), authorization details, Token Request (form-encoded,
+  `pre-authorized_code` + `tx_code`) and Token Response
+  (`credential_identifiers`), Nonce Response, Credential Request
+  (`credential_identifier` | `credential_configuration_id`, `proofs`,
+  `credential_response_encryption`), Credential Response (`credentials`
+  array, `transaction_id` + `interval`, `notification_id`), Deferred
+  Credential Request/Response, Notification Request, and the Token /
+  Credential / Notification error responses with typed error codes.
+  `v1::FORMAT_DC_SD_JWT` is `dc+sd-jwt`.
+- **`v1::issuer`**: offer builders and offer URIs, the pre-authorized code +
+  `tx_code` Token Request check (section 6.3 error codes, constant-time
+  compare, expiry), Credential Request validation against issuer metadata,
+  and `jwt` key proof verification for a whole `proofs` array via the
+  existing `proof` module (`invalid_nonce` vs `invalid_proof`).
+- **`v1::wallet`**: offer URI parsing (by value / by reference), the 1.0
+  metadata URL (well-known segment inserted *before* the issuer path, which
+  differs from the draft-13 `wallet::metadata_url` for issuers with a path),
+  issuer metadata checks, the pre-authorized Token Request with `tx_code`
+  shape checks, request builders and credential response checks.
+- New `Oid4vciError::InvalidResponse` variant (the enum is
+  `#[non_exhaustive]`).
+- Serde round-trip tests against the JSON examples in the spec text.
+- Not modelled: JWE encryption (section 10), signed metadata verification
+  (section 12.2.3), the Authorization Endpoint / PAR / PKCE, wallet and key
+  attestation evaluation, `di_vp` / `attestation` proof verification.
+
 ## [0.2.4] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.
