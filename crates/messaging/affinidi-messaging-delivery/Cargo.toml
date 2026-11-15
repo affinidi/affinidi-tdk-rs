@@ -22,23 +22,23 @@ rust-version.workspace = true
 # uses an API that does not exist". Naming the version turns it into an unmet
 # requirement the guard recognises as waiting on a sibling this release
 # publishes.
-affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.12" }
+affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.13" }
 # Matching an evidence sender against an entry's recipient by DID
 # (`scid::same_reference`); the identifier helpers need no curve features.
-affinidi-did-common = { path = "../../identity/affinidi-did-common", version = "0.4.5", default-features = false }
-async-trait = "0.1"
-thiserror = "2"
-tracing = "0.1"
-futures-util = "0.3"
+affinidi-did-common = { path = "../../identity/affinidi-did-common", version = "0.4.8", default-features = false }
+async-trait.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+futures-util = { workspace = true, features = ["default"] }
 # The layer-receipt (§5a) wire body is a tiny typed JSON message.
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 # `MessagingService` spawns the inbound dispatcher (`rt`) and uses
 # broadcast/oneshot/watch (`sync`); the drain uses `time`.
-tokio = { version = "1", default-features = false, features = ["rt", "sync", "time"] }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt", "time", "sync", "test-util"] }
+tokio = { workspace = true, features = ["macros", "rt", "time", "sync", "test-util"] }
 
 [features]
 # The `MessageTransport` conformance suite (`conformance` module) — panicking

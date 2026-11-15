@@ -24,7 +24,7 @@ arbitrary = ["dep:arbitrary"]
 # JOSE crypto primitives (#327) — this crate owns only the DIDComm/JOSE
 # envelope layer; all key agreement, KDF, key-wrap, content-encryption,
 # and signing live in affinidi-crypto's `jose` module.
-affinidi-crypto = { version = "0.3", features = ["jose"] }
+affinidi-crypto = { version = "0.3.2", features = ["jose"] }
 
 # Curve crates — still used directly by the adapter for SEC1 point
 # encoding (`ToSec1Point`) on resolved public keys. The `ecdsa` feature adds
@@ -34,27 +34,27 @@ p256 = { version = "0.14", features = ["ecdh", "ecdsa"] }
 k256 = { version = "0.14", features = ["ecdh", "ecdsa"] }
 
 # Ed25519 — test helpers generate keys directly.
-ed25519-dalek = { version = "3", features = ["rand_core"] }
-sha2 = "0.11"
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
+sha2.workspace = true
 
 # Encoding / serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 base64ct = { version = "1", features = ["alloc"] }
-url = { version = "2", features = ["serde"] }
-thiserror = "2"
-zeroize = "1"
-uuid = { version = "1", features = ["v4", "fast-rng"] }
+url = { workspace = true, features = ["serde"] }
+thiserror.workspace = true
+zeroize.workspace = true
+uuid = { workspace = true, features = ["v4", "fast-rng"] }
 
 # Misc
 rand_10 = { package = "rand", version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 
 # Optional — messaging-core trait integration
-affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1", optional = true }
-async-trait = { version = "0.1", optional = true }
+affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.13", optional = true }
+async-trait = { workspace = true, optional = true }
 # did:scid sender binding: a `from` may carry the `src` locator its `skid`'s
 # DID does not. Needs 0.4.4 (the `scid` module).
-affinidi-did-common = { version = "0.4.7", path = "../../identity/affinidi-did-common", optional = true }
+affinidi-did-common = { version = "0.4.8", path = "../../identity/affinidi-did-common", optional = true }
 
 # Optional — structure-aware fuzzing support (see the `arbitrary` feature).
 arbitrary = { version = "1", optional = true }

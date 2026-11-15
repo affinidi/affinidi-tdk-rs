@@ -24,11 +24,11 @@ create = ["dep:affinidi-keri", "dep:serde", "dep:getrandom", "chrono/clock"]
 
 [dependencies]
 affinidi-cesr = "0.1.4"
-base64 = "0.23"
+base64.workspace = true
 affinidi-keri = { version = "0.8.1", optional = true, default-features = false }
 # Resolution parses the `dt` of KERI replies, which BADA orders by; creation
 # also stamps them, which needs the clock.
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono = { workspace = true, features = ["std"] }
 # >= 0.3.2: a public JWK serializes without a `d` member (it was `"d": null`).
 affinidi-crypto = { version = "0.3.2", path = "../../../core/affinidi-crypto" }
 affinidi-keri-core = "0.8"
@@ -36,26 +36,22 @@ affinidi-keri-crypto = "0.8"
 # 0.4.8: `NetworkError` and `Document::from_json_with_base`.
 affinidi-did-common = { version = "0.4.8", path = "../../affinidi-did-common" }
 # Converts a key-state Ed25519 key to its X25519 key (`key_agreement`).
-ed25519-dalek = "3"
+ed25519-dalek.workspace = true
 # A KERI 2.x registry's nonce and each update's blinding UUID (`create`).
 getrandom = { version = "0.4", features = ["wasm_js"], optional = true }
 # The SSRF guard: a did:webs DID names the host its artifacts are fetched from.
 affinidi-net-guard = "0.1.1"
-reqwest = { version = "0.13", default-features = false, features = [
-  "rustls",
-  "charset",
-  "http2",
-] }
-serde = { version = "1", features = ["derive"], optional = true }
-serde_json = "1"
-thiserror = "2"
+reqwest = { workspace = true, features = ["rustls", "charset", "http2"] }
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_json.workspace = true
+thiserror.workspace = true
 # Verification of a fetched stream runs on the blocking thread pool, under a
 # process-wide limit (`WebsResolver::resolve_with_metadata`).
-tokio = { version = "1", features = ["rt", "sync"] }
-tracing = "0.1"
+tokio = { workspace = true, features = ["rt", "sync"] }
+tracing.workspace = true
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
 wiremock = "0.6"
 
 [lints]

@@ -79,7 +79,36 @@ publish = true
 rust-version = "1.95.0"
 
 [workspace.dependencies]
-tokio = "1"
+# External dependencies used by five or more members (#1070). Members inherit
+# with `dep.workspace = true` (or `{ workspace = true, features = [...] }`) and
+# keep their own features. Where a member needs a dependency without its
+# default features, the entry here sets `default-features = false` and members
+# that want the defaults list `"default"` in their features. Renamed imports
+# (`rand_10`) and the RustCrypto 0.10 line in affinidi-bbs stay per-crate.
+ahash = "0.8"
+async-trait = "0.1"
+base64 = "0.23"
+chrono = { version = "0.4", default-features = false }
+clap = "4"
+ed25519-dalek = "3"
+futures-util = { version = "0.3", default-features = false }
+hex = "0.4"
+rand = "0.10"
+reqwest = { version = "0.13", default-features = false }
+rustls = { version = "0.23", default-features = false }
+serde = "1"
+serde_json = "1"
+sha2 = "0.11"
+thiserror = "2"
+# tokio's own `default` feature is empty, so `default-features = false` here
+# changes nothing for members that do not set it.
+tokio = { version = "1", default-features = false }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+url = "2.5"
+uuid = "1"
+x25519-dalek = "3"
+zeroize = "1.8"
 
 [profile.release]
 # Tell `rustc` to optimize for small code size.

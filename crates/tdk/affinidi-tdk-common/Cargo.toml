@@ -13,51 +13,42 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-affinidi-did-resolver-cache-sdk = "0.8"
+affinidi-did-resolver-cache-sdk = "0.8.55"
 # Pinned to the exact sibling version this crate now needs:
 # `DIDAuthError::Timeout` / `TaskUnavailable` and `Clone` land in 0.3.17, so an
 # older floor would resolve a published version that fails to compile. Naming the local version is also what lets the publish
 # dry-run guard report `wait` (sibling not on crates.io yet) rather than a
 # registry-drift failure — see scripts/check-publish-dry-run.sh.
 affinidi-did-authentication = "0.3.17"
-affinidi-did-common = "0.4"
+affinidi-did-common = "0.4.8"
 # A public dependency: re-exported as `net_guard`, and
 # `create_guarded_http_client` takes and returns its types. Exact sibling
 # version for the same publish dry-run reason as above.
-affinidi-net-guard = "0.1.0"
-affinidi-secrets-resolver = "0.5"
-affinidi-data-integrity = "0.8"
+affinidi-net-guard = "0.1.1"
+affinidi-secrets-resolver = "0.5.19"
+affinidi-data-integrity = "0.8.9"
 
-ahash = "0.8"
-base64 = "0.23"
+ahash.workspace = true
+base64.workspace = true
 keyring-core = "1"
 moka = { version = "0.12", features = ["future"] }
-reqwest = { version = "0.13", features = ["rustls", "json"] }
-rustls = { version = "0.23", default-features = false, features = [
-  "aws_lc_rs",
-  "tls12",
-] }
+reqwest = { workspace = true, features = ["default", "rustls", "json"] }
+rustls = { workspace = true, features = ["aws_lc_rs", "tls12"] }
 # PEM parsing comes from rustls-pki-types (already re-exported by rustls as
 # `rustls::pki_types`) rather than rustls-pemfile: that crate is archived and
 # unmaintained (RUSTSEC-2025-0134), and its final release is a thin wrapper
 # over exactly this code. No replacement dependency is needed.
 rustls-platform-verifier = "0.7"
-serde = { version = "1", features = ["derive", "rc"] }
-serde_json = "1"
-thiserror = "2"
-tokio = { version = "1", features = [
-  "macros",
-  "rt",
-  "rt-multi-thread",
-  "sync",
-  "time",
-] }
-tracing = "0.1"
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+tracing.workspace = true
 
 [dev-dependencies]
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 tempfile = "3"
-tokio = { version = "1", features = ["macros", "rt", "test-util", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "test-util", "time"] }
 
 [package.metadata.docs.rs]
 # Render rustdoc on all supported platforms so the cfg-gated platform-store

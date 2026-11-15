@@ -13,15 +13,21 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { workspace = true, features = ["default", "serde"] }
 dashmap = "6"
-serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["rt", "time", "macros"] }
+serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["rt", "time", "macros"] }
 tokio-util = "0.7"
-tracing = "0.1"
+tracing.workspace = true
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "test-util"] }
+tokio = { workspace = true, features = [
+  "rt-multi-thread",
+  "macros",
+  "time",
+  "sync",
+  "test-util",
+] }
 
 [lints]
 workspace = true
