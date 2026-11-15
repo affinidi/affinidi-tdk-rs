@@ -119,6 +119,7 @@ impl Drop for SessionKeys {
     }
 }
 
+#[allow(unsafe_code)] // volatile write so the wipe is not optimised away; SAFETY comment below
 fn wipe(bytes: &mut [u8; 32]) {
     for byte in bytes.iter_mut() {
         // SAFETY: `byte` is a valid, aligned, exclusive reference to a u8.

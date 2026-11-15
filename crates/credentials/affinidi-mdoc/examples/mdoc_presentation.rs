@@ -89,7 +89,7 @@ fn main() {
     let response = DeviceResponse::create(&mdoc, &request).unwrap();
 
     let disclosed = response.disclosed_names(EIDAS_PID_NAMESPACE);
-    println!("  Disclosed attributes: {:?}", disclosed);
+    println!("  Disclosed attributes: {disclosed:?}");
     println!("  Hidden attributes: family_name, given_name, birth_date, resident_city");
     println!();
 

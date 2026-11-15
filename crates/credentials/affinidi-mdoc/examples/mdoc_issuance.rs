@@ -84,7 +84,7 @@ fn main() {
     for name in &attr_names {
         let attr = mdoc.get_attribute(EIDAS_PID_NAMESPACE, name).unwrap();
         let json_val = cbor_to_json(&attr.inner.element_value);
-        println!("  {} = {}", name, json_val);
+        println!("  {name} = {json_val}");
     }
     println!();
 
@@ -101,7 +101,7 @@ fn main() {
 
     // 6. Show MSO digest count (includes decoys)
     let digest_count = decoded_mso.value_digests[EIDAS_PID_NAMESPACE].len();
-    println!("MSO digest count: {} (7 real + 3 decoy)", digest_count);
+    println!("MSO digest count: {digest_count} (7 real + 3 decoy)");
 
     println!("\nIssuance complete!");
 }

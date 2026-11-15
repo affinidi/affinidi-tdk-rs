@@ -23,7 +23,7 @@ pub fn build_presentation_submission(
     matches: Vec<(&str, &str, &str)>, // (descriptor_id, format, path)
 ) -> PresentationSubmission {
     PresentationSubmission {
-        id: format!("submission-{}", definition_id),
+        id: format!("submission-{definition_id}"),
         definition_id: definition_id.to_string(),
         descriptor_map: matches
             .into_iter()

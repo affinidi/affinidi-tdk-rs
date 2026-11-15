@@ -52,3 +52,6 @@ getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] 
 [dev-dependencies]
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt", "sync", "test-util", "time"] }
+
+[lints]
+workspace = true

@@ -131,5 +131,10 @@ affinidi-openid4vci = { path = "crates/protocols/affinidi-openid4vci" }
 affinidi-openid4vp = { path = "crates/protocols/affinidi-openid4vp" }
 affinidi-messaging-delivery = { path = "crates/messaging/affinidi-messaging-delivery" }
 
+[workspace.lints.rust]
+# `deny`, not `forbid`, so the few audited sites can carry a scoped
+# `#[allow(unsafe_code)]` next to their SAFETY comment.
+unsafe_code = "deny"
+
 [workspace.lints.clippy]
 uninlined_format_args = "warn"

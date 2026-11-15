@@ -50,3 +50,6 @@ tracing-subscriber = { version = "0.3", features = [
 tui-input = { version = "0.15", features = ["ratatui-crossterm"] }
 tui-logger = { version = "0.18", features = ["tracing-support"] }
 uuid = { version = "1", features = ["v4", "fast-rng"] }
+
+[lints]
+workspace = true

@@ -42,3 +42,6 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ## TI7: shared test-vector loader. Path-only (no version) dev-dep — dropped
 ## from the published manifest, so this never reaches crates.io.
 affinidi-tdk-test-support = { path = "../../tdk/affinidi-tdk-test-support" }
+
+[lints]
+workspace = true

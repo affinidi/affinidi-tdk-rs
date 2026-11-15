@@ -195,6 +195,7 @@ pub struct MultiEncoded([u8]);
 impl MultiEncoded {
     /// Create a new multiencoded byte slice, validating the varint
     /// prefix.
+    #[allow(unsafe_code)] // repr(transparent) slice cast; SAFETY comment below
     pub fn new(bytes: &[u8]) -> Result<&Self, EncodingError> {
         unsigned_varint::decode::u64(bytes)
             .map_err(|e| EncodingError::InvalidMulticodec(format!("varint decode: {e}")))?;
@@ -289,6 +290,7 @@ impl MultiEncodedBuf {
     }
 
     /// Borrow as MultiEncoded slice.
+    #[allow(unsafe_code)] // repr(transparent) slice cast; SAFETY comment below
     pub fn as_multi_encoded(&self) -> &MultiEncoded {
         // SAFETY: `MultiEncoded` is `#[repr(transparent)]` over `[u8]`.
         // The varint prefix was validated when this `MultiEncodedBuf`

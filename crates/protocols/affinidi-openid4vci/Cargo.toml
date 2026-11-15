@@ -27,3 +27,6 @@ url = "2"
 # The proof tests need a concrete signer/verifier; use the Ed25519 impl.
 affinidi-oid4vc-core = { version = "0.1", path = "../affinidi-oid4vc-core", features = ["eddsa"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

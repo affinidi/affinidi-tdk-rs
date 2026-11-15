@@ -37,3 +37,6 @@ uuid = { version = "1", features = ["v4", "fast-rng"] }
 ## Captures tracing output to assert sensitive values never log at DEBUG.
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }
+
+[lints]
+workspace = true

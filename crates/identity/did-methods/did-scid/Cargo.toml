@@ -49,3 +49,6 @@ tracing = "0.1"
 affinidi-did-webs = { version = "0.13", features = ["create"] }
 affinidi-keri = { version = "0.8.1", default-features = false }
 tokio = { version = "1", features = ["full"] }
+
+[lints]
+workspace = true

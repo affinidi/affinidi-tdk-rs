@@ -80,3 +80,6 @@ windows-native-keyring-store = "1"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))'.dependencies]
 dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
+
+[lints]
+workspace = true

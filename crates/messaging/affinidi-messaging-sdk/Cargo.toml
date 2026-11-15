@@ -120,3 +120,6 @@ time = "0.3"
 # A TLS websocket server on loopback, to prove `with_ssl_certificates` roots
 # reach the websocket connector.
 tokio-rustls = "0.26"
+
+[lints]
+workspace = true
