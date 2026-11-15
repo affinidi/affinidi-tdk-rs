@@ -16,6 +16,12 @@
 //! the sender the transport authenticated, and only after handing the message
 //! off. A message that asked for nothing gets nothing, in either form.
 //!
+//! "Handing off" an unsolicited message includes recording it in the
+//! receiver's [`InboxStore`](crate::inbox::InboxStore) first, so with a
+//! durable inbox a receipt means the message is recorded and survives a
+//! restart. A re-sent copy of a recorded message is receipted again, without
+//! reaching the application a second time.
+//!
 //! ## Correlation
 //!
 //! A receipt's `confirms` is matched to an outbox **idempotency key**, so a

@@ -276,13 +276,12 @@ struct AtmOpener {
 #[async_trait::async_trait]
 impl EventOpener for AtmOpener {
     async fn open(&self, qb2: &[u8]) -> Result<(Vec<u8>, String), ATMError> {
-        let meta = MetaEnvelope::parse(qb2)
-            .map_err(|e| ATMError::MsgReceiveError(format!("couldn't parse TSP envelope: {e}")))?;
         let unpacked = self
             .atm
             .tsp()
-            .unpack_with_fresh_key_state(&self.principal, &meta.sender, qb2)
-            .await?;
+            .receive_verified(&self.principal, qb2)
+            .await?
+            .unpacked;
         if unpacked.message_type != affinidi_tsp::MessageType::Direct || unpacked.control.is_some()
         {
             return Err(ATMError::MsgReceiveError(

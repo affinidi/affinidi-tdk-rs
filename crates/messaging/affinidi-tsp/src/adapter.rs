@@ -88,6 +88,9 @@ impl MessagingProtocol for TspAdapter {
             .map_err(|e| MessagingError::Unpack(e.to_string()))?;
 
         Ok(ReceivedMessage {
+            // BLAKE2s-256 of the wire bytes. The hop id a mediator and the SDK
+            // know the same message by is its SHA-256; `receive::message_ids`
+            // computes both from the bytes.
             id: hex::encode(direct::message_digest_bytes(packed)),
             sender: Some(received.sender),
             recipient: received.receiver,

@@ -43,6 +43,7 @@ pub mod crypto;
 pub mod error;
 pub mod keystate;
 pub mod message;
+pub mod receive;
 pub mod relationship;
 pub mod store;
 pub mod vid;
@@ -59,7 +60,7 @@ pub use vid::resolver::VidResolver;
 pub use vid::{DidVidResolver, TSP_SERVICE_TYPE};
 pub use vid::{PrivateVid, ResolvedVid};
 
-use keystate::{Clock, KeyStateTracker, RefreshStatus};
+use keystate::{Clock, KeyStateTracker};
 use message::control::ControlMessage;
 use message::direct::{self, PackedMessage};
 use relationship::RelationshipEvent;
@@ -280,76 +281,32 @@ impl TspAgent {
     /// message is returned each time it is received; deduplicating it is the
     /// caller's job.
     pub fn receive(&self, our_vid: &str, wire: &[u8]) -> Result<ReceivedMessage, TspError> {
-        // Parse envelope to get sender VID (before full unpack)
-        let (envelope, _) = message::envelope::Envelope::decode(wire)?;
-
-        if envelope.receiver != our_vid {
-            return Err(TspError::InvalidMessage(format!(
-                "message addressed to {}, not {our_vid}",
-                envelope.receiver
-            )));
-        }
-
-        // Look up keys
+        // Addressing, the relationship lookup, key-state freshness (§7.4.2)
+        // and verification are the shared receive path in `receive`, which the
+        // SDK runs too. Everything this agent hands it is synchronous, so the
+        // whole receive completes in one poll.
         let our_private = self.store.get_private_vid(our_vid)?;
-
-        let established = self
-            .store
-            .relationship_state(our_vid, &envelope.sender)
-            .admits_application_message();
-        let now_ms = self.clock.now_ms();
-
-        // §7.4.2, first occasion: a message arriving after a silence longer
-        // than the re-verification threshold is not acted on until the peer's
-        // key state has been refreshed. This is the case that matters under
-        // compromise — stale key state is internally consistent, so a message
-        // signed with a compromised key verifies and gives no warning.
-        let mut sender_resolved = self.resolver.resolve(&envelope.sender)?;
-        if self.key_state_policy.self_resolving
-            && established
-            && self.key_state.silent_longer_than(
-                &envelope.sender,
-                self.key_state_policy.reverification_threshold,
-                now_ms,
-            )
-        {
-            sender_resolved = self.confirm_key_state_after_silence(&envelope.sender, now_ms)?;
-        }
-
-        // Unpack. §7.4.2, second occasion: a verification failure inside an
-        // established relationship may be a rotation we have not observed, so
-        // the VID is re-resolved and the verification retried once before the
-        // message is discarded. Outside a relationship it is discarded at once
-        // — otherwise anyone could make us resolve by sending us noise.
-        let unpacked = match direct::unpack(
-            wire,
-            &our_private.decryption_key,
-            &sender_resolved.signing_key,
-        ) {
-            Ok(unpacked) => unpacked,
-            Err(first_error) => {
-                if !(self.key_state_policy.self_resolving && established) {
-                    return Err(first_error);
-                }
-                match self.refresh_key_state(&envelope.sender, now_ms) {
-                    Ok(KeyStateRefresh::Fresh(fresh)) => {
-                        direct::unpack(wire, &our_private.decryption_key, &fresh.signing_key)?
-                    }
-                    // No refresh was possible, so the original failure stands.
-                    Ok(KeyStateRefresh::RateLimited) => return Err(first_error),
-                    Err(_) => return Err(first_error),
-                }
-            }
+        let resolver = receive::SyncVidResolver(&self.resolver);
+        let ctx = receive::ReceiveContext {
+            resolver: &resolver,
+            relationships: &self.store,
+            key_state: &self.key_state,
+            policy: &self.key_state_policy,
+            now_ms: self.clock.now_ms(),
         };
-
-        // The message verified, so the key state behind it is confirmed now.
-        // Silence is only measured inside a relationship, so only those
-        // senders are recorded (here, or below once a control message has
-        // formed one); the tracker grows with relationships rather than with
-        // every sender whose message verifies.
-        if established {
-            self.key_state.record_seen(&envelope.sender, now_ms);
-        }
+        let verified = receive::complete_now(receive::receive(
+            &ctx,
+            our_vid,
+            &our_private.decryption_key,
+            wire,
+        ))
+        .ok_or_else(|| {
+            TspError::InvalidMessage("synchronous receive path unexpectedly pending".into())
+        })??;
+        let established = verified.admits_application_message();
+        let now_ms = ctx.now_ms;
+        let unpacked = verified.unpacked;
+        let envelope_sender = unpacked.sender.clone();
 
         // Handle control messages
         if unpacked.message_type == MessageType::Control {
@@ -362,10 +319,10 @@ impl TspAgent {
             if !established
                 && self
                     .store
-                    .relationship_state(our_vid, &envelope.sender)
+                    .relationship_state(our_vid, &envelope_sender)
                     .admits_application_message()
             {
-                self.key_state.record_seen(&envelope.sender, now_ms);
+                self.key_state.record_seen(&envelope_sender, now_ms);
             }
 
             return Ok(ReceivedMessage {
@@ -571,97 +528,6 @@ impl TspAgent {
         self.pack_message(our_vid, their_vid, &payload, MessageType::Control)
     }
 
-    /// The key state to verify a message from `vid` against, after a silence
-    /// longer than the re-verification threshold (§7.4.2), or a `Discarded`
-    /// error when it cannot be confirmed.
-    ///
-    /// Confirmed means a refresh succeeded, or, after one failed, the
-    /// resolver has since re-resolved the VID from its provenance chain
-    /// ([`VidResolver::completed_refresh`], which is how a `DidVidResolver`
-    /// re-resolved with `resolve_did` is picked up). The rate limit bounds how
-    /// often we resolve; it does not stand in for a confirmation. Inside the
-    /// limit:
-    ///
-    /// * after a refresh that succeeded, the state we hold is that refresh's,
-    ///   so it is used;
-    /// * while a refresh is in flight on another thread, the message is
-    ///   discarded rather than held: this agent is synchronous and has no
-    ///   queue to hold it in, and the sender's retry will find the outcome;
-    /// * after a refresh that failed, the message is discarded until the next
-    ///   attempt, which comes later after each failure in a row (see
-    ///   [`keystate::KeyStateTracker::next_resolution_at_ms`]).
-    fn confirm_key_state_after_silence(
-        &self,
-        vid: &str,
-        now_ms: u64,
-    ) -> Result<ResolvedVid, TspError> {
-        if matches!(
-            self.key_state.refresh_status(vid),
-            RefreshStatus::Failed { .. }
-        ) && let Some(resolved) = self.resolver.completed_refresh(vid)
-        {
-            self.key_state.record_confirmed_after_failed_refresh(vid);
-            return Ok(resolved);
-        }
-
-        match self.refresh_key_state(vid, now_ms) {
-            Ok(KeyStateRefresh::Fresh(fresh)) => Ok(fresh),
-            Ok(KeyStateRefresh::RateLimited) => {
-                let next_in_ms = self
-                    .key_state
-                    .next_resolution_at_ms(vid, self.key_state_policy.resolution_rate_limit)
-                    .saturating_sub(now_ms);
-                match self.key_state.refresh_status(vid) {
-                    RefreshStatus::Succeeded => self.resolver.resolve(vid),
-                    RefreshStatus::InFlight => Err(TspError::Discarded(format!(
-                        "key state for {vid} is not confirmed after a silence: a refresh is in \
-                         progress; send again once it completes"
-                    ))),
-                    RefreshStatus::Failed { consecutive } => Err(TspError::Discarded(format!(
-                        "key state for {vid} is not confirmed after a silence: the last refresh \
-                         failed ({consecutive} in a row); next refresh allowed in {next_in_ms} ms"
-                    ))),
-                    RefreshStatus::NeverAttempted => Err(TspError::Discarded(format!(
-                        "key state for {vid} is not confirmed after a silence"
-                    ))),
-                }
-            }
-            Err(e) => Err(TspError::Discarded(format!(
-                "key state for {vid} could not be confirmed after a silence: the refresh \
-                 failed: {e}"
-            ))),
-        }
-    }
-
-    /// Re-resolve `vid`, subject to the per-peer rate limit.
-    ///
-    /// `RateLimited` means no resolution was attempted. §7.4.2 bounds
-    /// resolution because it can be provoked by an unauthenticated message,
-    /// and resolution is more expensive than the message provoking it, so the
-    /// cost would otherwise fall on the peer's infrastructure. Checking the
-    /// limit and stamping the attempt is one step, and the outcome is recorded
-    /// against this attempt only, so a slow older refresh cannot overwrite a
-    /// newer one's result.
-    fn refresh_key_state(&self, vid: &str, now_ms: u64) -> Result<KeyStateRefresh, TspError> {
-        let Some(token) = self.key_state.try_begin_refresh(
-            vid,
-            self.key_state_policy.resolution_rate_limit,
-            now_ms,
-        ) else {
-            return Ok(KeyStateRefresh::RateLimited);
-        };
-        match self.resolver.refresh(vid) {
-            Ok(fresh) => {
-                self.key_state.record_refresh_succeeded(&token);
-                Ok(KeyStateRefresh::Fresh(fresh))
-            }
-            Err(e) => {
-                self.key_state.record_refresh_failed(&token);
-                Err(e)
-            }
-        }
-    }
-
     /// How many refreshes of `peer_vid`'s key state have failed in a row
     /// since the last one that succeeded (or since the resolver re-resolved
     /// it, see [`VidResolver::completed_refresh`]).
@@ -838,14 +704,6 @@ impl Default for TspAgent {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// What [`TspAgent::refresh_key_state`] did.
-enum KeyStateRefresh {
-    /// The VID was resolved again and this is its current key state.
-    Fresh(ResolvedVid),
-    /// The rate limit is in force, so nothing was resolved.
-    RateLimited,
 }
 
 /// What a control message asks of the receiving endpoint beyond updating state.

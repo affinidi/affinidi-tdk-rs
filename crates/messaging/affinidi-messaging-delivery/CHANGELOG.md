@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.3.2] - 2026-11-15
+
+Inbox: a receipt means the message is recorded, and re-sends are not delivered twice (#1140)
+
+- **New `inbox` module: `InboxStore`, `InMemoryInboxStore`, `InboxRecord`,
+  `InboxKey`, `InboxState`, `Recorded`, `InboxError`, and `inbox::conformance`
+  checks for a store implementation** (under the `conformance` feature). The
+  dispatcher records an unsolicited application message from a
+  transport-authenticated sender **before** it acks the message (a delete at
+  the mediator) and before it sends any receipt the message asked for. Keyed
+  by the sender and its idempotency key (the delivery id it stamped) or, with
+  none, the message id.
+- `MessagingService::with_inbox(store)` replaces the default
+  `InMemoryInboxStore` (call it before the first `subscribe()`);
+  `MessagingService::inbox()` returns it; `MessagingService::redeliver_pending()`
+  hands records that were acked but not taken by every subscriber — a process
+  that stopped with them buffered — to the current subscribers. Call it after
+  subscribing at startup.
+
+**Behaviour (R3.6):**
+
+- **Receiver-side dedup.** A copy of a recorded message — a sender's re-send
+  or rebind under the same idempotency key, a mediator redelivery — is acked
+  and receipted again (the sender evidently missed the first receipt) but
+  **not** handed to subscribers when the record is consumed or the message is
+  still queued to a subscriber in this process. Not covered: messages without
+  an authenticated sender, relationship-control messages, replies handed to a
+  `request` waiter, and a message that reached some subscribers' queues but
+  not all (left unacked and offered to every subscriber again, as before).
+- **Receipt ⇒ recorded.** An inbox that cannot record leaves the message
+  unacked, unreceipted and undelivered, for the mediator to offer again. With
+  the default in-memory inbox, "recorded" lasts for the life of the process;
+  supply a durable `InboxStore` for a receipt to survive a restart.
+- A record is marked consumed once every subscriber it was queued to has
+  taken it from its `subscribe()` stream. Records are never removed by the
+  layer: `InboxStore::reap_consumed(cutoff_ms)` removes consumed ones; keep
+  them for at least the senders' delivery window.
+- Corrected the docs that said the layer does not deduplicate inbound
+  messages (`lib.rs`, `README.md`, `OutboxEntry::idempotency_key`,
+  `drain::SEND_TIMEOUT`, `subscribe`, `with_receipts`, the receipt module).
+- Unchanged and still open (#1140 item 3): a subscriber whose queue is full
+  holds the single dispatcher for up to `SUBSCRIBER_SEND_TIMEOUT` (10 s) per
+  message.
+
 ## [0.3.1] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

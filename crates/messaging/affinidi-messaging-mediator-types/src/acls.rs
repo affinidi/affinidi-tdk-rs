@@ -81,13 +81,19 @@ impl Display for AccessListModeType {
 ///
 /// # Representation
 ///
-/// `acl` (the packed `u64`) is the **source of truth**: every getter reads
-/// its bits, `PartialEq` compares it alone, and it is what gets persisted
-/// (as hex) and sent on the wire. The named fields are a denormalized
-/// mirror kept in sync by the setters and by [`from_u64`](Self::from_u64),
-/// present so the struct serializes to a self-describing JSON object.
-/// Never set a named field directly — write through the setters, or the
-/// mirror and the bits will disagree.
+/// The packed `u64` (`acl`) is the **only** state: every getter reads its
+/// bits, `PartialEq` compares it, and it is what gets persisted (as hex).
+///
+/// # Wire form
+///
+/// Serialized as a JSON object with one named field per flag *and* `acl`,
+/// as before, so an older reader that takes the named fields keeps working.
+/// The named fields are computed from `acl` on every serialize; nothing
+/// stores them. Deserialize reads `acl` alone, clearing unassigned bits as
+/// [`from_u64`](Self::from_u64) does. The named fields are optional on input
+/// and ignored — a value whose named fields disagree with its `acl` is read as
+/// its `acl` says (and logged, with the `tracing` feature), so a JSON value can
+/// no longer show one ACL and enforce another.
 ///
 /// ```text
 /// Bit position mapping                       class
@@ -114,8 +120,16 @@ impl Display for AccessListModeType {
 ///
 /// Bits 19-63 are unassigned and must stay zero.
 /// [`MediatorACLSet::from_u64`] clears them.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default)]
 pub struct MediatorACLSet {
+    acl: u64,
+}
+
+/// The JSON shape of a [`MediatorACLSet`]: every flag by name, then `acl`.
+/// Field order and names are the ones the struct serialized with when the
+/// flags were stored fields.
+#[derive(Serialize)]
+struct MediatorACLSetOut {
     access_list_mode: AccessListModeType,
     access_list_mode_self_change: bool,
     did_blocked: bool,
@@ -135,8 +149,144 @@ pub struct MediatorACLSet {
     self_manage_list: bool,
     self_manage_send_queue_limit: bool,
     self_manage_receive_queue_limit: bool,
-    /// Internal use only
     acl: u64,
+}
+
+impl From<&MediatorACLSet> for MediatorACLSetOut {
+    fn from(acls: &MediatorACLSet) -> Self {
+        let (access_list_mode, access_list_mode_self_change) = acls.get_access_list_mode();
+        let (send_messages, send_messages_self_change) = acls.get_send_messages();
+        let (receive_messages, receive_messages_self_change) = acls.get_receive_messages();
+        let (send_forwarded, send_forwarded_self_change) = acls.get_send_forwarded();
+        let (receive_forwarded, receive_forwarded_self_change) = acls.get_receive_forwarded();
+        let (create_invites, create_invites_self_change) = acls.get_create_invites();
+        let (anon_receive, anon_receive_self_change) = acls.get_anon_receive();
+        Self {
+            access_list_mode,
+            access_list_mode_self_change,
+            did_blocked: acls.get_blocked(),
+            did_local: acls.get_local(),
+            send_messages,
+            send_messages_self_change,
+            receive_messages,
+            receive_messages_self_change,
+            send_forwarded,
+            send_forwarded_self_change,
+            receive_forwarded,
+            receive_forwarded_self_change,
+            create_invites,
+            create_invites_self_change,
+            anon_receive,
+            anon_receive_self_change,
+            self_manage_list: acls.get_self_manage_list(),
+            self_manage_send_queue_limit: acls.get_self_manage_send_queue_limit(),
+            self_manage_receive_queue_limit: acls.get_self_manage_receive_queue_limit(),
+            acl: acls.acl,
+        }
+    }
+}
+
+/// What deserialize accepts: `acl`, which is required and authoritative, and
+/// the named flags, optional and only compared against it.
+#[derive(Deserialize)]
+struct MediatorACLSetIn {
+    acl: u64,
+    access_list_mode: Option<AccessListModeType>,
+    access_list_mode_self_change: Option<bool>,
+    did_blocked: Option<bool>,
+    did_local: Option<bool>,
+    send_messages: Option<bool>,
+    send_messages_self_change: Option<bool>,
+    receive_messages: Option<bool>,
+    receive_messages_self_change: Option<bool>,
+    send_forwarded: Option<bool>,
+    send_forwarded_self_change: Option<bool>,
+    receive_forwarded: Option<bool>,
+    receive_forwarded_self_change: Option<bool>,
+    create_invites: Option<bool>,
+    create_invites_self_change: Option<bool>,
+    anon_receive: Option<bool>,
+    anon_receive_self_change: Option<bool>,
+    self_manage_list: Option<bool>,
+    self_manage_send_queue_limit: Option<bool>,
+    self_manage_receive_queue_limit: Option<bool>,
+}
+
+impl MediatorACLSetIn {
+    /// Does any named flag present in the input disagree with `acls`?
+    fn disagrees_with(&self, acls: &MediatorACLSet) -> bool {
+        let want = MediatorACLSetOut::from(acls);
+        let differs = |got: Option<bool>, want: bool| got.is_some_and(|got| got != want);
+        self.access_list_mode
+            .as_ref()
+            .is_some_and(|mode| *mode != want.access_list_mode)
+            || differs(
+                self.access_list_mode_self_change,
+                want.access_list_mode_self_change,
+            )
+            || differs(self.did_blocked, want.did_blocked)
+            || differs(self.did_local, want.did_local)
+            || differs(self.send_messages, want.send_messages)
+            || differs(
+                self.send_messages_self_change,
+                want.send_messages_self_change,
+            )
+            || differs(self.receive_messages, want.receive_messages)
+            || differs(
+                self.receive_messages_self_change,
+                want.receive_messages_self_change,
+            )
+            || differs(self.send_forwarded, want.send_forwarded)
+            || differs(
+                self.send_forwarded_self_change,
+                want.send_forwarded_self_change,
+            )
+            || differs(self.receive_forwarded, want.receive_forwarded)
+            || differs(
+                self.receive_forwarded_self_change,
+                want.receive_forwarded_self_change,
+            )
+            || differs(self.create_invites, want.create_invites)
+            || differs(
+                self.create_invites_self_change,
+                want.create_invites_self_change,
+            )
+            || differs(self.anon_receive, want.anon_receive)
+            || differs(self.anon_receive_self_change, want.anon_receive_self_change)
+            || differs(self.self_manage_list, want.self_manage_list)
+            || differs(
+                self.self_manage_send_queue_limit,
+                want.self_manage_send_queue_limit,
+            )
+            || differs(
+                self.self_manage_receive_queue_limit,
+                want.self_manage_receive_queue_limit,
+            )
+    }
+}
+
+impl Serialize for MediatorACLSet {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        MediatorACLSetOut::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for MediatorACLSet {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let input = MediatorACLSetIn::deserialize(deserializer)?;
+        let acls = MediatorACLSet::from_u64(input.acl);
+        let disagrees = input.disagrees_with(&acls);
+        #[cfg(feature = "tracing")]
+        if disagrees {
+            tracing::warn!(
+                acl = %acls.to_hex_string(),
+                "MediatorACLSet named flags disagree with its acl value; using acl"
+            );
+        }
+        #[cfg(not(feature = "tracing"))]
+        let _ = disagrees;
+        Ok(acls)
+    }
 }
 
 impl PartialEq for MediatorACLSet {
@@ -390,32 +540,9 @@ impl MediatorACLSet {
     /// a newer mediator, or a corrupted record) is read as its assigned bits
     /// only, so it compares equal to, and round-trips as, the ACL it enforces.
     pub fn from_u64(acl: u64) -> MediatorACLSet {
-        let mut acls = MediatorACLSet {
+        MediatorACLSet {
             acl: (acl & ASSIGNED_ACL_BITS).to_le(),
-            ..Default::default()
-        };
-
-        acls.access_list_mode = acls.get_access_list_mode().0;
-        acls.access_list_mode_self_change = acls.get_access_list_mode_self_change();
-        acls.did_blocked = acls.get_blocked();
-        acls.did_local = acls.get_local();
-        acls.send_messages = acls.get_send_messages().0;
-        acls.send_messages_self_change = acls.get_send_messages().1;
-        acls.receive_messages = acls.get_receive_messages().0;
-        acls.receive_messages_self_change = acls.get_receive_messages().1;
-        acls.send_forwarded = acls.get_send_forwarded().0;
-        acls.send_forwarded_self_change = acls.get_send_forwarded().1;
-        acls.receive_forwarded = acls.get_receive_forwarded().0;
-        acls.receive_forwarded_self_change = acls.get_receive_forwarded().1;
-        acls.create_invites = acls.get_create_invites().0;
-        acls.create_invites_self_change = acls.get_create_invites().1;
-        acls.anon_receive = acls.get_anon_receive().0;
-        acls.anon_receive_self_change = acls.get_anon_receive().1;
-        acls.self_manage_list = acls.get_self_manage_list();
-        acls.self_manage_send_queue_limit = acls.get_self_manage_send_queue_limit();
-        acls.self_manage_receive_queue_limit = acls.get_self_manage_receive_queue_limit();
-
-        acls
+        }
     }
 
     /// Creates an ACL Set from a hex string
@@ -487,12 +614,10 @@ impl MediatorACLSet {
                 AccessListModeType::ExplicitAllow => self.acl &= !1_u64,
                 AccessListModeType::ExplicitDeny => self.acl |= 1_u64,
             }
-            self.access_list_mode = mode;
 
             // Only admin accounts can change the access list Mode Change setting
             if admin {
                 self._generic_set(1, self_change);
-                self.access_list_mode_self_change = self_change;
             }
 
             Ok(())
@@ -533,7 +658,6 @@ impl MediatorACLSet {
     pub fn set_blocked(&mut self, blocked: bool) {
         // BIT 2 :: DID Blocked? (0 = no, 1 = blocked)
         self._generic_set(2, blocked);
-        self.did_blocked = blocked;
     }
 
     /// Is this DID allowed to store messages locally?
@@ -547,7 +671,6 @@ impl MediatorACLSet {
     pub fn set_local(&mut self, local: bool) {
         // BIT 3 :: DID Local? (0 = false, 1 = true)
         self._generic_set(3, local);
-        self.did_local = local;
     }
 
     /// Can this DID send messages?
@@ -580,12 +703,10 @@ impl MediatorACLSet {
             ))
         } else {
             self._generic_set(4, send_messages);
-            self.send_messages = send_messages;
 
             // Only admin accounts can modify the change allowed flag
             if admin {
                 self._generic_set(5, self_change);
-                self.send_messages_self_change = self_change;
             }
 
             Ok(())
@@ -622,12 +743,10 @@ impl MediatorACLSet {
             ))
         } else {
             self._generic_set(6, receive_messages);
-            self.receive_messages = receive_messages;
 
             // Only admin accounts can modify the change allowed flag
             if admin {
                 self._generic_set(7, self_change);
-                self.receive_messages_self_change = self_change;
             }
 
             Ok(())
@@ -664,12 +783,10 @@ impl MediatorACLSet {
             ))
         } else {
             self._generic_set(8, send_forwarded);
-            self.send_forwarded = send_forwarded;
 
             // Only admin accounts can modify the change allowed flag
             if admin {
                 self._generic_set(9, self_change);
-                self.send_forwarded_self_change = self_change;
             }
 
             Ok(())
@@ -706,12 +823,10 @@ impl MediatorACLSet {
             ))
         } else {
             self._generic_set(10, receive_forwarded);
-            self.receive_forwarded = receive_forwarded;
 
             // Only admin accounts can modify the change allowed flag
             if admin {
                 self._generic_set(11, self_change);
-                self.receive_forwarded_self_change = self_change;
             }
 
             Ok(())
@@ -748,12 +863,10 @@ impl MediatorACLSet {
             ))
         } else {
             self._generic_set(12, create_invites);
-            self.create_invites = create_invites;
 
             // Only admin accounts can modify the change allowed flag
             if admin {
                 self._generic_set(13, self_change);
-                self.create_invites_self_change = self_change;
             }
 
             Ok(())
@@ -790,12 +903,10 @@ impl MediatorACLSet {
             ))
         } else {
             self._generic_set(14, anon_receive);
-            self.anon_receive = anon_receive;
 
             // Only admin accounts can modify the change allowed flag
             if admin {
                 self._generic_set(15, self_change);
-                self.anon_receive_self_change = self_change;
             }
 
             Ok(())
@@ -813,7 +924,6 @@ impl MediatorACLSet {
     pub fn set_self_manage_list(&mut self, flag: bool) {
         // BIT 16 :: DID can self manage ACL list? (0 = no, 1 = yes)
         self._generic_set(16, flag);
-        self.self_manage_list = flag;
     }
 
     /// Can this DID self manage their own queue send limits?
@@ -827,7 +937,6 @@ impl MediatorACLSet {
     pub fn set_self_manage_send_queue_limit(&mut self, flag: bool) {
         // BIT 17 :: DID can set send queue limit? (0 = no, 1 = yes)
         self._generic_set(17, flag);
-        self.self_manage_send_queue_limit = flag;
     }
 
     /// Can this DID self manage their own queue receive limits?
@@ -841,13 +950,58 @@ impl MediatorACLSet {
     pub fn set_self_manage_receive_queue_limit(&mut self, flag: bool) {
         // BIT 18 :: DID can set receive queue limit? (0 = no, 1 = yes)
         self._generic_set(18, flag);
-        self.self_manage_receive_queue_limit = flag;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serialize_emits_named_flags_computed_from_acl() {
+        let acls =
+            MediatorACLSet::from_string_ruleset("mode_explicit_deny,local,send_messages").unwrap();
+        let json = serde_json::to_value(&acls).unwrap();
+        assert_eq!(json["acl"], serde_json::json!(acls.to_u64()));
+        assert_eq!(json["access_list_mode"], serde_json::json!("ExplicitDeny"));
+        assert_eq!(json["did_local"], serde_json::json!(true));
+        assert_eq!(json["send_messages"], serde_json::json!(true));
+        assert_eq!(json["did_blocked"], serde_json::json!(false));
+        assert_eq!(json["receive_messages"], serde_json::json!(false));
+        // Every named field the stored-field struct used to emit is present.
+        assert_eq!(json.as_object().unwrap().len(), 20);
+        let back: MediatorACLSet = serde_json::from_value(json).unwrap();
+        assert_eq!(back, acls);
+    }
+
+    #[test]
+    fn deserialize_takes_acl_and_ignores_disagreeing_flags() {
+        let blocked = MediatorACLSet::from_string_ruleset("blocked").unwrap();
+        let mut json = serde_json::to_value(&blocked).unwrap();
+        // A value whose named flag says the opposite of what `acl` enforces.
+        json["did_blocked"] = serde_json::json!(false);
+        json["send_messages"] = serde_json::json!(true);
+        let read: MediatorACLSet = serde_json::from_value(json).unwrap();
+        assert!(read.get_blocked(), "acl is authoritative");
+        assert!(!read.get_send_messages().0);
+        // And it serializes back consistent.
+        let again = serde_json::to_value(&read).unwrap();
+        assert_eq!(again["did_blocked"], serde_json::json!(true));
+        assert_eq!(again["send_messages"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn deserialize_accepts_acl_alone_and_clears_unassigned_bits() {
+        let read: MediatorACLSet =
+            serde_json::from_value(serde_json::json!({ "acl": (1u64 << 40) | (1 << 2) })).unwrap();
+        assert_eq!(read.to_u64(), 1 << 2);
+        assert!(read.get_blocked());
+        assert!(
+            serde_json::from_value::<MediatorACLSet>(serde_json::json!({ "did_blocked": true }))
+                .is_err(),
+            "acl is required"
+        );
+    }
 
     #[test]
     fn test_u64_conversions() {

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.49.2"
+version = "0.49.3"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -48,7 +48,7 @@ trust-tasks-rs = { version = "0.39", default-features = false }
 trust-tasks-proof = { version = "0.39", default-features = false, features = ["affinidi"] }
 chrono = { workspace = true, features = ["clock"] }
 ## Optional: Trust Spanning Protocol (activated by the `tsp` feature)
-affinidi-tsp = { path = "../affinidi-tsp", version = "0.4", optional = true }
+affinidi-tsp = { path = "../affinidi-tsp", version = "0.4.2", optional = true }
 ## Async trait support for the pluggable TSP `RelationshipStore` (tsp feature only).
 async-trait.workspace = true
 ## Pure-TSP auth handler needs the resolver-cache types named by the

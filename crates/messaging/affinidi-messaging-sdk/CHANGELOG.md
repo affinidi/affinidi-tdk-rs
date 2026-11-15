@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.49.3] - 2026-11-15
+
+TSP receive runs the shared `affinidi-tsp` receive path (#1141)
+
+`TspOps::unpack`, `unpack_bytes`, `unpack_message`, `unpack_control` and the
+TSP-multiplexed socket's event opener now open a message through
+`affinidi_tsp::receive::receive`, the same code `TspAgent::receive` runs. The
+SDK's own copy (`unpack_with_fresh_key_state`) is removed. No public API
+changes. Requires `affinidi-tsp` 0.4.2.
+
+**Behaviour (R3.6) — key-state freshness (Rev 3 §7.4.2) is now the stricter
+rule `affinidi-tsp` already applied:**
+
+- After a silence longer than the re-verification threshold, a message from a
+  peer we hold a relationship with is **discarded** unless the peer's key
+  state is confirmed: a refresh succeeds now, or (inside the rate limit) the
+  latest refresh succeeded. Before, the SDK proceeded on the cached key state
+  whenever the rate limit was in force, and the §7.4.2 refresh it owed was
+  silently skipped. A refresh in flight on another task, or one that failed,
+  discards the message (the sender's retry finds the outcome); consecutive
+  failed refreshes back the next attempt off.
+- A refresh's outcome is tracked per attempt (the rate limit's token), so a
+  slow older refresh cannot overwrite a newer one's result.
+- Only senders we hold a relationship with are recorded as seen (the tracker
+  grew with every verified sender before); a control message that forms a
+  relationship (`record_incoming_control`) starts the measurement.
+
+Error types are unchanged: a resolution or relationship-store failure is still
+returned as the `ATMError` it was, everything else as
+`MsgReceiveError("couldn't unpack TSP message: …")`.
+
 ## [0.49.2] - 2026-11-15
 
 One pickup drain, a stable ack id for live frames, a classified drain that

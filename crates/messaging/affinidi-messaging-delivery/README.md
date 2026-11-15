@@ -30,9 +30,16 @@ complete, compiled wiring example.
 
 A `Guaranteed` send under an idempotency key that already has an entry
 transmits nothing and reports that entry's state; `MessagingService::retry`
-re-queues a settled `Unconfirmed` or `Failed` entry. The layer does not
-deduplicate inbound messages, and a message is acked and receipted once it is
-in a subscriber's in-memory queue, not once the application has persisted it.
+re-queues a settled `Unconfirmed` or `Failed` entry.
+
+On the receiving side an unsolicited application message from an
+authenticated sender is recorded in an `InboxStore` before it is acked or
+receipted, keyed by the sender and its idempotency key (delivery id) or
+message id. A re-sent copy of a recorded message is acked and receipted again
+but not handed to subscribers a second time. The default `InMemoryInboxStore`
+lasts as long as the process; supply a durable store with
+`MessagingService::with_inbox` and call `redeliver_pending` after subscribing
+at startup so a receipt means the message survives a restart.
 
 End-to-end delivery **confirmation** (`Sent → Delivered`) comes from three
 sources:
