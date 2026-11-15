@@ -1,6 +1,6 @@
 [package]
 name = "agent-names"
-version = "0.1.4"
+version = "0.1.5"
 description = "Agent Name (DID shortcut) parsing, resolution and verification for the Affinidi TDK"
 repository.workspace = true
 edition.workspace = true
