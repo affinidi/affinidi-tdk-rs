@@ -211,7 +211,13 @@ impl Listener {
                 .send_delivery_request(profile, Some(messages_limit), wait_for_response)
                 .await?;
 
-            let message_ids: Vec<_> = offline_messages.iter().map(|(m, _)| m.id.clone()).collect();
+            // Ack by the mediator's id for each message (`sha256_hash`, the
+            // delivery attachment id). `m.id` is the sender's DIDComm id, which
+            // the SDK no longer overwrites with the mediator's.
+            let message_ids: Vec<_> = offline_messages
+                .iter()
+                .map(|(_, meta)| meta.sha256_hash.clone())
+                .collect();
 
             debug!(profile = %profile.inner.alias, count = offline_messages.len(), "Retrieved offline messages");
 

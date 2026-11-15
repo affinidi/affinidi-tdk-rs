@@ -65,8 +65,10 @@ impl ReceiveHealth {
     }
 }
 
-/// Responses to WebSocketCommands
-#[derive(Clone)]
+/// Responses to WebSocketCommands, and what the inbound message channel
+/// carries. Not `Clone`: it was only for the old `broadcast` inbound channel,
+/// which deep-cloned every message for every receiver.
+#[derive(Debug)]
 pub enum WebSocketResponses {
     /// MessageReceived - sent to SDK when a message is received
     MessageReceived(Box<DidcommMessage>, Box<UnpackMetadata>),

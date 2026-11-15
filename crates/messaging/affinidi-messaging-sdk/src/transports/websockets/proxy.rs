@@ -8,13 +8,14 @@
 use base64::Engine;
 
 use crate::errors::{ATMError, HttpStatusError};
-use std::{env, time::Duration};
+use std::{env, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
 };
 use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, client_async_tls_with_config, connect_async,
+    Connector, MaybeTlsStream, WebSocketStream, client_async_tls_with_config,
+    connect_async_tls_with_config,
     tungstenite::{
         Error as WsError,
         client::IntoClientRequest,
@@ -269,28 +270,41 @@ fn find_header_end(buf: &[u8]) -> Option<usize> {
 /// this: the first attempt goes out while the network is half up and the SYN
 /// or the handshake is never answered. Bounded, it fails like any other connect
 /// error and the backoff ladder tries again on a network that has come back.
-const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Connects a WebSocket, tunneling through a proxy if `HTTPS_PROXY` / `ALL_PROXY` is set.
 ///
 /// When no proxy is configured, falls back to a direct `connect_async`. Fails
 /// after [`WEBSOCKET_CONNECT_TIMEOUT`] rather than waiting on a peer that never
 /// answers.
+///
+/// `tls` is the TLS client config for a `wss://` endpoint; `None` uses
+/// tokio-tungstenite's default (the platform's native roots). The SDK passes
+/// one when `ATMConfigBuilder::with_ssl_certificates` added trust roots.
 pub(crate) async fn connect_websocket<R>(
     request: R,
     target_host: &str,
     target_port: u16,
+    tls: Option<Arc<rustls::ClientConfig>>,
 ) -> Result<(WebSocket, Response<Option<Vec<u8>>>), ATMError>
 where
     R: IntoClientRequest + Unpin,
 {
-    connect_websocket_within(request, target_host, target_port, WEBSOCKET_CONNECT_TIMEOUT).await
+    connect_websocket_within(
+        request,
+        target_host,
+        target_port,
+        tls,
+        WEBSOCKET_CONNECT_TIMEOUT,
+    )
+    .await
 }
 
 async fn connect_websocket_within<R>(
     request: R,
     target_host: &str,
     target_port: u16,
+    tls: Option<Arc<rustls::ClientConfig>>,
     timeout: Duration,
 ) -> Result<(WebSocket, Response<Option<Vec<u8>>>), ATMError>
 where
@@ -298,7 +312,7 @@ where
 {
     tokio::time::timeout(
         timeout,
-        connect_websocket_unbounded(request, target_host, target_port),
+        connect_websocket_unbounded(request, target_host, target_port, tls),
     )
     .await
     .map_err(|_| {
@@ -312,24 +326,27 @@ async fn connect_websocket_unbounded<R>(
     request: R,
     target_host: &str,
     target_port: u16,
+    tls: Option<Arc<rustls::ClientConfig>>,
 ) -> Result<(WebSocket, Response<Option<Vec<u8>>>), ATMError>
 where
     R: IntoClientRequest + Unpin,
 {
+    // `None` lets tokio-tungstenite build its default rustls config (from the
+    // `rustls-tls-native-roots` feature) for a wss:// URI; a plain ws:// URI
+    // ignores the connector either way.
+    let connector = tls.map(Connector::Rustls);
     if let Some(proxy_url) = get_proxy_url(target_host) {
         debug!("Using proxy for WebSocket connection to {target_host}:{target_port}");
 
         let stream = connect_via_proxy(&proxy_url, target_host, target_port).await?;
 
-        // Pass None as connector — tokio-tungstenite will use its default rustls config
-        // (from the `rustls-tls-native-roots` feature) to handle TLS for wss:// URIs.
-        let (ws, response) = client_async_tls_with_config(request, stream, None, None)
+        let (ws, response) = client_async_tls_with_config(request, stream, None, connector)
             .await
             .map_err(|e| upgrade_error("WebSocket connection via proxy", e))?;
 
         Ok((ws, response))
     } else {
-        let (ws, response) = connect_async(request)
+        let (ws, response) = connect_async_tls_with_config(request, None, false, connector)
             .await
             .map_err(|e| upgrade_error("WebSocket connection", e))?;
 
@@ -392,6 +409,7 @@ mod tests {
             format!("ws://127.0.0.1:{port}/ws"),
             "127.0.0.1",
             port,
+            None,
             Duration::from_millis(200),
         )
         .await;
@@ -405,6 +423,77 @@ mod tests {
             Ok(_) => panic!("a silent peer cannot complete a websocket upgrade"),
         }
         held.abort();
+    }
+
+    /// A `wss://` mediator whose certificate chains to a private root is
+    /// refused with the default (platform) roots, and accepted once that root
+    /// is configured with `with_ssl_certificates` (#1013).
+    #[tokio::test]
+    // The env lock is held across the connects on purpose: the proxy tests set
+    // HTTPS_PROXY process-wide, and this connect must go direct.
+    #[allow(clippy::await_holding_lock)]
+    async fn configured_trust_roots_reach_the_websocket_connector() {
+        use futures_util::StreamExt;
+        use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+
+        let _lock = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        clear_proxy_env();
+
+        let issued = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let cert = issued.cert.der().clone();
+        let key =
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(issued.signing_key.serialize_der()));
+        let server_config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert.clone()], key)
+        .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    if let Ok(tls) = acceptor.accept(stream).await
+                        && let Ok(mut ws) = tokio_tungstenite::accept_async(tls).await
+                    {
+                        let _ = ws.next().await;
+                    }
+                });
+            }
+        });
+
+        let request = || format!("wss://localhost:{port}/");
+
+        let refused =
+            connect_websocket_within(request(), "localhost", port, None, Duration::from_secs(10))
+                .await;
+        assert!(refused.is_err(), "a private root is not trusted by default");
+
+        let tls = crate::config::websocket_tls_config(&[cert]).unwrap();
+        assert!(tls.is_some());
+        let connected =
+            connect_websocket_within(request(), "localhost", port, tls, Duration::from_secs(10))
+                .await;
+        assert!(
+            connected.is_ok(),
+            "the configured root must be trusted: {:?}",
+            connected.err()
+        );
+
+        assert!(
+            crate::config::websocket_tls_config(&[]).unwrap().is_none(),
+            "no extra roots leaves the default connector alone"
+        );
+        server.abort();
     }
 
     /// A refused upgrade keeps its status and attribution instead of becoming

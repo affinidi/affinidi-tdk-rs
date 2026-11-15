@@ -1374,7 +1374,15 @@ impl TrustTasksOps<'_> {
         // The reply is matched to the envelope by its DIDComm `thid`; a
         // refusal inside it is matched to the Trust Task itself as well.
         match atm
-            .send_message_inner(profile, &packed, &msg_id, true, true, delete_reply)
+            .send_message_inner(
+                profile,
+                &packed,
+                &msg_id,
+                true,
+                true,
+                delete_reply,
+                crate::protocols::message_pickup::DEFAULT_RESPONSE_WAIT,
+            )
             .await?
         {
             SendMessageResponse::Message(response) => decode_reply(&response.body, &request),

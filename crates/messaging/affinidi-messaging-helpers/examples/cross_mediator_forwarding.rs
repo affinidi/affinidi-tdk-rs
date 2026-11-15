@@ -571,7 +571,12 @@ async fn deliver(
     match recipient
         .atm
         .message_pickup()
-        .live_stream_get(&recipient.profile, &msg_id, Duration::from_secs(15), true)
+        .live_stream_get(
+            &recipient.profile,
+            &msg_id,
+            Some(Duration::from_secs(15)),
+            true,
+        )
         .await?
     {
         Some((received, meta)) => {

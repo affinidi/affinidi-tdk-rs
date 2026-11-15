@@ -5,7 +5,7 @@ use super::WebSocketResponses;
 use crate::messages::compat::UnpackMetadata;
 use affinidi_messaging_didcomm::message::Message;
 use ahash::AHashMap as HashMap;
-use std::{collections::VecDeque, mem::size_of_val};
+use std::collections::VecDeque;
 use tokio::sync::oneshot;
 use tracing::debug;
 
@@ -18,12 +18,12 @@ use tracing::debug;
 /// each map to every cached entry carrying that value, oldest first.
 #[derive(Default)]
 pub(crate) struct MessageCache {
-    messages: HashMap<String, (Message, UnpackMetadata)>, // Cached message data, keyed by entry key
-    id_lookup: HashMap<String, VecDeque<String>>,         // DIDComm message ID to entry keys
-    thid_lookup: HashMap<String, VecDeque<String>>,       // Thread ID (or pthid) to entry keys
+    messages: HashMap<String, (Message, UnpackMetadata, u64)>, // Cached message data and its accounted size, keyed by entry key
+    id_lookup: HashMap<String, VecDeque<String>>,              // DIDComm message ID to entry keys
+    thid_lookup: HashMap<String, VecDeque<String>>,            // Thread ID (or pthid) to entry keys
     pub(crate) wanted_list: HashMap<String, oneshot::Sender<WebSocketResponses>>, // Message ID's (match by id/thid/pthid) that are wanted by the SDK
     ordered_list: VecDeque<String>, // Entry keys in the order they were received
-    total_bytes: u64, // Total size of messages in cache (approx as based on object size)
+    total_bytes: u64, // Total size of messages in cache: the packed (wire) length of each frame
     cache_full: bool, // Flag to state that the cache is full
     fetch_cache_limit_count: u32, // Cache limit on # of messages
     fetch_cache_limit_bytes: u64, // Cache limit on total size of messages
@@ -71,7 +71,14 @@ impl MessageCache {
     /// when the mediator re-pushes the undelivered inbox after a reconnect)
     /// is already held, so the repeat is ignored. Distinct messages that share
     /// a DIDComm `id` are each kept.
-    pub(crate) fn insert(&mut self, message: Message, meta: UnpackMetadata) {
+    ///
+    /// `size` is what the entry counts against `fetch_cache_limit_bytes`: the
+    /// length of the packed frame it arrived as. It is stored with the entry so
+    /// removal subtracts exactly what insertion added. (This used to be
+    /// `size_of_val(&message)`, the fixed stack size of a `Message`, so a 5 MB
+    /// message and a 50-byte one counted the same and the byte limit was never
+    /// reached before the count limit.)
+    pub(crate) fn insert(&mut self, message: Message, meta: UnpackMetadata, size: u64) {
         let key = entry_key(&message, &meta);
         if self.messages.contains_key(&key) {
             debug!(
@@ -82,7 +89,7 @@ impl MessageCache {
             return;
         }
 
-        self.total_bytes += size_of_val(&message) as u64;
+        self.total_bytes = self.total_bytes.saturating_add(size);
         self.id_lookup
             .entry(message.id.clone())
             .or_default()
@@ -99,7 +106,7 @@ impl MessageCache {
             message.id,
             self.len() + 1
         );
-        self.messages.insert(key, (message, meta));
+        self.messages.insert(key, (message, meta, size));
         self.update_full();
     }
 
@@ -167,7 +174,7 @@ impl MessageCache {
     }
 
     fn remove_entry(&mut self, key: &str) -> Option<(Message, UnpackMetadata)> {
-        let (message, meta) = self.messages.remove(key)?;
+        let (message, meta, size) = self.messages.remove(key)?;
 
         if let Some(pos) = self.ordered_list.iter().position(|r| r == key) {
             self.ordered_list.remove(pos);
@@ -180,9 +187,7 @@ impl MessageCache {
         // Remove from search list
         self.wanted_list.remove(&message.id);
 
-        self.total_bytes = self
-            .total_bytes
-            .saturating_sub(size_of_val(&message) as u64);
+        self.total_bytes = self.total_bytes.saturating_sub(size);
         self.update_full();
 
         Some((message, meta))
@@ -272,8 +277,8 @@ mod tests {
     #[test]
     fn repeat_delivery_of_a_cached_message_is_held_once() {
         let mut cache = limited_cache(10);
-        cache.insert(message("m1", None), meta("hash-1"));
-        cache.insert(message("m1", None), meta("hash-1"));
+        cache.insert(message("m1", None), meta("hash-1"), 1);
+        cache.insert(message("m1", None), meta("hash-1"), 1);
         assert_eq!(cache.len(), 1);
 
         let (taken, taken_meta) = cache.next().expect("the message is cached");
@@ -286,8 +291,8 @@ mod tests {
     #[test]
     fn distinct_messages_sharing_an_id_are_both_kept() {
         let mut cache = limited_cache(10);
-        cache.insert(message("same", None), meta("hash-1"));
-        cache.insert(message("same", None), meta("hash-2"));
+        cache.insert(message("same", None), meta("hash-1"), 1);
+        cache.insert(message("same", None), meta("hash-2"), 1);
         assert_eq!(cache.len(), 2);
 
         assert_eq!(cache.get("same").unwrap().1.sha256_hash, "hash-1");
@@ -300,10 +305,10 @@ mod tests {
     fn repeated_ids_do_not_leave_the_cache_full() {
         let mut cache = limited_cache(2);
         for round in 0..5 {
-            cache.insert(message("m1", None), meta("hash-1"));
-            cache.insert(message("m1", None), meta("hash-1"));
-            cache.insert(message("m2", None), meta(&format!("hash-2-{round}")));
-            cache.insert(message("m2", None), meta(&format!("hash-3-{round}")));
+            cache.insert(message("m1", None), meta("hash-1"), 1);
+            cache.insert(message("m1", None), meta("hash-1"), 1);
+            cache.insert(message("m2", None), meta(&format!("hash-2-{round}")), 1);
+            cache.insert(message("m2", None), meta(&format!("hash-3-{round}")), 1);
             assert!(cache.is_full(), "three messages exceed a limit of two");
             while cache.next().is_some() {}
             assert_empty(&cache);
@@ -313,8 +318,8 @@ mod tests {
     #[test]
     fn thread_lookup_finds_every_message_on_a_thread() {
         let mut cache = limited_cache(10);
-        cache.insert(message("a", Some("thread")), meta("hash-a"));
-        cache.insert(message("b", Some("thread")), meta("hash-b"));
+        cache.insert(message("a", Some("thread")), meta("hash-a"), 1);
+        cache.insert(message("b", Some("thread")), meta("hash-b"), 1);
 
         assert_eq!(cache.get("thread").unwrap().0.id, "a");
         assert_eq!(cache.get("thread").unwrap().0.id, "b");
@@ -325,8 +330,8 @@ mod tests {
     #[test]
     fn taking_one_message_by_thread_leaves_the_other_findable() {
         let mut cache = limited_cache(10);
-        cache.insert(message("a", Some("thread")), meta("hash-a"));
-        cache.insert(message("b", Some("thread")), meta("hash-b"));
+        cache.insert(message("a", Some("thread")), meta("hash-a"), 1);
+        cache.insert(message("b", Some("thread")), meta("hash-b"), 1);
 
         assert_eq!(cache.get("a").unwrap().0.id, "a");
         assert_eq!(cache.get("thread").unwrap().0.id, "b");
@@ -336,14 +341,37 @@ mod tests {
     #[test]
     fn get_or_add_wanted_takes_only_one_of_two_messages_sharing_an_id() {
         let mut cache = limited_cache(10);
-        cache.insert(message("same", None), meta("hash-1"));
-        cache.insert(message("same", None), meta("hash-2"));
+        cache.insert(message("same", None), meta("hash-1"), 1);
+        cache.insert(message("same", None), meta("hash-2"), 1);
 
         let (tx, _rx) = oneshot::channel();
         let (_, _, taken) = cache.get_or_add_wanted("same", tx).unwrap();
         assert_eq!(taken.sha256_hash, "hash-1");
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.next().unwrap().1.sha256_hash, "hash-2");
+        assert_empty(&cache);
+    }
+
+    /// The byte limit is measured in packed frame bytes, so one large message
+    /// fills the cache on its own, and taking it frees exactly what it used.
+    #[test]
+    fn the_byte_limit_counts_the_frame_size() {
+        let mut cache = MessageCache::new(100, 1_000);
+        cache.insert(message("small", None), meta("hash-small"), 50);
+        assert!(!cache.is_full());
+        assert_eq!(cache.total_bytes, 50);
+
+        cache.insert(message("large", None), meta("hash-large"), 5_000);
+        assert!(
+            cache.is_full(),
+            "a 5000-byte frame exceeds a 1000-byte limit"
+        );
+        assert_eq!(cache.total_bytes, 5_050);
+
+        assert_eq!(cache.get("large").unwrap().0.id, "large");
+        assert!(!cache.is_full());
+        assert_eq!(cache.total_bytes, 50);
+        assert_eq!(cache.next().unwrap().0.id, "small");
         assert_empty(&cache);
     }
 

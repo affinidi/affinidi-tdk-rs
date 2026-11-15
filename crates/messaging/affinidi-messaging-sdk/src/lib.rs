@@ -27,7 +27,9 @@
 //! and secrets. You need a [`TDKSharedState`] instance first:
 //!
 //! ```rust,ignore
-//! use affinidi_tdk::common::{TDKSharedState, environments::TDKEnvironments};
+//! use affinidi_tdk::common::{
+//!     TDKSharedState, config::TDKConfig, environments::TDKEnvironments,
+//! };
 //! use std::sync::Arc;
 //!
 //! // Load environment configuration (DIDs, secrets, mediator endpoints)
@@ -36,8 +38,11 @@
 //!     "default",
 //! )?;
 //!
-//! let tdk = Arc::new(TDKSharedState::default().await);
+//! let tdk = Arc::new(TDKSharedState::new(TDKConfig::builder().build()?).await?);
 //! ```
+//!
+//! REST calls to the mediator, authentication and DID resolution use the
+//! TDK's HTTP client, so trust for those is configured on the `TDKConfig`.
 //!
 //! ### 2. Build an ATM configuration and create the SDK instance
 //!
@@ -48,8 +53,9 @@
 //! use affinidi_messaging_sdk::{ATM, config::ATMConfig};
 //!
 //! let config = ATMConfig::builder()
-//!     // Add custom SSL/TLS certificates if the mediator uses self-signed certs
-//!     .with_ssl_certificates(&mut environment.ssl_certificates)
+//!     // Trust a private CA for the mediator's websocket (wss://), on top of
+//!     // the platform's roots
+//!     .with_ssl_certificates(&mut environment.ssl_certificate_paths().to_vec())
 //!     // Optional: tune the per-profile message fetch cache
 //!     .with_fetch_cache_limit_count(100)
 //!     .with_fetch_cache_limit_bytes(10 * 1024 * 1024)
@@ -143,7 +149,7 @@
 //!     .live_stream_get(
 //!         &alice,
 //!         &ping.message_id,
-//!         Duration::from_secs(10),
+//!         Some(Duration::from_secs(10)),
 //!         true, // auto-delete
 //!     )
 //!     .await?;
@@ -413,14 +419,22 @@ impl ATM {
         }
     }
 
-    /// If you have set the ATM SDK to be in DirectChannel mode, you can get the inbound channel here
-    /// This allows you to directly stream messages from the WebSocket Handler to your own client code
-    pub fn get_inbound_channel(&self) -> Option<broadcast::Receiver<WebSocketResponses>> {
+    /// Take the receiving end of the inbound message channel configured with
+    /// [`ATMConfigBuilder::with_inbound_message_channel`](crate::config::ATMConfigBuilder::with_inbound_message_channel),
+    /// to stream inbound websocket messages from every profile straight into
+    /// your own code.
+    ///
+    /// The channel has a single consumer: the first call returns the receiver
+    /// and every later call returns `None`, as does a call when no channel was
+    /// configured. Keep polling it: while it is full, inbound messages wait in
+    /// the transport and, once its caches fill, the socket is not read.
+    pub fn get_inbound_channel(&self) -> Option<mpsc::Receiver<WebSocketResponses>> {
         self.inner
             .config
-            .inbound_message_channel
-            .as_ref()
-            .map(|sender| sender.subscribe())
+            .inbound_message_receiver
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
     }
 
     /// Subscribe to the unprocessable-message channel, if configured via

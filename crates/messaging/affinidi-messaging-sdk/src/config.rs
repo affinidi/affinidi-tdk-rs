@@ -6,7 +6,7 @@ use affinidi_crypto::jose::key_agreement::Curve;
 use affinidi_messaging_mediator_types::clock::{Clock, SystemClock};
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use std::{fs::File, io::BufReader, sync::Arc, time::Duration};
-use tokio::sync::{RwLock, broadcast::Sender};
+use tokio::sync::{RwLock, broadcast::Sender, mpsc};
 use tracing::error;
 
 pub use crate::messages::wrapping::MessageWrappingType;
@@ -92,12 +92,27 @@ impl UnpackPolicy {
 /// ```
 #[derive(Clone)]
 pub struct ATMConfig {
+    /// Extra trust roots for the mediator websocket's TLS, on top of the
+    /// platform's. See [`ATMConfigBuilder::with_ssl_certificates`].
     pub(crate) ssl_certificates: Vec<CertificateDer<'static>>,
+    /// The TLS client config the websocket connects with when
+    /// `ssl_certificates` is non-empty: the platform's roots plus those.
+    /// `None` leaves the connector's own default (the platform's roots).
+    pub(crate) websocket_tls: Option<Arc<rustls::ClientConfig>>,
     pub(crate) fetch_cache_limit_count: u32,
     pub(crate) fetch_cache_limit_bytes: u64,
 
     /// If you want to aggregate inbound messages from the SDK to a channel to be used by the client
-    pub(crate) inbound_message_channel: Option<Sender<WebSocketResponses>>,
+    pub(crate) inbound_message_channel: Option<mpsc::Sender<WebSocketResponses>>,
+
+    /// The receiving end of `inbound_message_channel`, handed out once by
+    /// [`crate::ATM::get_inbound_channel`]. Shared so `ATMConfig` stays `Clone`.
+    pub(crate) inbound_message_receiver: InboundReceiverSlot,
+
+    /// How long `profile_enable_websocket` (and its siblings) wait for the
+    /// first connect attempt to finish. See
+    /// [`ATMConfigBuilder::with_websocket_ready_timeout`].
+    pub(crate) websocket_ready_timeout: Duration,
 
     /// Optional broadcast channel that receives an
     /// [`crate::protocols::message_pickup::UnprocessableMessage`] for every
@@ -247,10 +262,6 @@ impl ATMConfig {
         self.purge_policy_rejected_messages
     }
 
-    /// Whether unpack tolerates non-authoritative signatures that don't verify
-    /// (recording them in
-    /// [`crate::messages::compat::UnpackMetadata::unverified_signers`]).
-    /// Default `false`.
     /// Whether the websocket live stream deletes frames it cannot unpack.
     pub fn delete_unprocessable(&self) -> bool {
         self.delete_unprocessable
@@ -261,8 +272,18 @@ impl ATMConfig {
         self.receive_probe_after
     }
 
+    /// Whether unpack tolerates non-authoritative signatures that don't verify
+    /// (recording them in
+    /// [`crate::messages::compat::UnpackMetadata::unverified_signers`]).
+    /// Default `false`.
     pub fn allow_invalid_signatures(&self) -> bool {
         self.allow_invalid_signatures
+    }
+
+    /// How long enabling a profile's websocket waits for its first connect
+    /// attempt to finish. See [`ATMConfigBuilder::with_websocket_ready_timeout`].
+    pub fn get_websocket_ready_timeout(&self) -> Duration {
+        self.websocket_ready_timeout
     }
 
     /// The clock backing the SDK's expiry / TTL decisions.
@@ -270,7 +291,6 @@ impl ATMConfig {
         &self.clock
     }
 
-    /// The pluggable store backing TSP relationship state.
     /// The TSP relationship store this config was built with.
     ///
     /// Public so a caller can reach the same store the SDK is using — a test
@@ -326,13 +346,60 @@ impl ATMConfig {
         ATMConfigBuilder::default()
     }
 
+    /// The extra trust roots parsed from
+    /// [`ATMConfigBuilder::with_ssl_certificates`]; the websocket TLS
+    /// connector trusts these in addition to the platform's roots.
     pub fn get_ssl_certificates(&'_ self) -> &'_ Vec<CertificateDer<'_>> {
         &self.ssl_certificates
     }
 }
 
+/// The TLS client config for the mediator websocket when extra trust roots
+/// were configured: the platform's native roots (as the websocket connector
+/// uses by default) plus `extra`. `None` when `extra` is empty, so the default
+/// connector is used unchanged.
+pub(crate) fn websocket_tls_config(
+    extra: &[CertificateDer<'static>],
+) -> Result<Option<Arc<rustls::ClientConfig>>, ATMError> {
+    if extra.is_empty() {
+        return Ok(None);
+    }
+    let mut roots = rustls::RootCertStore::empty();
+    let native = rustls_native_certs::load_native_certs();
+    if !native.errors.is_empty() {
+        tracing::warn!(
+            "Some platform root certificates could not be loaded: {:?}",
+            native.errors
+        );
+    }
+    let _ = roots.add_parsable_certificates(native.certs);
+    for cert in extra {
+        roots.add(cert.clone()).map_err(|e| {
+            ATMError::SSLError(format!("Couldn't use SSL certificate as a trust root: {e}"))
+        })?;
+    }
+    let provider = rustls::crypto::CryptoProvider::get_default()
+        .cloned()
+        .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| ATMError::SSLError(format!("Couldn't build the TLS configuration: {e}")))?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Ok(Some(Arc::new(config)))
+}
+
+/// The receiving end of the inbound message channel, taken once.
+pub(crate) type InboundReceiverSlot =
+    Arc<std::sync::Mutex<Option<mpsc::Receiver<WebSocketResponses>>>>;
+
 /// Default for [`ATMConfigBuilder::with_receive_probe`].
 pub const DEFAULT_RECEIVE_PROBE_AFTER: Duration = Duration::from_secs(60);
+
+/// Default for [`ATMConfigBuilder::with_websocket_ready_timeout`]. Long
+/// enough for one whole connect attempt: authentication, the 30s-bounded
+/// connect itself, then enabling live delivery.
+pub const DEFAULT_WEBSOCKET_READY_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Builder for `ATMConfig`.
 /// Example:
@@ -346,7 +413,9 @@ pub struct ATMConfigBuilder {
     ssl_certificates: Vec<String>,
     fetch_cache_limit_count: u32,
     fetch_cache_limit_bytes: u64,
-    inbound_message_channel: Option<Sender<WebSocketResponses>>,
+    inbound_message_channel: Option<mpsc::Sender<WebSocketResponses>>,
+    inbound_message_receiver: Option<mpsc::Receiver<WebSocketResponses>>,
+    websocket_ready_timeout: Duration,
     unprocessable_message_channel:
         Option<Sender<crate::protocols::message_pickup::UnprocessableMessage>>,
     purge_policy_rejected_messages: bool,
@@ -380,6 +449,8 @@ impl Default for ATMConfigBuilder {
             fetch_cache_limit_count: 100,
             fetch_cache_limit_bytes: 1024 * 1024 * 10, // Defaults to 10MB Cache
             inbound_message_channel: None,
+            inbound_message_receiver: None,
+            websocket_ready_timeout: DEFAULT_WEBSOCKET_READY_TIMEOUT,
             unprocessable_message_channel: None,
             purge_policy_rejected_messages: true,
             allow_invalid_signatures: false,
@@ -413,8 +484,18 @@ impl ATMConfigBuilder {
         ATMConfigBuilder::default()
     }
 
-    /// Add a list of SSL certificates to the configuration
-    /// Each certificate should be a file path to a PEM encoded certificate
+    /// Trust extra CA certificates for the mediator **websocket** connection,
+    /// for a mediator whose certificate chains to a private or self-signed CA.
+    ///
+    /// Each entry is a file path to PEM encoded certificate(s); every
+    /// certificate in each file becomes a trust root, in addition to the
+    /// platform's native roots (which are still trusted). `build()` fails with
+    /// `ATMError::SSLError` if a file cannot be opened or parsed. The paths
+    /// are moved out of `ssl_certificates`.
+    ///
+    /// REST calls to the mediator (and DID resolution, authentication) use the
+    /// HTTP client of the `TDKSharedState` passed to [`crate::ATM::new`], so
+    /// their trust comes from the TDK configuration, not from this setting.
     pub fn with_ssl_certificates(mut self, ssl_certificates: &mut Vec<String>) -> Self {
         self.ssl_certificates.append(ssl_certificates);
         self
@@ -436,11 +517,36 @@ impl ATMConfigBuilder {
         self
     }
 
-    /// Create an optional broadcast (MPMC) channel to send inbound messages from websockets to
-    /// This is useful if you want to aggregate inbound messages to the SDK to a single channel to be used by the client
+    /// Create a bounded channel that every profile's websocket hands its
+    /// inbound messages to, so the application can take them from one place.
+    /// Take the receiving end, once, with [`crate::ATM::get_inbound_channel`].
+    ///
+    /// The channel is lossless. When it is full (the application is behind)
+    /// the transport keeps messages in its own caches (bounded by
+    /// [`with_fetch_cache_limit_count`](Self::with_fetch_cache_limit_count) /
+    /// [`with_fetch_cache_limit_bytes`](Self::with_fetch_cache_limit_bytes))
+    /// and, once those are full, stops reading the socket until the channel
+    /// drains. Held messages move to the channel as it makes room.
+    ///
+    /// This was a `broadcast` channel: any number of receivers, but a receiver
+    /// more than `capacity` behind silently lost the oldest messages. It is
+    /// now single-consumer `mpsc`. A `capacity` of zero is treated as one.
     pub fn with_inbound_message_channel(mut self, capacity: usize) -> Self {
-        let (inbound_message_channel, _) = tokio::sync::broadcast::channel(capacity);
+        let (inbound_message_channel, receiver) = mpsc::channel(capacity.max(1));
         self.inbound_message_channel = Some(inbound_message_channel);
+        self.inbound_message_receiver = Some(receiver);
+        self
+    }
+
+    /// How long `profile_enable_websocket`, `profile_enable_mux_websocket`,
+    /// `profile_start_live_streaming` and `profile_add(.., true)` wait for
+    /// the first connect attempt to finish before giving up. A failed attempt
+    /// is reported as soon as it fails, with its own error; this bounds only
+    /// an attempt that hangs. Default [`DEFAULT_WEBSOCKET_READY_TIMEOUT`]
+    /// (60s). Values below the websocket connect timeout (30s) are raised to
+    /// it, so a slow but healthy first connect is never cut off.
+    pub fn with_websocket_ready_timeout(mut self, timeout: Duration) -> Self {
+        self.websocket_ready_timeout = timeout;
         self
     }
 
@@ -727,6 +833,7 @@ impl ATMConfigBuilder {
                 "Couldn't parse all SSL certificates!".to_owned(),
             ));
         }
+        let websocket_tls = websocket_tls_config(&certs)?;
 
         // When TSP protocol selection is enabled, advertise the TSP capability
         // URI in Discover Features 2.0 so peers can discover it proactively
@@ -750,9 +857,16 @@ impl ATMConfigBuilder {
 
         Ok(ATMConfig {
             ssl_certificates: certs,
+            websocket_tls,
             fetch_cache_limit_count: self.fetch_cache_limit_count,
             fetch_cache_limit_bytes: self.fetch_cache_limit_bytes,
             inbound_message_channel: self.inbound_message_channel,
+            inbound_message_receiver: Arc::new(std::sync::Mutex::new(
+                self.inbound_message_receiver,
+            )),
+            websocket_ready_timeout: self
+                .websocket_ready_timeout
+                .max(crate::transports::websockets::proxy::WEBSOCKET_CONNECT_TIMEOUT),
             unprocessable_message_channel: self.unprocessable_message_channel,
             purge_policy_rejected_messages: self.purge_policy_rejected_messages,
             allow_invalid_signatures: self.allow_invalid_signatures,

@@ -1,5 +1,14 @@
 # Changelog — `affinidi-tdk`
 
+## 0.47.0 — affinidi-messaging-sdk 0.49
+
+- **Changed (breaking):** requires `affinidi-messaging-sdk` 0.49, which it
+  re-exports. The SDK's inbound message channel is now a bounded `mpsc`,
+  `live_stream_get` takes `Option<Duration>`, and send/receive behaviour
+  changes (R3.6); see that crate's changelog. No source change.
+  `affinidi-messaging-helpers` and `affinidi-messaging-text-client` require
+  this version.
+
 ## 0.46.0 — affinidi-messaging-sdk 0.48 and affinidi-tsp 0.4
 
 - **Changed (breaking):** requires `affinidi-messaging-sdk` 0.48 and
