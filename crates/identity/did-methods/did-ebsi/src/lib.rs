@@ -30,8 +30,21 @@
  *
  * - **ES256** (P-256 / secp256r1): Required minimum for VC/VP operations
  * - **ES256K** (secp256k1): Required for blockchain transactions
+ *
+ * # Usage
+ *
+ * Hold an [`EbsiResolver`] for repeated lookups, so its HTTP client and
+ * connection pool are reused:
+ *
+ * ```no_run
+ * # async fn run() -> Result<(), did_ebsi::EbsiError> {
+ * let resolver = did_ebsi::EbsiResolver::new(did_ebsi::EBSI_PILOT_API)?;
+ * let document = resolver.resolve("did:ebsi:zfEmvX5twhXjQJiCWsukvQA").await?;
+ * # Ok(()) }
+ * ```
  */
 
+use affinidi_did_common::{Document, NetworkError};
 use thiserror::Error;
 
 /// EBSI DID method errors.
@@ -53,6 +66,13 @@ pub enum EbsiError {
     /// HTTP request failed.
     #[error("HTTP error: {0}")]
     Http(String),
+
+    /// The registry answered with an unsuccessful HTTP status. The status,
+    /// the URL and the registry's `Retry-After` are kept as data, so a
+    /// caller can tell a rate limit (HTTP 429) from a DID that is not
+    /// registered (HTTP 404).
+    #[error("{0}")]
+    Network(NetworkError),
 
     /// The response document's `id` did not match the DID being resolved.
     ///
@@ -139,51 +159,124 @@ pub fn generate_ebsi_did() -> String {
     format!("did:ebsi:z{encoded}")
 }
 
+/// Default request timeout.
+pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// A did:ebsi resolver: a reusable HTTP client and the registry API it asks.
+///
+/// The client never follows a redirect: the registry is the trust anchor, and
+/// a 3xx would let it (or anything on-path) send the resolver to an arbitrary
+/// address and serve a forged document from there.
+#[derive(Debug, Clone)]
+pub struct EbsiResolver {
+    client: reqwest::Client,
+    api_base: String,
+}
+
+impl EbsiResolver {
+    /// A resolver for the registry at `api_base` ([`EBSI_PILOT_API`] or
+    /// [`EBSI_CONFORMANCE_API`]) with the default client ([`DEFAULT_TIMEOUT`]).
+    ///
+    /// # Errors
+    /// [`EbsiError::Http`] if the HTTP client cannot be built.
+    pub fn new(api_base: impl Into<String>) -> Result<Self, EbsiError> {
+        let builder = reqwest::Client::builder()
+            .user_agent(concat!("affinidi-did-ebsi/", env!("CARGO_PKG_VERSION")))
+            .timeout(DEFAULT_TIMEOUT);
+        Self::with_client_builder(builder, api_base)
+    }
+
+    /// A resolver over a client the caller configures (timeouts, headers,
+    /// TLS, proxy, connection pool). Set a timeout on `builder`: none is
+    /// added. Redirects are turned off after the caller's settings, so
+    /// nothing set on `builder` turns them back on.
+    ///
+    /// # Errors
+    /// [`EbsiError::Http`] if the HTTP client cannot be built.
+    pub fn with_client_builder(
+        builder: reqwest::ClientBuilder,
+        api_base: impl Into<String>,
+    ) -> Result<Self, EbsiError> {
+        let client = builder
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| EbsiError::Http(format!("building HTTP client: {e}")))?;
+        Ok(Self {
+            client,
+            api_base: api_base.into(),
+        })
+    }
+
+    /// The registry API this resolver asks.
+    pub fn api_base(&self) -> &str {
+        &self.api_base
+    }
+
+    /// Resolve a did:ebsi identifier via the registry, returning its DID
+    /// document.
+    ///
+    /// # Errors
+    /// [`EbsiError::InvalidDid`] for a malformed DID; [`EbsiError::Network`]
+    /// when the registry answers with an unsuccessful status;
+    /// [`EbsiError::Http`] when no answer arrives or the body is over
+    /// [`MAX_DOCUMENT_BYTES`]; [`EbsiError::ParseError`] when the body is not
+    /// a DID document; [`EbsiError::DocumentIdMismatch`] when it is another
+    /// DID's.
+    pub async fn resolve(&self, did: &str) -> Result<Document, EbsiError> {
+        // Validate before interpolating into the URL: a did:ebsi
+        // method-specific id is base58btc, so once validated it can only
+        // contain [1-9A-HJ-NP-Za-km-z] and cannot inject `/`, `?`, `#`, `..`
+        // etc. into the request path.
+        let identifier = did
+            .strip_prefix("did:ebsi:")
+            .ok_or_else(|| EbsiError::InvalidDid("must start with did:ebsi:".into()))?;
+        validate_ebsi_identifier(identifier)?;
+
+        let url = format!("{}/did:ebsi:{identifier}", self.api_base);
+        fetch_document(&self.client, did, &url).await
+    }
+}
+
 /// Resolve a did:ebsi identifier via the EBSI DID Registry API.
 ///
-/// Makes an HTTP GET request to the specified API endpoint and returns
-/// the DID Document as a parsed JSON value.
+/// Makes an HTTP GET request to the specified API endpoint and returns the
+/// [`Document`] it serves, after checking that it is the document of `did`.
+/// Builds a client for the one call; hold an [`EbsiResolver`] to reuse one.
 ///
 /// # Arguments
 ///
 /// * `did` - The full DID string (e.g., "did:ebsi:zfEmvX5twhXjQJiCWsukvQA")
 /// * `api_base` - The API base URL (use `EBSI_PILOT_API` or `EBSI_CONFORMANCE_API`)
-pub async fn resolve_ebsi_did(
+///
+/// # Errors
+/// As [`EbsiResolver::resolve`].
+pub async fn resolve_ebsi_did(did: &str, api_base: &str) -> Result<Document, EbsiError> {
+    EbsiResolver::new(api_base)?.resolve(did).await
+}
+
+async fn fetch_document(
+    client: &reqwest::Client,
     did: &str,
-    api_base: &str,
-) -> Result<affinidi_did_common::Document, EbsiError> {
-    // Validate before interpolating into the URL: a did:ebsi method-specific
-    // id is base58btc, so once validated it can only contain [1-9A-HJ-NP-Za-km-z]
-    // and cannot inject `/`, `?`, `#`, `..` etc. into the request path.
-    let identifier = did
-        .strip_prefix("did:ebsi:")
-        .ok_or_else(|| EbsiError::InvalidDid("must start with did:ebsi:".into()))?;
-    validate_ebsi_identifier(identifier)?;
-
-    let url = format!("{api_base}/did:ebsi:{identifier}");
-
-    // The EBSI registry is the trust anchor here; following a 3xx would let
-    // it (or anything on-path) pivot the resolver to an arbitrary internal
-    // address (SSRF) and serve a forged DID document.
-    let client = reqwest::Client::builder()
-        .user_agent(concat!("affinidi-did-ebsi/", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| EbsiError::Http(format!("building HTTP client: {e}")))?;
-
+    url: &str,
+) -> Result<Document, EbsiError> {
     let mut response = client
-        .get(&url)
+        .get(url)
         .send()
         .await
         .map_err(|e| EbsiError::Http(format!("GET {url}: {e}")))?;
 
-    if !response.status().is_success() {
-        return Err(EbsiError::ResolutionFailed(format!(
-            "HTTP {}: {}",
-            response.status(),
-            url
-        )));
+    let status = response.status();
+    if !status.is_success() {
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok());
+        return Err(EbsiError::Network(
+            NetworkError::new(format!("HTTP {status}"))
+                .with_url(url)
+                .with_status(status.as_u16())
+                .with_retry_after_header(retry_after),
+        ));
     }
 
     // Refuse a body that declares itself too large before reading it, then
@@ -210,7 +303,9 @@ pub async fn resolve_ebsi_did(
         body.extend_from_slice(&chunk);
     }
 
-    let document: affinidi_did_common::Document = serde_json::from_slice(&body)
+    // A relative id or reference (`"#key-1"`) is legal in a DID document; it
+    // is resolved against the document's `id`, which must be `did`.
+    let document = Document::from_json_slice(&body)
         .map_err(|e| EbsiError::ParseError(format!("parsing DID document: {e}")))?;
     verify_document_id(did, &document)?;
 
@@ -366,6 +461,55 @@ mod tests {
 
     const CHUNKED: &str = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
     const DID: &str = "did:ebsi:zfEmvX5twhXjQJiCWsukvQA";
+
+    #[tokio::test]
+    async fn an_unsuccessful_status_is_kept_as_data() {
+        let api_base = serve(
+            "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7\r\nTransfer-Encoding: chunked\r\n\r\n",
+            Vec::new(),
+            Some(0),
+        )
+        .await;
+        let err = resolve_ebsi_did(DID, &api_base).await.unwrap_err();
+        let EbsiError::Network(network) = &err else {
+            panic!("expected EbsiError::Network, got {err:?}");
+        };
+        assert!(network.is_rate_limited());
+        assert_eq!(network.retry_after, Some(std::time::Duration::from_secs(7)));
+        assert_eq!(
+            network.url.as_deref(),
+            Some(format!("{api_base}/{DID}").as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_resolver_is_reused_across_lookups() {
+        let document = format!(r#"{{"id":"{DID}"}}"#).into_bytes();
+        let api_base = serve(CHUNKED, document, Some(1)).await;
+        let resolver = EbsiResolver::new(&api_base).unwrap();
+        assert_eq!(resolver.api_base(), api_base);
+        for _ in 0..2 {
+            assert_eq!(resolver.resolve(DID).await.unwrap().id.as_str(), DID);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_document_with_relative_ids_resolves() {
+        let document = format!(
+            r##"{{"id":"{DID}","verificationMethod":[{{"id":"#key-1","type":"JsonWebKey2020","controller":"{DID}"}}],"assertionMethod":["#key-1"]}}"##
+        )
+        .into_bytes();
+        let api_base = serve(CHUNKED, document, Some(1)).await;
+        let resolved = resolve_ebsi_did(DID, &api_base).await.unwrap();
+        assert_eq!(
+            resolved.verification_method[0].id.as_str(),
+            format!("{DID}#key-1")
+        );
+        assert_eq!(
+            resolved.assertion_method[0].get_id(),
+            format!("{DID}#key-1")
+        );
+    }
 
     #[tokio::test]
     async fn a_chunked_document_within_the_limit_resolves() {

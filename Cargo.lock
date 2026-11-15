@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-common"
-version = "0.4.7"
+version = "0.4.8"
 dependencies = [
  "affinidi-crypto",
  "affinidi-encoding",
@@ -235,7 +235,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.8.54"
+version = "0.8.55"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -314,7 +314,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-resolver-traits"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "affinidi-did-common",
  "thiserror 2.0.21",
@@ -323,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-web"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "affinidi-did-common",
  "affinidi-net-guard",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-webs"
-version = "0.13.5"
+version = "0.13.6"
 dependencies = [
  "affinidi-cesr",
  "affinidi-crypto",
@@ -2601,7 +2601,7 @@ dependencies = [
 
 [[package]]
 name = "did-ebsi"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "affinidi-did-common",
  "bs58",
@@ -2626,13 +2626,13 @@ dependencies = [
 
 [[package]]
 name = "did-scid"
-version = "0.4.8"
+version = "0.4.9"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-webs",
  "affinidi-keri",
  "didwebvh-rs",
- "regex",
+ "reqwest",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-common"
-version = "0.4.7"
+version = "0.4.8"
 description = "Affinidi DID Library"
 edition.workspace = true
 authors.workspace = true
@@ -25,7 +25,7 @@ key-agreement = ["affinidi-crypto/jose"]
 
 [dependencies]
 affinidi-crypto = "0.3"
-affinidi-encoding = "0.1"
+affinidi-encoding = "0.1.7"
 
 # External Crates
 base64 = "0.23"

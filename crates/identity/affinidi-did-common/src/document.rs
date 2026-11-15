@@ -168,6 +168,88 @@ fn expand_verification_method(
     })
 }
 
+/// The verification relationships of a DID document, by their JSON names.
+pub const VERIFICATION_RELATIONSHIPS: [&str; 5] = [
+    "authentication",
+    "assertionMethod",
+    "keyAgreement",
+    "capabilityInvocation",
+    "capabilityDelegation",
+];
+
+/// Resolve a relative DID URL against `base`, the DID of the document it
+/// appears in, or return `None` when `reference` is already absolute.
+///
+/// DID Core lets a document identify its verification methods and services,
+/// and refer to them, by a relative DID URL resolved against the document's
+/// `id`:
+///
+/// * `#key-1` becomes `<base>#key-1`, `?service=x` becomes `<base>?service=x`
+///   and `/path` becomes `<base>/path`;
+/// * a reference with no scheme at all (`key-1`, or the bare SAID a did:webs
+///   `DelegatorOOBI` service is identified by) is read as a fragment:
+///   `<base>#key-1`.
+///
+/// Anything containing a `:` is taken as absolute and left alone.
+pub fn absolutize_reference(reference: &str, base: &str) -> Option<String> {
+    if reference.is_empty() || reference.contains(':') {
+        None
+    } else if reference.starts_with(['#', '?', '/']) {
+        Some(format!("{base}{reference}"))
+    } else {
+        Some(format!("{base}#{reference}"))
+    }
+}
+
+/// Make every relative id and reference of a DID document in JSON form
+/// absolute against `base` (see [`absolutize_reference`]).
+///
+/// Rewritten: each verification method's `id` and `controller`; each entry of
+/// the verification relationships (a reference, or an embedded method's `id`
+/// and `controller`); each service's `id`. Nothing else is touched, so a
+/// method-specific member that holds references needs its own pass.
+pub fn absolutize_references(document: &mut serde_json::Value, base: &str) {
+    use serde_json::Value;
+
+    fn rewrite(value: &mut Value, base: &str) {
+        if let Some(absolute) = value.as_str().and_then(|r| absolutize_reference(r, base)) {
+            *value = Value::String(absolute);
+        }
+    }
+    fn rewrite_method(method: &mut Value, base: &str) {
+        for field in ["id", "controller"] {
+            if let Some(value) = method.get_mut(field) {
+                rewrite(value, base);
+            }
+        }
+    }
+
+    let Some(object) = document.as_object_mut() else {
+        return;
+    };
+    if let Some(Value::Array(methods)) = object.get_mut("verificationMethod") {
+        methods.iter_mut().for_each(|m| rewrite_method(m, base));
+    }
+    for relationship in VERIFICATION_RELATIONSHIPS {
+        if let Some(Value::Array(entries)) = object.get_mut(relationship) {
+            for entry in entries {
+                if entry.is_object() {
+                    rewrite_method(entry, base);
+                } else {
+                    rewrite(entry, base);
+                }
+            }
+        }
+    }
+    if let Some(Value::Array(services)) = object.get_mut("service") {
+        for service in services {
+            if let Some(id) = service.get_mut("id") {
+                rewrite(id, base);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{

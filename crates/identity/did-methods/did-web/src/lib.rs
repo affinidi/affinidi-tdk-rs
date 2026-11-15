@@ -187,8 +187,11 @@ impl DIDWeb {
             .expect("reqwest client with default config")
     }
 
-    /// Build a resolver over a client the caller configures (timeouts,
-    /// headers, TLS, connection pool), under an explicit [`HostPolicy`].
+    /// Build a resolver over a client the caller configures (headers, TLS,
+    /// connection pool), under an explicit [`HostPolicy`].
+    ///
+    /// The request timeout is set to [`DEFAULT_TIMEOUT`] and the user agent
+    /// to this crate's, replacing any set on `builder`.
     ///
     /// The guard settings are applied after the caller's, so nothing set on
     /// `builder` can undo them: redirects are never followed, and under
@@ -255,7 +258,7 @@ impl DIDWeb {
             .parse()
             .map_err(|e| DidWebError::InvalidDid(format!("{e}")))?;
 
-        let (domain, path_segments) = match parsed.method() {
+        let (domain, path_segments) = match parsed.method_ref() {
             DIDMethod::Web {
                 domain,
                 path_segments,
@@ -264,12 +267,12 @@ impl DIDWeb {
             other => {
                 return Err(DidWebError::InvalidDid(format!(
                     "expected did:web, got did:{other}",
-                    other = other_method_name(&other)
+                    other = other_method_name(other)
                 )));
             }
         };
 
-        let url = build_url(&domain, &path_segments)?;
+        let url = build_url(domain, path_segments)?;
 
         // Parse once, here, and hand the parsed URL to the client: re-parsing
         // the string later could disagree with what was checked. A parse
@@ -294,7 +297,17 @@ impl DIDWeb {
         }
 
         debug!(target: "affinidi_did_web", did, %url, "resolving did:web");
+        self.fetch_document(did, parsed_url, url).await
+    }
 
+    /// Fetch `parsed_url` (whose text is `url`) and read it as the document
+    /// of `did`: the size cap, the parse and the `id` check.
+    async fn fetch_document(
+        &self,
+        did: &str,
+        parsed_url: reqwest::Url,
+        url: String,
+    ) -> Result<Document, DidWebError> {
         let mut response = self
             .client
             .get(parsed_url)
@@ -335,7 +348,9 @@ impl DIDWeb {
             body.extend_from_slice(&chunk);
         }
 
-        let document = serde_json::from_slice::<Document>(&body)
+        // A relative id or reference (`"#key-1"`) is legal in a DID document;
+        // it is resolved against the document's `id`, which must be `did`.
+        let document = Document::from_json_slice(&body)
             .map_err(|e| DidWebError::InvalidDocument(format!("parsing {url}: {e}")))?;
         verify_document_id(did, &document)?;
         Ok(document)
@@ -463,8 +478,8 @@ impl reqwest::dns::Resolve for GuardedResolver {
     }
 }
 
-/// The defaults a caller's builder starts from. Applied first, so the caller
-/// may override them.
+/// The user agent and request timeout. They replace any the caller's builder
+/// set; the guard settings are applied after them.
 fn default_settings(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
     builder
         .user_agent(concat!("affinidi-did-web/", env!("CARGO_PKG_VERSION")))
@@ -725,34 +740,92 @@ mod tests {
         assert!(matches!(err, DidWebError::InvalidDid(_)), "got {err:?}");
     }
 
-    /// End-to-end: spin up a local HTTP server posing as `example.com`, point
-    /// the resolver at it via a custom-host client, and verify the document is
-    /// fetched and parsed.
+    /// Drive a `DIDWeb` (under `AllowPrivate`, as the mock listens on
+    /// loopback) through its fetch: the response handling, the size cap, the
+    /// parse and the `id` check. Only the `https` URL `resolve` builds is
+    /// swapped for the mock's plain-HTTP one, as wiremock has no TLS.
+    async fn resolve_via_mock(
+        did: &str,
+        response: ResponseTemplate,
+    ) -> Result<Document, DidWebError> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/did.json"))
+            .respond_with(response)
+            .mount(&server)
+            .await;
+        let url = format!("{}/.well-known/did.json", server.uri());
+        let parsed_url = reqwest::Url::parse(&url).unwrap();
+        DIDWeb::with_policy(HostPolicy::AllowPrivate)
+            .fetch_document(did, parsed_url, url)
+            .await
+    }
+
     #[tokio::test]
     async fn resolves_via_mock_server() {
-        let server = MockServer::start().await;
-
-        // The DID identifies the document by domain only, so the server should
-        // see GET /.well-known/did.json.
         let did_doc = serde_json::json!({
             "@context": ["https://www.w3.org/ns/did/v1"],
             "id": "did:web:example.com",
         });
-        Mock::given(method("GET"))
-            .and(path("/.well-known/did.json"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&did_doc))
-            .mount(&server)
-            .await;
+        let document = resolve_via_mock(
+            "did:web:example.com",
+            ResponseTemplate::new(200).set_body_json(&did_doc),
+        )
+        .await
+        .unwrap();
+        assert_eq!(document.id.as_str(), "did:web:example.com");
+    }
 
-        // Resolve directly against the mock server's address by using the
-        // server's URI as the "domain" portion of a synthesised did:web DID.
-        // wiremock only listens on http (no TLS), so we exercise build_url +
-        // a manually constructed reqwest call to keep the test hermetic.
-        let url = format!("{}/.well-known/did.json", server.uri());
-        let response = reqwest::get(&url).await.unwrap();
-        assert!(response.status().is_success());
-        let parsed: serde_json::Value = response.json().await.unwrap();
-        assert_eq!(parsed["id"], "did:web:example.com");
+    /// DID Core allows relative ids and references; they resolve against the
+    /// document's `id` instead of failing to parse.
+    #[tokio::test]
+    async fn resolves_a_document_with_relative_ids() {
+        let did_doc = serde_json::json!({
+            "id": "did:web:example.com",
+            "verificationMethod": [{
+                "id": "#key-1",
+                "type": "Multikey",
+                "controller": "did:web:example.com",
+                "publicKeyMultibase": "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+            }],
+            "authentication": ["#key-1"],
+            "service": [{
+                "id": "#files",
+                "type": "LinkedDomains",
+                "serviceEndpoint": "https://example.com"
+            }]
+        });
+        let document = resolve_via_mock(
+            "did:web:example.com",
+            ResponseTemplate::new(200).set_body_json(&did_doc),
+        )
+        .await
+        .unwrap();
+        use affinidi_did_common::DocumentExt;
+        assert_eq!(
+            document.verification_method[0].id.as_str(),
+            "did:web:example.com#key-1"
+        );
+        assert!(document.contains_authentication("did:web:example.com#key-1"));
+        assert_eq!(
+            document.service[0].id.as_ref().map(|id| id.as_str()),
+            Some("did:web:example.com#files")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_mock_document_for_another_did_is_refused() {
+        let did_doc = serde_json::json!({ "id": "did:web:evil.example.com" });
+        let err = resolve_via_mock(
+            "did:web:example.com",
+            ResponseTemplate::new(200).set_body_json(&did_doc),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, DidWebError::DocumentIdMismatch { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -788,18 +861,31 @@ mod tests {
 
     #[tokio::test]
     async fn surfaces_http_error_status() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/.well-known/did.json"))
-            .respond_with(ResponseTemplate::new(404))
-            .mount(&server)
-            .await;
+        let err = resolve_via_mock("did:web:example.com", ResponseTemplate::new(404))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                DidWebError::ResolutionFailed { status: 404, url }
+                    if url.ends_with("/.well-known/did.json")
+            ),
+            "{err:?}"
+        );
+    }
 
-        // Build the HTTP-only URL ourselves so we can drive it through reqwest
-        // without going through DIDWeb (which forces HTTPS per the spec).
-        let url = format!("{}/.well-known/did.json", server.uri());
-        let response = reqwest::get(&url).await.unwrap();
-        assert_eq!(response.status().as_u16(), 404);
+    #[tokio::test]
+    async fn a_body_over_the_cap_is_refused() {
+        let err = resolve_via_mock(
+            "did:web:example.com",
+            ResponseTemplate::new(200).set_body_bytes(vec![b' '; MAX_DOCUMENT_BYTES + 1]),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, DidWebError::ResponseTooLarge { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]

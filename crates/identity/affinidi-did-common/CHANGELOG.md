@@ -1,5 +1,69 @@
 # Changelog
 
+## Unreleased (0.4.8) — did:peer:0 documents under the peer DID, SEC1 EC keys from JWKs, validated `DID`s, relative ids
+
+Released as a patch, per ADR 0003 (`didwebvh-rs` and `trust-tasks-proof` pin
+this crate at `0.4`). Several items change behaviour; see Compatibility.
+
+- **Fixed (#1039):** a `did:peer:0…` DID resolves to a document whose `id`,
+  verification method ids and controllers, and every verification
+  relationship reference are the `did:peer:0…` DID. Before, the wrapped
+  did:key's document came back unchanged, all `did:key:…`. Each method's
+  fragment is still its multikey, as for did:key (`did:peer:0z6Mk…#z6Mk…`).
+  A DID URL (`did:key:…#frag`, `did:peer:2…#key-1`) resolves to the document
+  of its bare DID; before, the URL's fragment or path leaked into the
+  document's `id` and, for did:peer:2, into its key ids.
+- **Fixed (#1040):** `KeyMaterial::from_jwk` / `from_jwk_value`, and so
+  deserializing a `KeyMaterial`, store an EC public key in the SEC1
+  uncompressed form a generated key carries (`0x04 || x || y`, 65 bytes for
+  P-256 and secp256k1, 97 for P-384), and refuse a JWK whose `x` or `y` is not
+  the curve's coordinate length. Before, they stored `x || y` without the
+  prefix, so `public_multibase()` failed with "Invalid public key length" and
+  `public_bytes()` differed from the generated key's: a serialize/deserialize
+  round trip of a generated EC key broke both.
+- **Changed (#1044):** `DID::new` validates the `DIDMethod` it is given: the
+  method name and identifier are parsed as a DID string's are, and a method
+  whose other fields (a did:key's codec and key bytes, a did:web's domain,
+  ...) disagree with its identifier is refused with
+  `DIDError::InvalidMethodSpecificId`. Deserializing a `DID` runs the same
+  validation and refuses fields that disagree with each other (including
+  `url`). The serde form is unchanged: still the struct's fields, not the DID
+  string.
+- **Changed (#1044):** the keys of a `did:peer:2` DID must be public keys of
+  their codec's length, as did:key and did:peer:0 keys already had to be
+  (`decode_multikey_checked`). A did:peer:2 naming a private-key codec, or an
+  EC key not in compressed form, no longer parses.
+- **Added (#1044):** borrowing accessors on `DID`: `method_ref`,
+  `method_specific_id_ref`, `path_ref`, `query_ref`, `fragment_ref` and
+  `as_url`. The owned accessors stay, documented as allocating; did:key
+  resolution uses the codec the `DID` already holds instead of decoding the
+  identifier again.
+- **Added (#1042):** `Document::from_json`, `from_json_with_base` and
+  `from_json_slice` parse a DID document whose verification method and
+  service ids, controllers or relationship references are relative DID URLs
+  (`"#key-1"`), resolving them against the document's `id` (or a given base).
+  `document::absolutize_reference` and `document::absolutize_references` do
+  the rewriting, and `document::VERIFICATION_RELATIONSHIPS` names the
+  relationships. Deserializing into `Document` directly is unchanged.
+- **Added (#1043):** `NetworkError` (`network` module): a failed fetch with
+  its URL, HTTP status and `Retry-After`, the shape the DID method crates now
+  report. `affinidi-did-resolver-traits` 0.1.5 converts it into its
+  `NetworkFetchError`.
+- Docs (#1044, #1045): `Document::default()` documents its placeholder `id`
+  (`did:example:123456789abcdefghi`), which `..Default::default()` carries
+  into a document that sets no `id` of its own; the `DID` docs no longer
+  claim more than construction checks.
+- Requires `affinidi-encoding` 0.1.7.
+- **Compatibility (R3.6):** no signature change. Behaviour that changes for a
+  caller: a did:peer:0 document's ids are `did:peer:0…`, not `did:key:…` (a
+  lookup by the did:key id no longer matches); a JWK-built EC `KeyMaterial`'s
+  `public_bytes()` is 1 byte longer, with the `0x04` prefix; a JWK with
+  mis-sized EC coordinates, a did:peer:2 with a private or mis-sized key, a
+  `DID::new` of an inconsistent `DIDMethod`, and a serialized `DID` whose
+  fields disagree are now errors. Checked with `cargo check --workspace
+  --all-targets --all-features`; nothing in this workspace relied on any of
+  them.
+
 ## Unreleased (0.4.7) — affinidi-crypto 0.3
 
 - **Changed:** requires `affinidi-crypto` 0.3. `KeyMaterial::generate_ed25519`,

@@ -394,15 +394,16 @@ pub fn into_document(doc: &Value, did: &DidWebs) -> Result<Document, DidWebsErro
     let subject = did.did();
     let mut out = doc.clone();
 
+    // The did:webs members that hold references: a conditional proof's
+    // conditions, and the key roles. The DID Core ones (verification method
+    // and service ids, controllers, verification relationships) are
+    // `Document::from_json_with_base`'s.
     if let Some(obj) = out.as_object_mut() {
         if let Some(Value::Array(methods)) = obj.get_mut("verificationMethod") {
             for method in methods {
-                absolutize_field(method, "id", subject);
-                for list in ["conditionThreshold"] {
-                    if let Some(Value::Array(refs)) = method.get_mut(list) {
-                        for r in refs {
-                            absolutize(r, subject);
-                        }
+                if let Some(Value::Array(refs)) = method.get_mut("conditionThreshold") {
+                    for r in refs {
+                        absolutize(r, subject);
                     }
                 }
                 if let Some(Value::Array(weighted)) = method.get_mut("conditionWeightedThreshold") {
@@ -410,18 +411,6 @@ pub fn into_document(doc: &Value, did: &DidWebs) -> Result<Document, DidWebsErro
                         absolutize_field(entry, "condition", subject);
                     }
                 }
-            }
-        }
-        for relationship in RELATIONSHIPS {
-            if let Some(Value::Array(refs)) = obj.get_mut(relationship) {
-                for r in refs {
-                    absolutize(r, subject);
-                }
-            }
-        }
-        if let Some(Value::Array(services)) = obj.get_mut("service") {
-            for service in services {
-                absolutize_field(service, "id", subject);
             }
         }
         if let Some(Value::Object(roles)) = obj.get_mut("keyRoles") {
@@ -435,7 +424,7 @@ pub fn into_document(doc: &Value, did: &DidWebs) -> Result<Document, DidWebsErro
         }
     }
 
-    Ok(serde_json::from_value(out)?)
+    Ok(Document::from_json_with_base(out, subject)?)
 }
 
 fn absolutize_field(value: &mut Value, field: &str, subject: &str) {
@@ -445,11 +434,11 @@ fn absolutize_field(value: &mut Value, field: &str, subject: &str) {
 }
 
 fn absolutize(value: &mut Value, subject: &str) {
-    let Some(s) = value.as_str() else { return };
-    if s.starts_with('#') {
-        *value = json!(format!("{subject}{s}"));
-    } else if !s.contains(':') {
-        *value = json!(format!("{subject}#{s}"));
+    if let Some(absolute) = value
+        .as_str()
+        .and_then(|s| affinidi_did_common::document::absolutize_reference(s, subject))
+    {
+        *value = json!(absolute);
     }
 }
 

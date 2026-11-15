@@ -30,13 +30,36 @@ let document = affinidi_did_web::resolve("did:web:example.com").await?;
 let resolver = affinidi_did_web::DIDWeb::new();
 let document = resolver.resolve("did:web:example.com:user:alice").await?;
 
-// Bring your own reqwest client (custom timeouts, proxies, headers, …)
-let client = reqwest::Client::builder().build()?;
-let resolver = affinidi_did_web::DIDWeb::with_client(client);
+// Configure the client (headers, TLS, connection pool, …). The SSRF guard is
+// applied on top of the builder, so nothing set on it can turn the guard off.
+// The request timeout is `DEFAULT_TIMEOUT` (20 s) whatever the builder sets.
+let builder = reqwest::Client::builder().pool_max_idle_per_host(8);
+let resolver = affinidi_did_web::DIDWeb::with_client_builder(
+    builder,
+    affinidi_did_web::HostPolicy::PublicOnly,
+)?;
 ```
+
+`DIDWeb::with_client`, which takes an already built client, is deprecated: a
+built client cannot be given the connect-time guard.
 
 `build_url(domain, path_segments)` is also exposed for callers that need to
 compute the document URL without performing the HTTP request.
+
+A document may identify its keys and services, and refer to them, by relative
+DID URLs (`"#key-1"`); they are resolved against the document's `id`.
+
+## SSRF and `HostPolicy`
+
+A `did:web` value names the host the resolver fetches from, so a DID supplied
+by an attacker can aim it at an internal address. Under the default
+`HostPolicy::PublicOnly` the resolver refuses loopback, private, link-local
+(including the cloud-metadata address), carrier-grade NAT, `localhost` and
+`*.local` hosts, both when the DID names one literally and when a hostname
+resolves to one (checked at connect time), and it never follows a redirect or
+uses a proxy. `HostPolicy::AllowPrivate` turns that off for deployments whose
+did:web hosts really are internal, or for a local test stack
+(`did:web:localhost%3A8080`); use it only where the DIDs resolved are trusted.
 
 ## License
 

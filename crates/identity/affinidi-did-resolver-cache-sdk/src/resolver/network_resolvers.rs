@@ -21,7 +21,7 @@ use tracing::error;
 /// `didwebvh-rs` reports a failure to read or decode the body with the `200` it
 /// had already received. That status did not cause the failure, so it is not
 /// recorded: `status` means "the host answered with this unsuccessful status".
-#[cfg(any(feature = "did-webvh", feature = "did-scid"))]
+#[cfg(feature = "did-webvh")]
 fn webvh_network_error(url: String, status_code: Option<u16>, message: String) -> ResolverError {
     let mut fetch = NetworkFetchError::new(message);
     if !url.is_empty() {
@@ -914,15 +914,13 @@ async fn resolve_scid(
 
 #[cfg(feature = "did-scid")]
 fn scid_error(e: did_scid::errors::DIDSCIDError) -> ResolverError {
+    // A failed fetch of either format (did:webvh or did:webs) keeps its URL,
+    // status and `Retry-After` as data.
+    if let Some(network) = e.network_error() {
+        error!("did:scid resolution fetch failed: {network}");
+        return ResolverError::from(network);
+    }
     match e {
-        did_scid::errors::DIDSCIDError::WebVHError(didwebvh_rs::DIDWebVHError::NetworkError {
-            url,
-            status_code,
-            message,
-        }) => {
-            error!("did:scid resolution fetch failed: url={url} status={status_code:?} {message}");
-            webvh_network_error(url, status_code, message)
-        }
         did_scid::errors::DIDSCIDError::MissingPeerSource => ResolverError::ResolutionFailed(
             "no source is known for this did:scid; resolve it once with its ?src= DID URL"
                 .to_string(),
@@ -941,8 +939,35 @@ fn scid_error(e: did_scid::errors::DIDSCIDError) -> ResolverError {
 /// Resolver for `did:ebsi` — EBSI DID method for legal entities.
 ///
 /// Resolves DIDs via the EBSI DID Registry API (pilot environment by default).
+/// One HTTP client, and its connection pool, is shared by every lookup in the
+/// process.
 #[cfg(feature = "did-ebsi")]
 pub struct EbsiResolver;
+
+/// The process's did:ebsi resolver for the pilot registry, built on first use.
+#[cfg(feature = "did-ebsi")]
+fn ebsi_pilot() -> Result<&'static did_ebsi::EbsiResolver, ResolverError> {
+    static PILOT: std::sync::OnceLock<did_ebsi::EbsiResolver> = std::sync::OnceLock::new();
+    if let Some(resolver) = PILOT.get() {
+        return Ok(resolver);
+    }
+    let resolver = did_ebsi::EbsiResolver::new(did_ebsi::EBSI_PILOT_API)
+        .map_err(|e| ResolverError::ResolutionFailed(e.to_string()))?;
+    Ok(PILOT.get_or_init(|| resolver))
+}
+
+/// A failed did:ebsi resolution: a failed fetch keeps its URL, status and
+/// `Retry-After` as data.
+#[cfg(feature = "did-ebsi")]
+fn ebsi_error(err: did_ebsi::EbsiError) -> ResolverError {
+    match err {
+        did_ebsi::EbsiError::Network(network) => ResolverError::from(network),
+        did_ebsi::EbsiError::Http(message) => {
+            ResolverError::NetworkFetch(NetworkFetchError::new(message))
+        }
+        other => ResolverError::ResolutionFailed(other.to_string()),
+    }
+}
 
 #[cfg(feature = "did-ebsi")]
 impl AsyncResolver for EbsiResolver {
@@ -960,14 +985,14 @@ impl AsyncResolver for EbsiResolver {
             }
 
             let did_str = did.to_string();
-            Some(
-                did_ebsi::resolve_ebsi_did(&did_str, did_ebsi::EBSI_PILOT_API)
-                    .await
-                    .map_err(|e| {
-                        error!("did:ebsi resolution error: {e:?}");
-                        ResolverError::ResolutionFailed(e.to_string())
-                    }),
-            )
+            let resolver = match ebsi_pilot() {
+                Ok(resolver) => resolver,
+                Err(e) => return Some(Err(e)),
+            };
+            Some(resolver.resolve(&did_str).await.map_err(|e| {
+                error!("did:ebsi resolution error: {e:?}");
+                ebsi_error(e)
+            }))
         })
     }
 }
@@ -1038,15 +1063,67 @@ impl AsyncResolver for WebsResolver {
             let did_str = did.to_string();
             Some(self.inner.resolve(&did_str).await.map_err(|e| {
                 error!("did:webs resolution error: {e:?}");
-                ResolverError::ResolutionFailed(e.to_string())
+                webs_error(e)
             }))
         })
+    }
+}
+
+/// A failed did:webs resolution: a failed fetch keeps its URL, status and
+/// `Retry-After` as data.
+#[cfg(feature = "did-webs")]
+fn webs_error(err: affinidi_did_webs::DidWebsError) -> ResolverError {
+    match err.network_error() {
+        Some(network) => ResolverError::from(network),
+        None => ResolverError::ResolutionFailed(err.to_string()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "did-ebsi")]
+    #[test]
+    fn did_ebsi_http_status_is_kept() {
+        let error = ebsi_error(did_ebsi::EbsiError::Network(
+            affinidi_did_common::NetworkError::new("HTTP 429")
+                .with_url("https://api-pilot.ebsi.eu/did-registry/v5/identifiers/did:ebsi:z")
+                .with_status(429)
+                .with_retry_after(std::time::Duration::from_secs(9)),
+        ));
+        let ResolverError::NetworkFetch(fetch) = error else {
+            panic!("expected NetworkFetch, got {error:?}");
+        };
+        assert!(fetch.is_rate_limited());
+        assert_eq!(fetch.retry_after, Some(std::time::Duration::from_secs(9)));
+    }
+
+    #[cfg(feature = "did-webs")]
+    #[test]
+    fn did_webs_http_status_is_kept() {
+        let error = webs_error(affinidi_did_webs::DidWebsError::Network(
+            affinidi_did_common::NetworkError::new("HTTP 404")
+                .with_url("https://example.com/AID/keri.cesr")
+                .with_status(404),
+        ));
+        let ResolverError::NetworkFetch(fetch) = error else {
+            panic!("expected NetworkFetch, got {error:?}");
+        };
+        assert_eq!(fetch.status, Some(404));
+    }
+
+    #[cfg(feature = "did-scid")]
+    #[test]
+    fn did_scid_ke_http_status_is_kept() {
+        let error = scid_error(did_scid::errors::DIDSCIDError::Network(
+            affinidi_did_common::NetworkError::new("HTTP 429").with_status(429),
+        ));
+        let ResolverError::NetworkFetch(fetch) = error else {
+            panic!("expected NetworkFetch, got {error:?}");
+        };
+        assert!(fetch.is_rate_limited());
+    }
 
     #[test]
     fn did_web_http_status_is_kept() {
@@ -1073,7 +1150,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(feature = "did-webvh", feature = "did-scid"))]
+    #[cfg(feature = "did-webvh")]
     #[test]
     fn webvh_body_failure_after_200_records_no_status() {
         let error = webvh_network_error(

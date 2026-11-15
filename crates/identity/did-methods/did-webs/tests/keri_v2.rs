@@ -15,7 +15,7 @@ use affinidi_did_webs::update::{
 use affinidi_did_webs::{
     Artifacts, ControlledResult, DesignatedService, DidWebs, DidWebsError, Kels, KeyAgreementKey,
     KeyRoles, VerificationKey, designated_aliases, designated_key_agreement, designated_services,
-    resolve_from_artifacts,
+    resolve_from_artifacts, resolve_with_metadata,
 };
 use affinidi_keri::ProtocolVersion;
 use affinidi_keri::config::InceptionConfig;
@@ -511,6 +511,44 @@ fn a_recovery_takes_the_designations_it_supersedes_with_it() {
         doc["verificationMethod"]
             .to_string()
             .contains(&pk(&next)[1..])
+    );
+
+    // The metadata follows the verified key state, not the superseded
+    // events the stream still carries past it (#1038).
+    let recovery_sn = created.state().sn + 1;
+    let superseded_sn = created.state().sn + 2;
+    let keri_cesr = &recovered.artifacts().keri_cesr;
+    let at = |query: &str| DidWebs::parse(&format!("{}{query}", recovered.did())).unwrap();
+
+    let latest = resolve_with_metadata(&at(""), keri_cesr, None).expect("resolves");
+    assert_eq!(latest.metadata.version_id, recovery_sn);
+    assert_eq!(latest.metadata.next_version_id, None);
+
+    let err = resolve_with_metadata(&at(&format!("?versionId={superseded_sn}")), keri_cesr, None)
+        .expect_err("a superseded event is not a version of the log");
+    assert!(matches!(err, DidWebsError::Kel(_)), "{err}");
+
+    let recovery =
+        resolve_with_metadata(&at(&format!("?versionId={recovery_sn}")), keri_cesr, None)
+            .expect("the recovery rotation is the latest version");
+    assert_eq!(recovery.metadata.version_id, recovery_sn);
+    assert_eq!(recovery.metadata.next_version_id, None);
+    assert_eq!(
+        serde_json::to_value(&recovery.document).unwrap(),
+        serde_json::to_value(&latest.document).unwrap()
+    );
+
+    let before = resolve_with_metadata(
+        &at(&format!("?versionId={}", created.state().sn)),
+        keri_cesr,
+        None,
+    )
+    .expect("the version before the recovery");
+    assert_eq!(before.metadata.version_id, created.state().sn);
+    assert_eq!(
+        before.metadata.next_version_id,
+        Some(recovery_sn),
+        "the next version is the recovery rotation, not a superseded event"
     );
 }
 

@@ -1,5 +1,6 @@
 //! Errors raised while resolving a `did:webs` identifier.
 
+use affinidi_did_common::NetworkError;
 use thiserror::Error;
 
 /// Errors from `did:webs` parsing and resolution.
@@ -10,7 +11,10 @@ pub enum DidWebsError {
     #[error("invalid did:webs identifier: {0}")]
     InvalidDid(String),
 
-    /// An artifact could not be fetched.
+    /// An artifact could not be fetched: no response arrived (DNS, connect,
+    /// TLS, timeout), or its body could not be read or was over the size
+    /// cap. A host that answered with an unsuccessful status is
+    /// [`DidWebsError::Network`].
     #[error("could not fetch {url}: {reason}")]
     Fetch {
         /// The URL that was requested.
@@ -18,6 +22,13 @@ pub enum DidWebsError {
         /// Why it failed.
         reason: String,
     },
+
+    /// The host answered an artifact request with an unsuccessful HTTP
+    /// status. The status, the URL and the host's `Retry-After` are kept as
+    /// data, so a caller can tell a rate limit (HTTP 429) from an identifier
+    /// that is not published (HTTP 404).
+    #[error("{0}")]
+    Network(NetworkError),
 
     /// The host the DID names is not one the resolver's
     /// [`HostPolicy`](crate::fetch::HostPolicy) lets it fetch from.
@@ -76,4 +87,21 @@ pub enum DidWebsError {
     /// JSON deserialization failed.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+}
+
+impl DidWebsError {
+    /// The failed fetch behind this error, as the [`NetworkError`] every DID
+    /// method crate reports: [`DidWebsError::Network`] as it is, and
+    /// [`DidWebsError::Fetch`] with its URL and no status. `None` for any
+    /// other error.
+    pub fn network_error(&self) -> Option<NetworkError> {
+        match self {
+            Self::Network(network) => Some(network.clone()),
+            Self::Fetch { url, reason } if !url.is_empty() => {
+                Some(NetworkError::new(reason.clone()).with_url(url.clone()))
+            }
+            Self::Fetch { reason, .. } => Some(NetworkError::new(reason.clone())),
+            _ => None,
+        }
+    }
 }
