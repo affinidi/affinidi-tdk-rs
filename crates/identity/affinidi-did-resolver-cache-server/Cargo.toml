@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-server"
-version = "0.11.1"
+version = "0.11.2"
 description = "Affinidi DID Network Cache + Resolver Service"
 edition.workspace = true
 authors.workspace = true
@@ -60,6 +60,8 @@ toml = "1"
 tower-http = { version = "0.7", features = ["cors", "trace"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+# Correlation ids for server-side errors (the detail stays in the logs).
+uuid = { workspace = true, features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 affinidi-secrets-resolver = "0.5.19"

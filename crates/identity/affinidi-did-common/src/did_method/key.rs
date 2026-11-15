@@ -284,6 +284,18 @@ impl KeyMaterial {
                     )));
                 }
 
+                // The SEC1 uncompressed form (`0x04 || x || y`) a generated
+                // key carries, so `public_bytes` and `public_multibase` do not
+                // depend on where the key came from. Right-length coordinates
+                // are not enough: the point must lie on the named curve.
+                let public_bytes = sec1_uncompressed(&x, &y);
+                validate_ec_public_point(key_type, &public_bytes).map_err(|e| {
+                    KeyError::Key(format!(
+                        "{} JWK is not a valid public key: {e}",
+                        params.curve
+                    ))
+                })?;
+
                 Ok(KeyMaterial {
                     id: jwk.key_id.as_ref().unwrap_or(&String::new()).clone(),
                     type_: KeyMaterialType::JsonWebKey2020,
@@ -294,11 +306,7 @@ impl KeyMaterial {
                             .as_ref()
                             .ok_or_else(|| KeyError::Key("Missing private key".into()))?,
                     )?,
-                    // The SEC1 uncompressed form (`0x04 || x || y`) a
-                    // generated key carries, so `public_bytes` and
-                    // `public_multibase` do not depend on where the key came
-                    // from.
-                    public_bytes: sec1_uncompressed(&x, &y),
+                    public_bytes,
                     key_type,
                 })
             }
@@ -456,6 +464,23 @@ pub(crate) fn ec_coordinate_length(key_type: KeyType) -> Option<usize> {
     }
 }
 
+/// Check that `point` (SEC1, compressed or uncompressed) is a valid public key
+/// on `key_type`'s curve: well formed, of the curve's length, and on the curve
+/// (which also excludes the identity, which SEC1 cannot encode as a
+/// coordinate pair). The curve arithmetic is `affinidi-crypto`'s.
+///
+/// A key type that is not an EC curve is an error.
+pub(crate) fn validate_ec_public_point(key_type: KeyType, point: &[u8]) -> Result<(), String> {
+    let checked = match key_type {
+        KeyType::P256 => affinidi_crypto::p256::public_jwk(point),
+        KeyType::P384 => affinidi_crypto::p384::public_jwk(point),
+        KeyType::P521 => affinidi_crypto::p521::public_jwk(point),
+        KeyType::Secp256k1 => affinidi_crypto::secp256k1::public_jwk(point),
+        other => return Err(format!("{other:?} is not an EC curve")),
+    };
+    checked.map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// An EC public key as a SEC1 uncompressed point: `0x04 || x || y`.
 pub(crate) fn sec1_uncompressed(x: &[u8], y: &[u8]) -> Vec<u8> {
     let mut point = Vec::with_capacity(1 + x.len() + y.len());
@@ -523,6 +548,36 @@ mod tests {
             value["x"] = json!(BASE64_URL_SAFE_NO_PAD.encode(&x));
             let err = KeyMaterial::from_jwk_value("k", &value).expect_err("wrong length");
             assert!(err.to_string().contains("32 bytes"), "{err}");
+        }
+    }
+
+    /// Right-length coordinates that are not a point on the curve are
+    /// refused, for every EC curve: flipping a bit of `y` takes a valid key
+    /// off its curve.
+    #[cfg(all(feature = "p256", feature = "p384", feature = "k256"))]
+    #[test]
+    fn from_jwk_refuses_points_off_the_curve() {
+        for key in [
+            KeyMaterial::generate_p256(None).unwrap(),
+            KeyMaterial::generate_p384(None).unwrap(),
+            KeyMaterial::generate_secp256k1(None).unwrap(),
+        ] {
+            let KeyMaterialFormat::JWK(jwk) = &key.format else {
+                panic!("a generated key carries a JWK");
+            };
+            let mut value = serde_json::to_value(jwk).unwrap();
+            let mut y = BASE64_URL_SAFE_NO_PAD
+                .decode(value["y"].as_str().unwrap())
+                .unwrap();
+            *y.last_mut().unwrap() ^= 1;
+            value["y"] = json!(BASE64_URL_SAFE_NO_PAD.encode(&y));
+            let err = KeyMaterial::from_jwk_value("k", &value).expect_err("off the curve");
+            assert!(err.to_string().contains("not a valid public key"), "{err}");
+            // All-zero coordinates are not a point either.
+            let len = y.len();
+            value["x"] = json!(BASE64_URL_SAFE_NO_PAD.encode(vec![0u8; len]));
+            value["y"] = json!(BASE64_URL_SAFE_NO_PAD.encode(vec![0u8; len]));
+            KeyMaterial::from_jwk_value("k", &value).expect_err("zero point");
         }
     }
 

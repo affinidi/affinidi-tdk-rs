@@ -93,7 +93,8 @@ impl VerificationMethod {
 
     /// Map an [`affinidi_crypto::JWK`] to `(multicodec, raw-bytes)`.
     /// OKP `x` is the raw 32-octet key; EC `(x, y)` becomes an
-    /// uncompressed SEC1 point (`0x04 || x || y`).
+    /// uncompressed SEC1 point (`0x04 || x || y`), which must be a valid
+    /// point on the JWK's curve.
     fn jwk_to_codec_bytes(jwk: &affinidi_crypto::JWK) -> Result<(u64, Vec<u8>), DocumentError> {
         use affinidi_crypto::{KeyType, Params};
         use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -103,23 +104,30 @@ impl VerificationMethod {
                 .decode(s)
                 .map_err(|e| DocumentError::VM(format!("invalid base64url in JWK: {e}")))
         };
-        let sec1 = crate::did_method::key::sec1_uncompressed;
+        // The point must be on the curve: a JWK's coordinates come from a DID
+        // document, which the DID's controller (or whoever serves it) chose.
+        let ec_point = |key_type: KeyType, p: &affinidi_crypto::ECParams| {
+            let point = crate::did_method::key::sec1_uncompressed(&b64(&p.x)?, &b64(&p.y)?);
+            crate::did_method::key::validate_ec_public_point(key_type, &point)
+                .map_err(|e| DocumentError::VM(format!("invalid {} publicKeyJwk: {e}", p.curve)))?;
+            Ok::<_, DocumentError>(point)
+        };
 
         match (&jwk.params, jwk.key_type()) {
             (Params::OKP(p), KeyType::Ed25519) => Ok((affinidi_encoding::ED25519_PUB, b64(&p.x)?)),
             (Params::OKP(p), KeyType::X25519) => Ok((affinidi_encoding::X25519_PUB, b64(&p.x)?)),
             (Params::EC(p), KeyType::P256) => {
-                Ok((affinidi_encoding::P256_PUB, sec1(&b64(&p.x)?, &b64(&p.y)?)))
+                Ok((affinidi_encoding::P256_PUB, ec_point(KeyType::P256, p)?))
             }
             (Params::EC(p), KeyType::P384) => {
-                Ok((affinidi_encoding::P384_PUB, sec1(&b64(&p.x)?, &b64(&p.y)?)))
+                Ok((affinidi_encoding::P384_PUB, ec_point(KeyType::P384, p)?))
             }
             (Params::EC(p), KeyType::P521) => {
-                Ok((affinidi_encoding::P521_PUB, sec1(&b64(&p.x)?, &b64(&p.y)?)))
+                Ok((affinidi_encoding::P521_PUB, ec_point(KeyType::P521, p)?))
             }
             (Params::EC(p), KeyType::Secp256k1) => Ok((
                 affinidi_encoding::SECP256K1_PUB,
-                sec1(&b64(&p.x)?, &b64(&p.y)?),
+                ec_point(KeyType::Secp256k1, p)?,
             )),
             (_, kt) => Err(DocumentError::VM(format!(
                 "unsupported JWK key type for public key extraction: {kt:?}"
@@ -237,6 +245,27 @@ mod tests {
         assert_eq!(codec, affinidi_encoding::P256_PUB);
         assert_eq!(bytes.len(), 65, "uncompressed SEC1 point is 65 octets");
         assert_eq!(bytes[0], 0x04, "uncompressed SEC1 marker");
+    }
+
+    #[test]
+    fn decode_public_key_jwk_refuses_a_point_off_the_curve() {
+        // The P-256 point above with the last bit of `y` flipped.
+        let vm: VerificationMethod = serde_json::from_str(
+            r#"{ "controller": "did:example:1234",
+                "id": "did:example:1234#key-0",
+                "type": "JsonWebKey2020",
+                "publicKeyJwk": {
+                    "kty": "EC",
+                    "crv": "P-256",
+                    "x": "sl56LMzaiR5efwwWU1jzC_dfbxQ8gzyLj_N1q2cJmkE",
+                    "y": "UnAimUtlHMPj_T_wIDVPoJAolKHy8DoXXTb8wch4hgQ"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let err = vm.decode_public_key().expect_err("off the curve");
+        assert!(err.to_string().contains("publicKeyJwk"), "{err}");
     }
 
     #[test]

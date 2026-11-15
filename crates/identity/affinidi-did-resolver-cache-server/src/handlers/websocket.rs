@@ -28,7 +28,7 @@ use tracing::{Instrument, debug, info, span, warn};
 
 use crate::{
     SharedData, WebvhLogCache,
-    handlers::{did_within_size_limit, fetch_webvh_log, resolve_with_timeout},
+    handlers::{ClientError, did_within_size_limit, fetch_webvh_log, resolve_with_timeout},
     limits::{ConnectionRefused, ConnectionSlot},
 };
 
@@ -108,7 +108,14 @@ async fn resolve_agent_name(state: &SharedData, name: String) -> WSResponseType 
         Ok(Some(Ok(did))) => did,
         Ok(Some(Err(e))) => {
             state.stats().await.increment_agent_name_error();
-            return fail(e.to_string());
+            return fail(
+                ClientError::new(
+                    StatusCode::BAD_GATEWAY,
+                    &e,
+                    &format!("ws: failed to resolve agent name '{parsed}'"),
+                )
+                .to_text(),
+            );
         }
         Ok(None) => {
             state.stats().await.increment_agent_name_error();
@@ -151,7 +158,14 @@ async fn resolve_agent_name(state: &SharedData, name: String) -> WSResponseType 
         }
         Err(e) => {
             state.stats().await.increment_agent_name_error();
-            fail(e.to_string())
+            fail(
+                ClientError::new(
+                    e.status_code(),
+                    &e,
+                    &format!("ws: couldn't resolve DID ({did}) for agent name '{parsed}'"),
+                )
+                .to_text(),
+            )
         }
     }
 }
@@ -194,9 +208,14 @@ async fn resolve_did(state: &SharedData, did: String) -> WSResponseType {
         Err(e) => {
             // Couldn't resolve the DID (or timed out), send an error back.
             let hash = DIDCacheClient::hash_did(&did);
-            warn!("Couldn't resolve DID: ({did}) Reason: {e}");
+            let status = e.status_code();
+            if !status.is_server_error() {
+                warn!("Couldn't resolve DID: ({did}) Reason: {e}");
+            }
+            // Server-side detail is logged (with a reference) inside, not returned.
+            let error = ClientError::new(status, &e, &format!("ws: couldn't resolve DID ({did})"));
             state.stats().await.increment_resolver_error();
-            WSResponseType::Error(WSResponseError::new(did, hash, e.to_string()))
+            WSResponseType::Error(WSResponseError::new(did, hash, error.to_text()))
         }
     }
 }

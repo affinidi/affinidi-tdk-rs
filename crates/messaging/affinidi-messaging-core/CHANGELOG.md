@@ -1,5 +1,18 @@
 # Affinidi Messaging Core Changelog
 
+## [0.1.15] - 2026-11-15
+
+`RelationshipChange` is `#[must_use]` (AgenticSec #528)
+
+- `RelationshipChange` carries `#[must_use]`. The local relationship state has
+  already moved when a `*_with_control` method returns it, so a caller that
+  drops it (and with it the `control_message` the peer must receive) leaves
+  the two sides disagreeing; the compiler now warns at that call site.
+- **Behaviour note (R3.6):** no API, wire or runtime change. A consumer that
+  builds with `-D warnings` and discards a `RelationshipChange` (for example
+  `mgr.request_relationship_with_control(..).await?;`) now fails to compile
+  until it handles or explicitly discards (`let _ =`) the result.
+
 ## [0.1.14] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

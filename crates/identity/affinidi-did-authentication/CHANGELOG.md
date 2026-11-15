@@ -1,5 +1,18 @@
 # Affinidi DID Authentication
 
+## [0.3.20] - 2026-11-15
+
+`retry_limit = -1` is documented and logged as unbounded (AgenticSec #529)
+
+- `DIDAuthentication::authenticate` documents what `retry_limit = -1` means:
+  an explicit opt-in to retry for as long as the service fails retryably.
+  Rate-limit waits (`429`) stay bounded by `MAX_RATE_LIMIT_WAIT` in every mode
+  (now covered by a test with `-1`), but `408`/`5xx`/timeouts are retried
+  indefinitely, so a caller choosing `-1` must bound the call itself (the TDK
+  authentication task already does, with its own timeout).
+- The first retry under `-1` logs a `warn` saying the attempts are unbounded.
+  The retry semantics are unchanged.
+
 ## [0.3.19] - 2026-11-15
 
 protocol failures are not retried

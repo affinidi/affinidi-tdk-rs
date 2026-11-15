@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.37.1] - 2026-11-15
+
+The offline drain reports undecodable TSP frames (AgenticSec #541)
+
+- A TSP frame that does not decode is acked on both paths (it can never
+  decode). The live path already reported it on the SDK's
+  unprocessable-message channel with its raw body; the offline drain only
+  logged it. It now reports it the same way, under its mediator message id.
+
 ## [0.37.0] - 2026-11-15
 
 Poison frames are dead-lettered; a TSP frame that fails transiently is left queued, not acked (#1141)

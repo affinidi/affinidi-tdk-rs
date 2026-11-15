@@ -97,8 +97,30 @@ impl RelationshipState {
 ///
 /// `#[non_exhaustive]`: construct with [`new`](Self::new) or
 /// [`with_control_message`](Self::with_control_message).
+///
+/// `#[must_use]`: the local state has already moved when this is returned, so
+/// discarding it (and with it `control_message`) leaves the two sides
+/// disagreeing. The compiler warns when a caller drops it unread:
+///
+/// ```compile_fail
+/// #![deny(unused_must_use)]
+/// use affinidi_messaging_core::types::{RelationshipChange, RelationshipState};
+/// fn main() {
+///     RelationshipChange::with_control_message(RelationshipState::Pending, vec![1]);
+/// }
+/// ```
+///
+/// ```
+/// #![deny(unused_must_use)]
+/// use affinidi_messaging_core::types::{RelationshipChange, RelationshipState};
+/// fn main() {
+///     let change = RelationshipChange::with_control_message(RelationshipState::Pending, vec![1]);
+///     assert_eq!(change.control_message.as_deref(), Some(&[1u8][..]));
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
+#[must_use = "the local relationship state has already moved; transmit `control_message` to the peer or the two sides diverge"]
 pub struct RelationshipChange {
     /// The local relationship state after the operation.
     pub state: RelationshipState,

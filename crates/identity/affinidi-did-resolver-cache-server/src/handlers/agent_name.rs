@@ -42,7 +42,7 @@ use http::StatusCode;
 use serde_json::{Value, json};
 use tracing::{debug, warn};
 
-use crate::SharedData;
+use crate::{SharedData, handlers::ClientError};
 
 /// `GET /did/v1/resolve-name/{*name}`
 ///
@@ -117,11 +117,15 @@ pub async fn resolve_name_handler(
         }
         Ok(Some(Err(e))) => {
             state.stats.lock().await.increment_agent_name_error();
-            warn!("failed to resolve agent name '{parsed}': {e}");
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": e.to_string() })),
-            )
+            // The detail (which may name the address the name led to) is
+            // logged under a reference, not returned.
+            let status = StatusCode::BAD_GATEWAY;
+            let error = ClientError::new(
+                status,
+                &e,
+                &format!("failed to resolve agent name '{parsed}'"),
+            );
+            (status, Json(error.to_json()))
         }
         Ok(None) => {
             state.stats.lock().await.increment_agent_name_error();

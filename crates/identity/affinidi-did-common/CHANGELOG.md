@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.10] - 2026-11-15
+
+EC JWK public keys must be points on their curve (AgenticSec #535)
+
+- `KeyMaterial::from_jwk` (and so `from_jwk_value` and `KeyMaterial`
+  deserialization) checked only the length of an EC JWK's `x`/`y`. It now also
+  checks, with `affinidi-crypto`'s curve arithmetic, that `0x04 || x || y` is a
+  valid point on the named curve (P-256, P-384, P-521, secp256k1), and refuses
+  it with `KeyError::Key` otherwise.
+- `VerificationMethod::decode_public_key` applies the same check to an EC
+  `publicKeyJwk` (it previously did no length check either), returning
+  `DocumentError::VM` for an off-curve or malformed point.
+- **Behaviour note (R3.6):** stricter input validation. An EC JWK whose
+  coordinates are not a point on its curve used to be accepted and is now an
+  error; no public signature changes. Valid keys are unaffected.
+
 ## [0.4.9] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

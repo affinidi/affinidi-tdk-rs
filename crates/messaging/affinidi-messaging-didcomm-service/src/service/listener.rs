@@ -678,12 +678,18 @@ impl Listener {
 
     /// Unpack a TSP frame (yielding cleartext payload + authenticated sender VID)
     /// and hand it to the configured [`TspHandler`].
+    ///
+    /// `message_id` is the frame's mediator id. A frame that does not decode
+    /// can never decode (see `route_frame`), so it is acked — and reported
+    /// on the unprocessable-message channel under that id with its raw body,
+    /// as on the live path, rather than only logged.
     #[cfg(feature = "tsp")]
     pub(crate) async fn dispatch_tsp(
         listener_id: &str,
         atm: &ATM,
         profile: &Arc<ATMProfile>,
         handler: &Arc<dyn TspHandler>,
+        message_id: &str,
         packed: String,
     ) -> bool {
         // The pickup socket surfaces the frame as the **qb64** stored string
@@ -699,7 +705,16 @@ impl Listener {
         let qb2 = match atm.tsp().decode(&packed) {
             Ok(bytes) => bytes,
             Err(e) => {
-                warn!(profile = %profile.inner.alias, error = %e, "Failed to decode TSP frame");
+                warn!(
+                    profile = %profile.inner.alias,
+                    error = %e,
+                    "Failed to decode TSP frame; dropping (acked) and reporting it as unprocessable"
+                );
+                atm.report_unprocessable(
+                    Some(message_id.to_string()),
+                    packed,
+                    format!("TSP frame could not be decoded: {e}"),
+                );
                 return true;
             }
         };
@@ -1680,6 +1695,32 @@ mod multiplexed_path_tests {
         assert!(l.in_flight.is_recent(&id), "acked");
         let report = reports.try_recv().expect("reported");
         assert_eq!(report.attachment_id.as_deref(), Some(id.as_str()));
+        assert_eq!(report.raw, packed);
+        assert!(report.reason.contains("could not be decoded"));
+    }
+
+    /// #541 on the offline drain: an undecodable TSP frame is acked with the
+    /// batch and reported on the unprocessable-message channel, as on the live
+    /// path, rather than only logged.
+    #[tokio::test]
+    async fn the_offline_drain_reports_an_undecodable_tsp_frame() {
+        let (l, mut reports) = reporting_listener(|_| {}).await;
+        let sync = offline_sync(&l);
+        let packed = "not base64url at all!".to_string();
+        let (set, handled, dropped) = sync
+            .route_frames(vec![(
+                DeliveryOutcome::Frame(InboundFrame::Tsp(Box::new(packed.clone()))),
+                "t-off".to_string(),
+            )])
+            .await
+            .unwrap();
+        assert!(dropped.is_empty());
+        let (joined, dead) = sync.join_all(set).await;
+        let acked: Vec<&str> = handled.iter().chain(&joined).map(|c| c.id()).collect();
+        assert_eq!(acked, ["t-off"], "acked: it can never decode");
+        assert!(dead.is_empty());
+        let report = reports.try_recv().expect("reported");
+        assert_eq!(report.attachment_id.as_deref(), Some("t-off"));
         assert_eq!(report.raw, packed);
         assert!(report.reason.contains("could not be decoded"));
     }

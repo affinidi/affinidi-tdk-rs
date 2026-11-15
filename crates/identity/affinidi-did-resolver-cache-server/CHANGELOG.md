@@ -1,5 +1,23 @@
 # Affinidi DID Resolver Cache Server
 
+## [0.11.2] - 2026-11-15
+
+Server-side error detail stays in the logs (AgenticSec #530)
+
+- A `5xx` response (`500`, `502`, `504`) from `/did/v1/resolve/{did}` and
+  `/did/v1/resolve-name/{*name}` used to carry the internal error text
+  (upstream URLs, transport errors, resolver internals). It now carries a
+  generic message and a `reference` correlation id
+  (`{"error": "...", "reference": "<id>"}`); the detail is logged at `warn`
+  under the same reference. WebSocket error responses follow the same rule,
+  with the reference in the error text. `4xx` errors keep their detail: it
+  describes the caller's own request.
+- **Behaviour note (R3.6):** the body of a server-side error changes. Clients
+  that parsed the error text of a `5xx` (or of a WebSocket error for a
+  server-side failure) see the generic message instead; statuses are
+  unchanged. `affinidi-did-resolver-cache-sdk` clients in network mode receive
+  that text as `DIDCacheError::TransportError`.
+
 ## [0.11.1] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.
