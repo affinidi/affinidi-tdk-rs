@@ -1,5 +1,13 @@
 # TSP interop harness
 
+> **Known not to pass against TSP 1.0.** This harness targets the reference
+> `tsp_sdk` 0.10.0 (Rev 3). Since `affinidi-tsp` 0.3 emits the TSP 1.0 wire
+> format (`YTSP-BAA`, #967), the round trips below are expected to **fail**
+> until the harness is moved to `tsp_sdk` 0.16.0 (see
+> [`docs/tsp/interop.md`](../docs/tsp/interop.md)). It is not built by the
+> workspace or CI, so nothing detects it going stale — treat its output as
+> historical, not as a pass/fail gate, until it is ported.
+
 A fast, local round-trip harness between **`affinidi-tsp`** (this repo) and the
 ToIP reference **`tsp_sdk` 0.10.0**, the reference's first Rev 3 release. It
 feeds the *same* raw keys, VIDs and payload to both libraries, round-trips every

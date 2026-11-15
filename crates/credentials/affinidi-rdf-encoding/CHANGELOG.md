@@ -1,5 +1,30 @@
 # Affinidi RDF Encoding Changelog
 
+## 0.1.10 — processed JSON-LD contexts are cached
+
+Performance only; expansion and canonicalization output are unchanged (#1055).
+
+- Only contexts derived **purely from bundled contexts** are cached, per
+  thread:
+  - a `@context` given as a URL or a list of URLs (the usual VC form; every
+    URL must be a bundled context), applied to an empty or an already-cached
+    context. It used to be re-processed, with every term definition of
+    `credentials/v2` rebuilt, for every document, and twice per Data
+    Integrity sign/verify (document and proof config).
+  - type- and property-scoped contexts from a cached context's term
+    definitions, applied to a cached context. These used to copy the whole
+    term map at every typed node and scoped property.
+- A document's inline (object) contexts, and anything layered on them, are
+  never cached, so untrusted input cannot grow the cache with distinct
+  keys. As a backstop the cache is capped (32 URL-list and 512 scoped
+  entries per thread) and is cleared as a whole when it fills.
+- Errors are never cached.
+- Context processing no longer deep-clones every entry of the context being
+  processed.
+- `benches/canonicalize.rs` on an Apple-silicon laptop:
+  - `jsonld_expand_and_to_rdf_vc`: 64.6 µs → 5.4 µs
+  - `full_pipeline_expand_canonicalize`: 80.1 µs → 9.0 µs
+
 ## 0.1.9 — no expanded documents in debug logs
 
 `expand_and_to_rdf` and `expand_and_to_rdf_safe` no longer log the full

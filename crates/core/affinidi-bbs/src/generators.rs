@@ -10,7 +10,8 @@
  * They MUST be independently derived (not scalar multiples of each other).
  */
 
-use std::sync::LazyLock;
+use std::collections::HashMap;
+use std::sync::{LazyLock, RwLock};
 
 use bls12_381_plus::elliptic_curve_013::hash2curve::ExpandMsgXmd;
 use bls12_381_plus::{G1Affine, G1Projective, Scalar};
@@ -93,28 +94,89 @@ pub fn create_generators_with_api_id(
         )));
     }
 
-    let seed_dst = [api_id, b"SIG_GENERATOR_SEED_"].concat();
-    let generator_dst = [api_id, b"SIG_GENERATOR_DST_"].concat();
-    let generator_seed = [api_id, b"MESSAGE_GENERATOR_SEED"].concat();
-
     let expand_len = cs.expand_len();
-    let mut generators = Vec::with_capacity(count);
+    let key = (expand_len, api_id.to_vec());
 
-    // Initial seed: v = expand_message(generator_seed, seed_dst, expand_len)
-    let mut v = expand_msg_xmd(&generator_seed, &seed_dst, expand_len);
-
-    for i in 1..=count {
-        // v = expand_message(v || I2OSP(i, 8), seed_dst, expand_len)
-        let mut input = v.clone();
-        input.extend_from_slice(&(i as u64).to_be_bytes()); // I2OSP(i, 8)
-        v = expand_msg_xmd(&input, &seed_dst, expand_len);
-
-        // generator_i = hash_to_curve_g1(v, generator_dst)
-        let point = G1Projective::hash::<ExpandMsgXmd<Sha256>>(&v, &generator_dst);
-        generators.push(point);
+    // Fast path: the cache already holds at least `count` generators.
+    {
+        let cache = GENERATOR_CACHE.read().unwrap_or_else(|e| e.into_inner());
+        if let Some(seq) = cache.get(&key)
+            && seq.generators.len() >= count
+        {
+            return Ok(seq.generators[..count].to_vec());
+        }
     }
 
-    Ok(generators)
+    let mut cache = GENERATOR_CACHE.write().unwrap_or_else(|e| e.into_inner());
+    if !cache.contains_key(&key) && cache.len() >= MAX_CACHED_API_IDS {
+        // An unbounded set of caller-chosen api_ids must not grow the cache
+        // without limit; compute this one without caching it.
+        drop(cache);
+        let mut seq = GeneratorSequence::new(api_id, expand_len);
+        seq.extend_to(count, api_id, expand_len);
+        return Ok(seq.generators);
+    }
+    let seq = cache
+        .entry(key)
+        .or_insert_with(|| GeneratorSequence::new(api_id, expand_len));
+    seq.extend_to(count, api_id, expand_len);
+    Ok(seq.generators[..count].to_vec())
+}
+
+/// Most distinct `(expand_len, api_id)` generator sequences kept in the cache.
+/// The library itself uses a handful (core, blind, blind generators, nym).
+const MAX_CACHED_API_IDS: usize = 16;
+
+/// `(expand_len, api_id)` → the generator sequence computed so far.
+type GeneratorCache = HashMap<(usize, Vec<u8>), GeneratorSequence>;
+
+/// Process-wide cache of generator sequences, keyed by `(expand_len, api_id)`.
+///
+/// The sequence is a pure function of the key and the index, and is
+/// prefix-stable (generator `i` depends only on generators `< i` through the
+/// chained `v`), so each sequence is computed once and extended on demand up
+/// to [`MAX_GENERATORS`]. Generators are public values; caching them leaks
+/// nothing.
+static GENERATOR_CACHE: LazyLock<RwLock<GeneratorCache>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// A generator sequence computed up to some length, with the chaining value
+/// `v` needed to extend it.
+struct GeneratorSequence {
+    generators: Vec<G1Projective>,
+    v: Vec<u8>,
+}
+
+impl GeneratorSequence {
+    fn new(api_id: &[u8], expand_len: usize) -> Self {
+        let seed_dst = [api_id, b"SIG_GENERATOR_SEED_"].concat();
+        let generator_seed = [api_id, b"MESSAGE_GENERATOR_SEED"].concat();
+        // Initial seed: v = expand_message(generator_seed, seed_dst, expand_len)
+        Self {
+            generators: Vec::new(),
+            v: expand_msg_xmd(&generator_seed, &seed_dst, expand_len),
+        }
+    }
+
+    /// Compute generators until there are at least `count`.
+    fn extend_to(&mut self, count: usize, api_id: &[u8], expand_len: usize) {
+        if self.generators.len() >= count {
+            return;
+        }
+        let seed_dst = [api_id, b"SIG_GENERATOR_SEED_"].concat();
+        let generator_dst = [api_id, b"SIG_GENERATOR_DST_"].concat();
+        self.generators.reserve(count - self.generators.len());
+        for i in self.generators.len() + 1..=count {
+            // v = expand_message(v || I2OSP(i, 8), seed_dst, expand_len)
+            let mut input = self.v.clone();
+            input.extend_from_slice(&(i as u64).to_be_bytes()); // I2OSP(i, 8)
+            self.v = expand_msg_xmd(&input, &seed_dst, expand_len);
+
+            // generator_i = hash_to_curve_g1(v, generator_dst)
+            let point = G1Projective::hash::<ExpandMsgXmd<Sha256>>(&self.v, &generator_dst);
+            self.generators.push(point);
+        }
+    }
 }
 
 /// Expand message using the elliptic_curve crate's XMD implementation.
@@ -235,6 +297,30 @@ mod tests {
         // One over: rejected cheaply, before building any generators.
         let err = create_generators(MAX_GENERATORS + 1, Ciphersuite::Bls12381Sha256).unwrap_err();
         assert!(matches!(err, BbsError::InvalidProof(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn cached_generators_match_a_fresh_computation() {
+        // Grow, shrink and regrow the cached sequence; every answer must be the
+        // prefix of an uncached computation.
+        let api_id = Ciphersuite::Bls12381Sha256.api_id();
+        let expand_len = Ciphersuite::Bls12381Sha256.expand_len();
+        let mut fresh = GeneratorSequence::new(&api_id, expand_len);
+        fresh.extend_to(40, &api_id, expand_len);
+        for count in [3, 40, 7, 0, 25] {
+            let cached = create_generators(count, Ciphersuite::Bls12381Sha256).unwrap();
+            assert_eq!(cached.len(), count);
+            for (a, b) in cached.iter().zip(&fresh.generators) {
+                assert_eq!(point_to_bytes(a), point_to_bytes(b));
+            }
+        }
+        // A different api_id is a different sequence.
+        let other = create_generators_with_api_id(3, b"OTHER_API_ID_", Ciphersuite::Bls12381Sha256)
+            .unwrap();
+        assert_ne!(
+            point_to_bytes(&other[0]),
+            point_to_bytes(&fresh.generators[0])
+        );
     }
 
     #[test]

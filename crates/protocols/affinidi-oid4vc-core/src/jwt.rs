@@ -109,24 +109,29 @@ pub fn encode_compact_jws(
 
 /// Decode a compact JWS string into header and payload without verifying.
 pub fn decode_compact_jws_unverified(jws: &str) -> Result<(Value, Value), JwtError> {
-    let parts: Vec<&str> = jws.splitn(3, '.').collect();
-    if parts.len() != 3 {
-        return Err(JwtError::InvalidFormat(
-            "expected 3 dot-separated parts".into(),
-        ));
-    }
-
-    let header_bytes = URL_SAFE_NO_PAD
-        .decode(parts[0])
-        .map_err(|e| JwtError::Base64(format!("header: {e}")))?;
-    let payload_bytes = URL_SAFE_NO_PAD
-        .decode(parts[1])
-        .map_err(|e| JwtError::Base64(format!("payload: {e}")))?;
-
-    let header: Value = serde_json::from_slice(&header_bytes)?;
-    let payload: Value = serde_json::from_slice(&payload_bytes)?;
-
+    let [header_b64, payload_b64, _] = split_compact_jws(jws)?;
+    let header = decode_json_segment(header_b64, "header")?;
+    let payload = decode_json_segment(payload_b64, "payload")?;
     Ok((header, payload))
+}
+
+/// Split a compact JWS into its header, payload and signature segments.
+fn split_compact_jws(jws: &str) -> Result<[&str; 3], JwtError> {
+    let mut parts = jws.splitn(3, '.');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(header), Some(payload), Some(signature)) => Ok([header, payload, signature]),
+        _ => Err(JwtError::InvalidFormat(
+            "expected 3 dot-separated parts".into(),
+        )),
+    }
+}
+
+/// base64url-decode one JWS segment and parse it as JSON.
+fn decode_json_segment(segment: &str, what: &str) -> Result<Value, JwtError> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(segment)
+        .map_err(|e| JwtError::Base64(format!("{what}: {e}")))?;
+    Ok(serde_json::from_slice(&bytes)?)
 }
 
 /// Decode and verify a compact JWS, enforcing a per-context **algorithm
@@ -181,17 +186,8 @@ fn decode_compact_jws_checked(
     verifier: &dyn JwtVerifier,
     allowed_algs: Option<&[&str]>,
 ) -> Result<(Value, Value), JwtError> {
-    let parts: Vec<&str> = jws.splitn(3, '.').collect();
-    if parts.len() != 3 {
-        return Err(JwtError::InvalidFormat(
-            "expected 3 dot-separated parts".into(),
-        ));
-    }
-
-    let header_bytes = URL_SAFE_NO_PAD
-        .decode(parts[0])
-        .map_err(|e| JwtError::Base64(format!("header: {e}")))?;
-    let header: Value = serde_json::from_slice(&header_bytes)?;
+    let parts = split_compact_jws(jws)?;
+    let header = decode_json_segment(parts[0], "header")?;
 
     // RFC 7515/7519: an Unsecured JWS (`alg: none`, empty signature) must
     // never satisfy a verified decode. Don't rely on every JwtVerifier impl
@@ -227,10 +223,7 @@ fn decode_compact_jws_checked(
 
     verifier.verify(signing_input.as_bytes(), &signature)?;
 
-    let payload_bytes = URL_SAFE_NO_PAD
-        .decode(parts[1])
-        .map_err(|e| JwtError::Base64(format!("payload: {e}")))?;
-    let payload: Value = serde_json::from_slice(&payload_bytes)?;
+    let payload = decode_json_segment(parts[1], "payload")?;
 
     Ok((header, payload))
 }
@@ -255,7 +248,7 @@ pub mod test_utils {
 
     /// A simple HMAC-SHA256 signer for unit tests.
     ///
-    /// **WARNING:** Not constant-time. For testing only.
+    /// **WARNING:** HMAC is symmetric; for testing only.
     pub struct HmacTestSigner {
         key: Vec<u8>,
     }
@@ -319,10 +312,32 @@ pub mod test_utils {
     impl JwtVerifier for HmacTestVerifier {
         fn verify(&self, data: &[u8], signature: &[u8]) -> Result<(), JwtError> {
             let expected = self.signer.hmac(data);
-            if expected != signature {
+            if !constant_time_eq(&expected, signature) {
                 return Err(JwtError::Verification("signature mismatch".into()));
             }
             Ok(())
+        }
+    }
+
+    /// Compare two byte strings without an early exit on the first differing
+    /// byte. The length is not secret (an HMAC-SHA-256 tag is always 32
+    /// bytes), so a length mismatch returns at once.
+    fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+        if a.len() != b.len() {
+            return false;
+        }
+        let diff = a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y));
+        std::hint::black_box(diff) == 0
+    }
+
+    #[cfg(test)]
+    mod constant_time_tests {
+        #[test]
+        fn constant_time_eq_compares_bytes() {
+            assert!(super::constant_time_eq(b"abc", b"abc"));
+            assert!(!super::constant_time_eq(b"abc", b"abd"));
+            assert!(!super::constant_time_eq(b"abc", b"ab"));
+            assert!(super::constant_time_eq(b"", b""));
         }
     }
 }

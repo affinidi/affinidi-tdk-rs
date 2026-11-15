@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-oid4vc-core"
 description = "Shared types for the OpenID for Verifiable Credentials (OID4VC) protocol family."
-version = "0.1.11"
+version = "0.1.12"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -20,10 +20,15 @@ eddsa = ["dep:ed25519-dalek", "dep:rand_10"]
 # Compact JWE with ECDH-ES direct (A128GCM / A256GCM): the OpenID4VP 1.0
 # encrypted authorization response (`direct_post.jwt`).
 jwe = ["dep:affinidi-crypto", "dep:zeroize"]
+# Adapters from the raw-bytes `jwt::JwtSigner` / `jwt::JwtVerifier` to
+# affinidi-sd-jwt's compact-JWS traits (`sd_jwt` module), plus a production
+# KB-JWT holder-key verifier when `es256` / `eddsa` are on.
+sd-jwt = ["dep:affinidi-sd-jwt"]
 
 [dependencies]
 # >= 0.2.11 for `jose::gcm` (A128GCM / A256GCM).
 affinidi-crypto = { version = "0.3", features = ["jose"], optional = true }
+affinidi-sd-jwt = { version = "0.2", path = "../../credentials/affinidi-sd-jwt", optional = true }
 base64 = "0.23"
 ed25519-dalek = { version = "3", features = ["rand_core"], optional = true }
 p256 = { version = "0.14", features = ["ecdsa", "arithmetic"], optional = true }

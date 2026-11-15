@@ -29,6 +29,11 @@ pub mod eddsa;
 #[cfg(feature = "jwe")]
 pub mod jwe;
 
+/// Adapters from the raw-bytes [`jwt::JwtSigner`] / [`jwt::JwtVerifier`] to
+/// `affinidi-sd-jwt`'s compact-JWS traits, with an algorithm allowlist.
+#[cfg(feature = "sd-jwt")]
+pub mod sd_jwt;
+
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

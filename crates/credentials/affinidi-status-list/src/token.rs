@@ -325,6 +325,33 @@ pub struct VerifiedStatusListToken {
 }
 
 impl VerifiedStatusListToken {
+    /// [`Self::verify`] with the signature checked by a raw-bytes
+    /// [`affinidi_oid4vc_core::jwt::JwtVerifier`] (e.g. `Es256Verifier`,
+    /// `EdDsaVerifier`), the same trait the OID4VC crates and the SD-JWT
+    /// adapters use (`oid4vc` feature).
+    ///
+    /// The header `alg` must be one of `allowed_algs`; `alg=none`, a missing
+    /// `alg` and an empty signature are refused before the signature is
+    /// checked. Pick the verifier (key) from the unverified header yourself
+    /// beforehand if it carries a `kid`.
+    #[cfg(feature = "oid4vc")]
+    pub fn verify_with_jws_verifier(
+        jwt: &str,
+        reference: &StatusListReference,
+        options: &VerifyOptions,
+        verifier: &dyn affinidi_oid4vc_core::jwt::JwtVerifier,
+        allowed_algs: &[&str],
+    ) -> Result<Self> {
+        Self::verify(jwt, reference, options, |jwt, _header| {
+            affinidi_oid4vc_core::jwt::decode_compact_jws_verified_with_algs(
+                jwt,
+                verifier,
+                allowed_algs,
+            )
+            .map(|(_, payload)| payload)
+        })
+    }
+
     /// Verify a compact `statuslist+jwt` served for `reference`.
     ///
     /// `verify_signature` receives the compact JWT and its (not yet trusted)
@@ -695,6 +722,60 @@ mod tests {
         ] {
             assert!(StatusListReference::from_claims(&bad).is_err(), "{bad}");
         }
+    }
+
+    #[cfg(feature = "oid4vc")]
+    #[test]
+    fn a_raw_bytes_jws_verifier_checks_the_signature_and_alg() {
+        use affinidi_oid4vc_core::eddsa::{EdDsaSigner, EdDsaVerifier};
+        use affinidi_oid4vc_core::jwt::encode_compact_jws;
+
+        let signer = EdDsaSigner::generate();
+        let verifier = EdDsaVerifier::from_bytes(&signer.public_key_bytes()).unwrap();
+        let mut list = TokenStatusList::new(1, 16).unwrap();
+        list.set(3, TokenStatus::Invalid).unwrap();
+        let payload = status_list_token_payload(URI, 1_000, None, None, &list).unwrap();
+        let token = encode_compact_jws(
+            &json!({ "alg": "EdDSA", "typ": "statuslist+jwt" }),
+            &payload,
+            &signer,
+        )
+        .unwrap();
+
+        let verified = VerifiedStatusListToken::verify_with_jws_verifier(
+            &token,
+            &reference(3),
+            &VerifyOptions::at(1_500),
+            &verifier,
+            &["EdDSA"],
+        )
+        .unwrap();
+        assert_eq!(
+            verified.status_of(&reference(3)).unwrap(),
+            TokenStatus::Invalid
+        );
+
+        let err = VerifiedStatusListToken::verify_with_jws_verifier(
+            &token,
+            &reference(3),
+            &VerifyOptions::at(1_500),
+            &verifier,
+            &["ES256"],
+        )
+        .unwrap_err();
+        assert!(matches!(err, StatusListError::Signature(_)), "{err}");
+
+        let other = EdDsaVerifier::from_bytes(&EdDsaSigner::generate().public_key_bytes()).unwrap();
+        assert!(
+            VerifiedStatusListToken::verify_with_jws_verifier(
+                &token,
+                &reference(3),
+                &VerifyOptions::at(1_500),
+                &other,
+                &["EdDSA"],
+            )
+            .is_err()
+        );
     }
 
     #[test]

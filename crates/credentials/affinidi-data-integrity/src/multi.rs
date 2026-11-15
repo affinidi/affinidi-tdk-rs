@@ -190,11 +190,14 @@ where
     // string, so one key named by two URIs (did:key vs did:web, or two
     // fragments in one DID document) still counts once.
     let mut signer_keys: HashSet<Vec<u8>> = HashSet::new();
+    // The document is canonicalized and hashed once per canonicalization kind
+    // (JCS / RDFC), not once per proof; only each proof config is re-hashed.
+    let mut doc_hashes = crate::DocumentHashCache::default();
 
     for proof in proofs {
         let outcome = match resolver.resolve_vm(&proof.verification_method).await {
             Ok(resolved) => proof
-                .verify_with_resolved_key(data_doc, &resolved, &options)
+                .verify_with_resolved_key_cached(data_doc, &resolved, &options, &mut doc_hashes)
                 .map(|()| resolved.public_key_bytes),
             Err(e) => Err(e),
         };
@@ -353,6 +356,66 @@ mod tests {
         )
         .await;
         assert!(!result.policy_satisfied);
+    }
+
+    /// `verify_multi` hashes the document once per canonicalization kind and
+    /// reuses it: JCS and RDFC proofs over one document must each verify, and
+    /// a changed document must fail every one of them.
+    #[tokio::test]
+    async fn verify_multi_mixed_canonicalizations_share_the_document_hash() {
+        use crate::crypto_suites::CryptoSuite;
+        let doc = json!({
+            "@context": [
+                "https://www.w3.org/ns/credentials/v2",
+                "https://www.w3.org/ns/credentials/examples/v2"
+            ],
+            "id": "urn:uuid:58172aac-d8ba-11ed-83dd-0b3aef56cc33",
+            "type": ["VerifiableCredential", "AlumniCredential"],
+            "issuer": "https://vc.example/issuers/5678",
+            "credentialSubject": {
+                "id": "did:example:abcdefgh",
+                "alumniOf": "The School of Examples"
+            }
+        });
+        let mut proofs = Vec::new();
+        for (seed, suite) in [
+            (20, CryptoSuite::EddsaRdfc2022),
+            (21, CryptoSuite::EddsaJcs2022),
+            (22, CryptoSuite::EddsaRdfc2022),
+            (23, CryptoSuite::EddsaJcs2022),
+        ] {
+            let signer = make_signer("ed25519", seed);
+            proofs.push(
+                DataIntegrityProof::sign(&doc, &signer, SignOptions::new().with_cryptosuite(suite))
+                    .await
+                    .unwrap(),
+            );
+        }
+
+        let result = verify_multi(
+            &proofs,
+            &doc,
+            &DidKeyResolver,
+            VerifyOptions::new(),
+            VerifyPolicy::RequireAll,
+        )
+        .await;
+        assert!(result.policy_satisfied, "{:?}", result.failed);
+        assert_eq!(result.passed.len(), 4);
+        assert_eq!(result.distinct_signers, 4);
+
+        let mut changed = doc.clone();
+        changed["credentialSubject"]["alumniOf"] = json!("Another School");
+        let result = verify_multi(
+            &proofs,
+            &changed,
+            &DidKeyResolver,
+            VerifyOptions::new(),
+            VerifyPolicy::RequireAny,
+        )
+        .await;
+        assert!(!result.policy_satisfied);
+        assert_eq!(result.failed.len(), 4);
     }
 
     #[tokio::test]

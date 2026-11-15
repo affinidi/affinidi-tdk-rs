@@ -376,17 +376,8 @@ pub const KB_JWT_TYP: &str = "kb+jwt";
 
 /// The `typ` header member of a compact JWS, if any.
 fn kb_jwt_typ(jws: &str) -> Result<Option<String>> {
-    use base64::Engine;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    let header_b64 = jws
-        .split('.')
-        .next()
-        .ok_or_else(|| SdJwtError::KeyBinding("KB-JWT is not a JWS".into()))?;
-    let header: Value = URL_SAFE_NO_PAD
-        .decode(header_b64)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .ok_or_else(|| SdJwtError::KeyBinding("KB-JWT header is not JSON".into()))?;
+    let header = SdJwt::decode_jwt_part(jws, 0)
+        .map_err(|e| SdJwtError::KeyBinding(format!("KB-JWT header: {e}")))?;
     Ok(header
         .get("typ")
         .and_then(Value::as_str)

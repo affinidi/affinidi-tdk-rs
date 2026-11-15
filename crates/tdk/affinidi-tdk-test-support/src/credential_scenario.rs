@@ -63,7 +63,7 @@ use affinidi_sd_jwt::{
         VerificationResult,
     },
 };
-use affinidi_status_list::bitstring::{BitstringStatusList, StatusPurpose};
+use affinidi_status_list::bitstring::{BitstringStatusList, StatusListAllocator, StatusPurpose};
 use affinidi_vc::sd_jwt_vc::{self, SdJwtVc};
 use coset::iana::Algorithm as CoseAlgorithm;
 
@@ -349,6 +349,7 @@ pub struct CredentialScenario {
     /// Receives presentations; its DID is the KB-JWT audience.
     pub verifier: Party,
     status_list: BitstringStatusList,
+    status_allocator: StatusListAllocator,
     resolver: StaticResolver,
     hasher: Sha256Hasher,
 }
@@ -378,6 +379,9 @@ impl CredentialScenario {
             holder,
             verifier,
             status_list: BitstringStatusList::with_default_size(StatusPurpose::Revocation),
+            status_allocator: StatusListAllocator::new(
+                affinidi_status_list::DEFAULT_BITSTRING_SIZE,
+            ),
             resolver,
             hasher: Sha256Hasher,
         }
@@ -390,7 +394,7 @@ impl CredentialScenario {
 
     /// Reserve a status-list index for a credential.
     pub fn allocate_status(&mut self) -> usize {
-        self.status_list
+        self.status_allocator
             .allocate_index()
             .expect("status list has capacity")
     }

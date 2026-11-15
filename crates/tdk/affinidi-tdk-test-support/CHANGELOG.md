@@ -1,5 +1,12 @@
 # Affinidi TDK Test Support
 
+## Unreleased (0.12.2) — affinidi-status-list 0.2
+
+- **Changed:** requires `affinidi-status-list` 0.2. `CredentialScenario`
+  allocates status indices from a `StatusListAllocator` (index allocation
+  moved there). No public API change: the status list is private to the
+  scenario.
+
 ## Unreleased (0.12.1) — affinidi-crypto 0.3
 
 - **Changed:** requires `affinidi-crypto` 0.3, from the workspace path again.

@@ -1,11 +1,14 @@
 /*!
  * Issuer-side OpenID4VCI operations.
  *
- * Handles credential issuance from the issuer's perspective:
+ * Helpers for the issuer side of OpenID4VCI draft 13:
  * - Credential offer generation
- * - Credential endpoint processing
- * - Proof of possession validation
- * - Token endpoint handling
+ * - Structural credential-request validation (draft-13 request shape)
+ * - Deferred-issuance responses
+ *
+ * Proof-of-possession verification lives in [`crate::proof`]. There is no
+ * token endpoint handling here: the OAuth token exchange (including
+ * pre-authorized code / `tx_code` checks) is the caller's responsibility.
  */
 
 use serde_json::Value;

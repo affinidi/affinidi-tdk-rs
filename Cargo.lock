@@ -77,7 +77,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-bbs"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "affinidi-tdk-test-support",
  "bls12_381_plus",
@@ -129,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-data-integrity"
-version = "0.8.8"
+version = "0.8.9"
 dependencies = [
  "affinidi-bbs",
  "affinidi-crypto",
@@ -715,9 +715,10 @@ dependencies = [
 
 [[package]]
 name = "affinidi-oid4vc-core"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "affinidi-crypto",
+ "affinidi-sd-jwt",
  "base64 0.23.1",
  "ed25519-dalek",
  "p256",
@@ -733,7 +734,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-openid4vci"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "affinidi-oid4vc-core",
  "serde",
@@ -776,7 +777,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-rdf-encoding"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "criterion",
  "serde",
@@ -788,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-sd-jwt"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "affinidi-sd-jwt",
  "base64 0.23.1",
@@ -800,13 +801,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "affinidi-sd-jwt-vc"
-version = "0.3.0"
-dependencies = [
- "affinidi-vc",
 ]
 
 [[package]]
@@ -852,8 +846,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-status-list"
-version = "0.1.7"
+version = "0.2.0"
 dependencies = [
+ "affinidi-oid4vc-core",
  "base64 0.23.1",
  "flate2",
  "rand 0.10.3",
@@ -878,7 +873,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.47.0"
+version = "0.48.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -944,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk-test-support"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",

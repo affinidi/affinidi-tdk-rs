@@ -1,5 +1,23 @@
 # Affinidi BBS
 
+## 0.4.3 — generators cached, multi-scalar multiplication for B and T2
+
+Performance only; signatures, proofs and every fixture are unchanged (#1055).
+
+- **Generators** are cached process-wide per `(api_id, expand_len)` and the
+  cached sequence grows on demand up to `MAX_GENERATORS`. The sequence is a
+  pure, prefix-stable function of its key, so `create_generators*` returns
+  exactly what it computed before; it used to run `count` hash-to-curve
+  operations on every sign, verify, proof generation and proof verification.
+  At most 16 distinct api_ids are cached; others are computed uncached.
+- **`B`** (`compute_b`) and **`T2`** (proof generation and verification) are
+  one constant-time multi-scalar multiplication
+  (`G1Projective::sum_of_products`) instead of a scalar multiplication per
+  term. Proof verification folds `Bv * c` into the same sum.
+- Timing, 20 messages / 5 disclosed, release build: sign 12.7 → 1.7 ms,
+  verify 12.4 → 4.7 ms, proof gen 15.9 → 4.0 ms, proof verify 12.5 → 3.8 ms
+  (warm cache; the first call per api_id still builds the generators).
+
 ## 0.4.2 — signatures parse from exactly 80 bytes; secret intermediates wiped
 
 **Behaviour change (R3.6).** `Signature::from_bytes` now requires exactly 80

@@ -392,7 +392,13 @@ impl DataIntegrityProof {
     where
         S: Serialize,
     {
-        verify_proof_internal(self, data_doc, public_key_bytes, &options)
+        verify_proof_internal(
+            self,
+            data_doc,
+            public_key_bytes,
+            &options,
+            &mut DocumentHashCache::default(),
+        )
     }
 
     /// Verifies a proof by resolving the public key from its
@@ -436,6 +442,27 @@ impl DataIntegrityProof {
     where
         S: Serialize,
     {
+        self.verify_with_resolved_key_cached(
+            data_doc,
+            resolved,
+            options,
+            &mut DocumentHashCache::default(),
+        )
+    }
+
+    /// [`verify_with_resolved_key`](Self::verify_with_resolved_key), reusing
+    /// the document hash in `doc_hashes` across proofs over the same document
+    /// ([`multi::verify_multi`]).
+    pub(crate) fn verify_with_resolved_key_cached<S>(
+        &self,
+        data_doc: &S,
+        resolved: &ResolvedKey,
+        options: &VerifyOptions,
+        doc_hashes: &mut DocumentHashCache,
+    ) -> Result<(), DataIntegrityError>
+    where
+        S: Serialize,
+    {
         // Belt-and-braces key-type check. The CryptoSuiteOps verify will
         // fail on a mismatched key anyway, but a typed error here is
         // clearer to callers and saves the canonicalization work.
@@ -451,7 +478,13 @@ impl DataIntegrityProof {
             });
         }
 
-        verify_proof_internal(self, data_doc, &resolved.public_key_bytes, options)
+        verify_proof_internal(
+            self,
+            data_doc,
+            &resolved.public_key_bytes,
+            options,
+            doc_hashes,
+        )
     }
 }
 
@@ -535,11 +568,48 @@ where
     Ok(proof_options)
 }
 
+/// The canonical document hashes computed while verifying, kept so several
+/// proofs over the same document hash it once per canonicalization kind
+/// (JCS, RDFC). A failure is kept too, as its message, so every proof gets
+/// the same error it would have got on its own.
+#[derive(Default)]
+pub(crate) struct DocumentHashCache {
+    jcs: Option<Result<[u8; 32], String>>,
+    rdfc: Option<Result<[u8; 32], String>>,
+}
+
+impl DocumentHashCache {
+    /// SHA-256 of the JCS form of `doc`.
+    fn jcs<S: Serialize>(&mut self, doc: &S) -> Result<[u8; 32], DataIntegrityError> {
+        self.jcs
+            .get_or_insert_with(|| {
+                to_string(doc)
+                    .map(|jcs| Sha256::digest(jcs).into())
+                    .map_err(|e| format!("document: {e}"))
+            })
+            .clone()
+            .map_err(DataIntegrityError::Canonicalization)
+    }
+
+    /// SHA-256 of the RDFC-1.0 canonical form of `doc` (safe-mode expansion).
+    fn rdfc<S: Serialize>(&mut self, doc: &S) -> Result<[u8; 32], DataIntegrityError> {
+        self.rdfc
+            .get_or_insert_with(|| {
+                let doc_value =
+                    serde_json::to_value(doc).map_err(|e| format!("document serialize: {e}"))?;
+                rdfc_hash_safe(&doc_value).map_err(|e| format!("RDFC document hash: {e}"))
+            })
+            .clone()
+            .map_err(DataIntegrityError::Canonicalization)
+    }
+}
+
 fn verify_proof_internal<S>(
     proof: &DataIntegrityProof,
     signed_doc: &S,
     public_key_bytes: &[u8],
     options: &VerifyOptions,
+    doc_hashes: &mut DocumentHashCache,
 ) -> Result<(), DataIntegrityError>
 where
     S: Serialize,
@@ -614,14 +684,17 @@ where
     }
 
     // Canonicalize & hash (JCS or RDFC depending on suite).
+    // The document hash is the same for every proof over this document, so it
+    // comes from (and is kept in) `doc_hashes`; only the proof config differs.
     let hash_data = if proof_config.cryptosuite.is_rdfc() {
-        let doc_value = serde_json::to_value(signed_doc).map_err(|e| {
-            DataIntegrityError::Canonicalization(format!("document serialize: {e}"))
-        })?;
+        let doc_hash = doc_hashes.rdfc(signed_doc)?;
         let proof_value_json = serde_json::to_value(&proof_config).map_err(|e| {
             DataIntegrityError::Canonicalization(format!("proof config serialize: {e}"))
         })?;
-        hashing_rdfc(&doc_value, &proof_value_json)?
+        let proof_hash = rdfc_hash_safe(&proof_value_json).map_err(|e| {
+            DataIntegrityError::Canonicalization(format!("RDFC proof config hash: {e}"))
+        })?;
+        [proof_hash.as_slice(), doc_hash.as_slice()].concat()
     } else {
         #[cfg(feature = "bbs-2023")]
         if matches!(proof_config.cryptosuite, CryptoSuite::Bbs2023) {
@@ -632,11 +705,14 @@ where
                     .to_string(),
             });
         }
-        let jcs_doc = to_string(&signed_doc)
-            .map_err(|e| DataIntegrityError::Canonicalization(format!("document: {e}")))?;
+        let doc_hash = doc_hashes.jcs(signed_doc)?;
         let jcs_proof_config = to_string(&proof_config)
             .map_err(|e| DataIntegrityError::Canonicalization(format!("proof config: {e}")))?;
-        hashing_jcs(&jcs_doc, &jcs_proof_config)
+        [
+            Sha256::digest(jcs_proof_config).as_slice(),
+            doc_hash.as_slice(),
+        ]
+        .concat()
     };
 
     proof_config

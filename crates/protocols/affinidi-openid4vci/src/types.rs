@@ -1,8 +1,8 @@
 /*!
  * Shared types for OpenID4VCI.
  *
- * These types represent the protocol messages defined in the
- * OpenID4VCI 1.0 specification.
+ * These types represent the protocol messages of OpenID4VCI **draft 13**
+ * (not 1.0 Final — see the crate docs).
  */
 
 use serde::{Deserialize, Serialize};
@@ -260,7 +260,9 @@ pub struct CredentialResponse {
 
 // ── Credential Format Constants ─────────────────────────────────────────────
 
-/// SD-JWT VC credential format identifier.
+/// SD-JWT VC credential format identifier, as used by OpenID4VCI draft 13.
+///
+/// OpenID4VCI 1.0 Final and `affinidi-openid4vp` use `dc+sd-jwt` instead.
 pub const FORMAT_SD_JWT_VC: &str = "vc+sd-jwt";
 
 /// ISO mdoc credential format identifier.

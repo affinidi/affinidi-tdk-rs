@@ -1,5 +1,29 @@
 # Affinidi OID4VC Core Changelog
 
+## Unreleased (0.1.12) — SD-JWT adapters for the raw-bytes signer/verifier
+
+Additive.
+
+- **Added (#1057):** `sd-jwt` feature and `sd_jwt` module, bridging this
+  crate's raw-bytes `jwt::JwtSigner` / `jwt::JwtVerifier` to
+  `affinidi-sd-jwt`'s compact-JWS traits:
+  - `AllowlistVerifier<V>` implements `affinidi_sd_jwt::JwtVerifier` over any
+    raw-bytes verifier plus the algorithms the caller accepts; parsing,
+    `alg=none` refusal and the allowlist are `decode_compact_jws_verified_with_algs`.
+    `Es256Verifier` / `EdDsaVerifier` now plug straight into
+    `affinidi_sd_jwt::verifier::verify`.
+  - `SdJwtSigner<S>` implements `affinidi_sd_jwt::JwtSigner` over a raw-bytes
+    signer.
+  - `holder_key_verifier` (with `es256` and/or `eddsa`): a production
+    `HolderKeyVerifier` for KB-JWTs — EC P-256 → ES256 only, OKP Ed25519 →
+    EdDSA only, anything else refused.
+  The `affinidi-sd-jwt` dependency (0.2) is optional and only enabled by the
+  feature. Deprecating the sd-jwt-specific traits is left for later.
+- **Changed:** the test-only `HmacTestVerifier` (`_test-utils`) compares
+  signatures in constant time (it used `!=`).
+- **Internal:** compact-JWS splitting and segment decoding are shared by the
+  unverified and verified decoders. Same results and errors.
+
 ## Unreleased (0.1.11) — affinidi-crypto 0.3
 
 - **Changed:** requires `affinidi-crypto` 0.3 (`jwe` feature).

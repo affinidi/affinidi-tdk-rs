@@ -33,7 +33,8 @@ pub mod revocation_list;
 pub mod token;
 
 pub use bitstring::{
-    BitstringStatusList, DEFAULT_BITSTRING_SIZE, MIN_BITSTRING_SIZE, StatusListEntry, StatusPurpose,
+    BitstringStatusList, DEFAULT_BITSTRING_SIZE, MIN_BITSTRING_SIZE, MULTIBASE_BASE64URL_PREFIX,
+    StatusListAllocator, StatusListEntry, StatusPurpose,
 };
 pub use error::StatusListError;
 pub use revocation_list::RevocationList;
