@@ -1,5 +1,6 @@
 //! Methods relating to working with DIDs
 
+use crate::common::PromptResultExt;
 use console::style;
 use dialoguer::{Input, theme::ColorfulTheme};
 use sha256::digest;
@@ -15,7 +16,7 @@ pub fn manually_enter_did_or_hash(theme: &ColorfulTheme) -> Option<String> {
     let input: String = Input::with_theme(theme)
         .with_prompt("DID or SHA256 Hash")
         .interact_text()
-        .unwrap();
+        .unwrap_or_exit();
 
     if input == "exit" {
         return None;

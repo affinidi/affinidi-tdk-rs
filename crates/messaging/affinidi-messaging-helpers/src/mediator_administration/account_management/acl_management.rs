@@ -3,7 +3,7 @@
  */
 
 use crate::SharedConfig;
-use affinidi_messaging_helpers::common::did::manually_enter_did_or_hash;
+use affinidi_messaging_helpers::common::{PromptResultExt, did::manually_enter_did_or_hash};
 use affinidi_messaging_sdk::tasks::messaging::account;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use console::style;
@@ -69,7 +69,7 @@ pub(crate) async fn manage_account_acls(
             .default(0)
             .items(&selections[..])
             .interact()
-            .unwrap();
+            .unwrap_or_exit();
 
         match selection {
             0 => {
@@ -170,7 +170,7 @@ async fn _modify_acl_flags(
         .items_checked(selections)
         .report(false)
         .interact()
-        .unwrap();
+        .unwrap_or_exit();
 
     // convert the selection to an array of bools
     let mut flags = [false; 12];

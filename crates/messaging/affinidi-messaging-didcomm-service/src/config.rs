@@ -1,4 +1,6 @@
 use affinidi_messaging_sdk::protocols::mediator::acls::AccessListModeType;
+use std::time::Duration;
+
 use affinidi_tdk_common::{config::TDKConfig, profiles::TDKProfile};
 
 use crate::error::ConfigError;
@@ -14,11 +16,20 @@ pub struct DIDCommServiceConfig {
 /// The mediator allows one websocket per DID, so a node speaking both protocols
 /// multiplexes them on the same socket rather than opening a second one. At
 /// least one protocol must be enabled — an empty set is rejected at
-/// construction ([`ConfigError::NoProtocolEnabled`]).
+/// construction ([`ConfigError::NoProtocolEnabled`]). The fields are private
+/// so the empty set cannot be built at all; read them with
+/// [`didcomm`](Self::didcomm) and [`tsp`](Self::tsp).
+///
+/// Both flags are enforced on receipt: a listener with `didcomm` off drops
+/// (and acks) DIDComm frames instead of handing them to the
+/// [`DIDCommHandler`](crate::DIDCommHandler), and one with `tsp` off drops TSP
+/// frames, live and in the offline drain. `tsp` requires this crate's `tsp`
+/// feature; a listener asking for it in a build without the feature is refused
+/// with [`ConfigError::TspFeatureDisabled`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Protocols {
-    pub didcomm: bool,
-    pub tsp: bool,
+    didcomm: bool,
+    tsp: bool,
 }
 
 impl Protocols {
@@ -45,6 +56,16 @@ impl Protocols {
             return Err(ConfigError::NoProtocolEnabled);
         }
         Ok(Self { didcomm, tsp })
+    }
+
+    /// Whether DIDComm frames are handled.
+    pub const fn didcomm(&self) -> bool {
+        self.didcomm
+    }
+
+    /// Whether TSP frames are handled.
+    pub const fn tsp(&self) -> bool {
+        self.tsp
     }
 }
 
@@ -73,7 +94,23 @@ pub struct ListenerConfig {
     /// `RelationshipKv` backend) to persist relationships across restarts.
     #[cfg(feature = "tsp")]
     pub relationship_store: Option<std::sync::Arc<dyn affinidi_messaging_sdk::RelationshipStore>>,
+    /// Most handler invocations this listener runs at once, across the live
+    /// stream and the offline drain. When all are busy the listener stops
+    /// pulling from the mediator until one finishes (the mediator keeps the
+    /// rest queued). Must be at least 1. Default
+    /// [`DEFAULT_MAX_CONCURRENT_HANDLERS`].
+    pub max_concurrent_handlers: usize,
+    /// How long a stopping listener (shutdown, `remove_listener`, or a lost
+    /// transport) waits for running handlers before aborting them. An aborted
+    /// handler's message was not acked, so the mediator redelivers it. Default
+    /// [`DEFAULT_SHUTDOWN_DRAIN_TIMEOUT`].
+    pub shutdown_drain_timeout: Duration,
 }
+
+/// Default for [`ListenerConfig::max_concurrent_handlers`].
+pub const DEFAULT_MAX_CONCURRENT_HANDLERS: usize = 64;
+/// Default for [`ListenerConfig::shutdown_drain_timeout`].
+pub const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl std::fmt::Debug for ListenerConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -88,13 +125,17 @@ impl std::fmt::Debug for ListenerConfig {
             .field("auto_delete", &self.auto_delete)
             .field("tdk_config", &self.tdk_config.as_ref().map(|_| "..."))
             .field("protocols", &self.protocols)
+            .field("max_concurrent_handlers", &self.max_concurrent_handlers)
+            .field("shutdown_drain_timeout", &self.shutdown_drain_timeout)
             .finish()
     }
 }
 
 impl ListenerConfig {
     /// Create a new listener config with the required fields.
-    /// Optional fields use sensible defaults (restart: Never, wait: 5s, auto_delete: true).
+    /// Optional fields use the [`Default`] values: restart
+    /// `OnFailure` with unlimited retries and the default backoff, wait 5s,
+    /// `auto_delete` on, DIDComm only, 64 concurrent handlers, 10s drain.
     pub fn new(id: impl Into<String>, profile: TDKProfile) -> Self {
         Self {
             id: id.into(),
@@ -129,13 +170,41 @@ impl Default for ListenerConfig {
             protocols: Protocols::default(),
             #[cfg(feature = "tsp")]
             relationship_store: None,
+            max_concurrent_handlers: DEFAULT_MAX_CONCURRENT_HANDLERS,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
         }
     }
 }
 
-#[derive(Debug, Clone, Default)]
+impl ListenerConfig {
+    /// Check the settings that cannot be enforced by construction. Called by
+    /// `AffinidiMessageService::start*` and `add_listener` before anything is
+    /// spawned.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        #[cfg(not(feature = "tsp"))]
+        if self.protocols.tsp() {
+            return Err(ConfigError::TspFeatureDisabled {
+                listener_id: self.id.clone(),
+            });
+        }
+        if self.max_concurrent_handlers == 0 {
+            return Err(ConfigError::ZeroHandlerConcurrency {
+                listener_id: self.id.clone(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// What a listener does when its connection attempt or receive loop fails.
+///
+/// The default is `OnFailure` with unlimited retries and the default
+/// [`RetryConfig`] backoff, so a mediator that is briefly unreachable at boot
+/// does not end the listener for good. (It was `Never` before 0.35.)
+#[derive(Debug, Clone)]
 pub enum RestartPolicy {
-    #[default]
+    /// Stop after the first failure. The listener then reports
+    /// [`ListenerState::Failed`](crate::ListenerState::Failed).
     Never,
     OnFailure {
         max_retries: Option<u32>,
@@ -144,6 +213,15 @@ pub enum RestartPolicy {
     Always {
         backoff: RetryConfig,
     },
+}
+
+impl Default for RestartPolicy {
+    fn default() -> Self {
+        RestartPolicy::OnFailure {
+            max_retries: None,
+            backoff: RetryConfig::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -172,8 +250,17 @@ mod tests {
         assert_eq!(lc.message_wait_duration_secs, 5);
         assert!(lc.auto_delete);
         assert!(lc.acl_mode.is_none());
-        assert!(matches!(lc.restart_policy, RestartPolicy::Never));
+        assert!(matches!(
+            lc.restart_policy,
+            RestartPolicy::OnFailure {
+                max_retries: None,
+                ..
+            }
+        ));
         assert!(lc.tdk_config.is_none());
+        assert_eq!(lc.max_concurrent_handlers, DEFAULT_MAX_CONCURRENT_HANDLERS);
+        assert_eq!(lc.shutdown_drain_timeout, DEFAULT_SHUTDOWN_DRAIN_TIMEOUT);
+        assert!(lc.validate().is_ok());
         // Back-compat: a listener defaults to DIDComm-only.
         assert_eq!(lc.protocols, Protocols::DIDCOMM_ONLY);
     }
@@ -181,8 +268,8 @@ mod tests {
     #[test]
     fn protocols_default_is_didcomm_only() {
         assert_eq!(Protocols::default(), Protocols::DIDCOMM_ONLY);
-        assert!(Protocols::default().didcomm);
-        assert!(!Protocols::default().tsp);
+        assert!(Protocols::default().didcomm());
+        assert!(!Protocols::default().tsp());
     }
 
     #[cfg(feature = "tsp")]
@@ -221,9 +308,44 @@ mod tests {
     }
 
     #[test]
-    fn restart_policy_default_is_never() {
+    fn restart_policy_default_retries_on_failure() {
         let rp = RestartPolicy::default();
-        assert!(matches!(rp, RestartPolicy::Never));
+        assert!(matches!(
+            rp,
+            RestartPolicy::OnFailure {
+                max_retries: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn zero_handler_concurrency_is_refused() {
+        let lc = ListenerConfig {
+            id: "l".into(),
+            max_concurrent_handlers: 0,
+            ..Default::default()
+        };
+        assert!(matches!(
+            lc.validate(),
+            Err(ConfigError::ZeroHandlerConcurrency { ref listener_id }) if listener_id == "l"
+        ));
+    }
+
+    #[test]
+    fn tsp_without_the_feature_is_refused() {
+        let lc = ListenerConfig {
+            id: "l".into(),
+            protocols: Protocols::BOTH,
+            ..Default::default()
+        };
+        #[cfg(not(feature = "tsp"))]
+        assert!(matches!(
+            lc.validate(),
+            Err(ConfigError::TspFeatureDisabled { ref listener_id }) if listener_id == "l"
+        ));
+        #[cfg(feature = "tsp")]
+        assert!(lc.validate().is_ok());
     }
 
     #[test]

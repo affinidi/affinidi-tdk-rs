@@ -8,13 +8,23 @@ use crate::utils::new_message_id;
 
 /// A response to be sent back to the message sender.
 ///
-/// When sent via a handler return value, the following fields are
-/// auto-filled from the [`HandlerContext`] if not explicitly set:
+/// A response always goes to the authenticated sender of the message being
+/// answered, encrypted from the listener's profile DID. Its headers say so:
 ///
-/// - **`from`** — defaults to the listener's profile DID
-/// - **`to`** — defaults to the incoming message's sender DID
-/// - **`thid`** — defaults to the incoming message's thread ID
-/// - **`pthid`** — defaults to the incoming message's parent thread ID (if any)
+/// - **`from`** — the listener's profile DID
+/// - **`to`** — the incoming message's authenticated sender DID
+/// - **`thid`** — the incoming message's thread ID, unless set with
+///   [`thid`](Self::thid)
+/// - **`pthid`** — the incoming message's parent thread ID (if any), unless set
+///   with [`pthid`](Self::pthid)
+///
+/// To send to anyone else, or from another DID, use
+/// [`AffinidiMessageService::send_message`](crate::AffinidiMessageService::send_message).
+/// The [`to`](Self::to), [`to_many`](Self::to_many) and [`from`](Self::from)
+/// setters are deprecated: they only ever changed the headers, never who the
+/// reply was encrypted for or routed to, so a receiver checking addressing
+/// rejected the reply. Since 0.35 their values are ignored (and logged at
+/// warn when they differ from the real addressing).
 ///
 /// This means a minimal response only needs a type and body:
 /// ```ignore
@@ -46,16 +56,30 @@ impl DIDCommResponse {
         Self::new(PROBLEM_REPORT_TYPE, report.to_body())
     }
 
+    #[deprecated(
+        since = "0.35.0",
+        note = "a response always goes to the message's sender; use \
+                AffinidiMessageService::send_message to reach anyone else"
+    )]
     pub fn to(mut self, did: impl Into<String>) -> Self {
         self.to.push(did.into());
         self
     }
 
+    #[deprecated(
+        since = "0.35.0",
+        note = "a response always goes to the message's sender; use \
+                AffinidiMessageService::send_message to reach anyone else"
+    )]
     pub fn to_many(mut self, dids: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.to.extend(dids.into_iter().map(Into::into));
         self
     }
 
+    #[deprecated(
+        since = "0.35.0",
+        note = "a response is always sent from the listener's profile DID"
+    )]
     pub fn from(mut self, did: impl Into<String>) -> Self {
         self.from = Some(did.into());
         self
@@ -75,17 +99,23 @@ impl DIDCommResponse {
         self,
         ctx: &HandlerContext,
     ) -> Result<Message, crate::error::DIDCommServiceError> {
-        let from = self.from.unwrap_or_else(|| ctx.profile.inner.did.clone());
-
-        let to = if self.to.is_empty() {
-            let sender = ctx
-                .sender_did
-                .as_deref()
-                .ok_or(crate::error::TransportError::MissingSenderDid)?;
-            vec![sender.to_string()]
-        } else {
-            self.to
-        };
+        // The reply is packed from the profile DID and routed to the sender
+        // (`transport::send_response`), so the headers say exactly that.
+        let from = ctx.profile.inner.did.clone();
+        let sender = ctx
+            .sender_did
+            .as_deref()
+            .ok_or(crate::error::TransportError::MissingSenderDid)?;
+        if self.from.as_deref().is_some_and(|f| f != from) || self.to.iter().any(|t| t != sender) {
+            tracing::warn!(
+                requested_from = ?self.from,
+                requested_to = ?self.to,
+                sender = %sender,
+                "DIDCommResponse to/to_many/from are ignored: a response goes to the \
+                 message's sender, from the listener's DID"
+            );
+        }
+        let to = vec![sender.to_string()];
 
         let thid = self
             .thid
@@ -109,6 +139,7 @@ impl DIDCommResponse {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -178,5 +209,22 @@ mod tests {
         assert_eq!(resp.from, Some("did:b".into()));
         assert_eq!(resp.thid, Some("t1".into()));
         assert_eq!(resp.pthid, Some("p1".into()));
+    }
+
+    /// #1033: the deprecated setters no longer put an address in the headers
+    /// that the reply is not actually encrypted for or sent from.
+    #[tokio::test]
+    async fn headers_always_name_the_sender_and_the_profile() {
+        let mut ctx = crate::handler::test_context().await;
+        ctx.sender_did = Some("did:example:alice".into());
+        ctx.thread_id = "req-1".into();
+        let msg = DIDCommResponse::new("t", json!({}))
+            .to("did:example:carol")
+            .from("did:example:mallory")
+            .into_message(&ctx)
+            .unwrap();
+        assert_eq!(msg.to, Some(vec!["did:example:alice".to_string()]));
+        assert_eq!(msg.from.as_deref(), Some("did:example:service"));
+        assert_eq!(msg.thid.as_deref(), Some("req-1"));
     }
 }

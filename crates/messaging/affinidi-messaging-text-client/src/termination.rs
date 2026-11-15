@@ -6,7 +6,9 @@ use tokio::sync::broadcast;
 pub enum Interrupted {
     OsSigInt,
     UserInt,
-    SystemError,
+    /// The state store stopped on an error; the text says why. It is printed
+    /// after the terminal has been restored.
+    SystemError(String),
 }
 
 #[derive(Debug, Clone)]

@@ -1,5 +1,87 @@
 # Changelog
 
+## 0.35.0 — observable connection state, one owner per message, bounded handlers, enforced config
+
+Behaviour changes for consumers (R3.6) are marked **Behaviour**; read them
+before upgrading.
+
+- **Behaviour (#1029, R6.2):** the listener now follows the SDK's
+  `ATMProfile::connection_state()` for the life of each connection. When the
+  websocket drops, it emits `ListenerEvent::Disconnected { error: Some(..) }`,
+  withdraws its connection handle, and emits `Connected` and republishes the
+  handle when the SDK reconnects. Before, both were set once at connect and
+  never changed. During a reconnect window `send_message`/`send_tsp*` now
+  return `NotConnected` and `wait_connected`/`send_message_with_retry` wait.
+  Expect more `Disconnected`/`Connected` events than before. If the transport
+  task itself ends, the listener ends that connection and its restart policy
+  takes over.
+- **Behaviour (#1030):** a queued message is dispatched once. The live stream
+  and the offline drain share a record of the mediator ids (`sha256_hash`)
+  being handled and recently acked, and each skips what the other owns.
+  Previously a message whose live handler was still running was dispatched a
+  second time by the 30-second offline sync.
+- **Behaviour (#1030):** the offline drain honours `auto_delete = false`: it
+  no longer acks the messages it handled (frames it drops as undeliverable are
+  still acked). Such messages stay queued until the application deletes them
+  and are dispatched again on a later sync.
+- **Behaviour (#1030):** the offline drain runs its batch's DIDComm handlers
+  concurrently and fetches the next batch straight away while full batches
+  come back and some were acked, up to 50 per tick. Before, it took one batch
+  of 100 per 30 s and ran its handlers one at a time. TSP frames in a batch
+  are still handled one at a time, in order.
+- **Added (#1030):** `ListenerConfig::max_concurrent_handlers` (default
+  `DEFAULT_MAX_CONCURRENT_HANDLERS` = 64; 0 is refused). It bounds the
+  handlers running at once across both paths. When all are busy the listener
+  stops pulling and the mediator keeps the rest queued. Before, every inbound
+  message got its own task with no cap.
+- **Added (#1030):** `ListenerConfig::shutdown_drain_timeout` (default
+  `DEFAULT_SHUTDOWN_DRAIN_TIMEOUT` = 10 s). On shutdown, `remove_listener` or
+  a lost transport, running handlers get this long and are then aborted.
+  Their messages were not acked, so the mediator redelivers them.
+  `remove_listener` is now bounded too (drain timeout + 5 s). `shutdown()`
+  joins listeners concurrently with the same bound, and aborts a listener
+  task that outlives it rather than leaving it running detached (it used a
+  flat 5 s).
+- **Behaviour (#1034):** `RestartPolicy::default()`, and so
+  `ListenerConfig::new`/`Default`, is now `OnFailure { max_retries: None,
+  backoff: RetryConfig::default() }` (was `Never`). A mediator that is
+  briefly unreachable at boot no longer ends the listener for good. Set
+  `RestartPolicy::Never` explicitly to keep the old behaviour.
+- **Changed (breaking, #1034):** `ListenerState` is `#[non_exhaustive]` and
+  gains `Connecting`. `list_listeners` derives it from the live connection
+  and the restart loop's exit reason: `Running` only while connected,
+  `Connecting` during the first connect, a websocket reconnect or a restart
+  backoff, `Stopped` after shutdown/removal, and `Failed` (now actually
+  reported) when the restart policy gave up after a failure.
+- **Changed (breaking, #1034):** `Protocols`' fields are private. Use the
+  constants, `Protocols::new`, and the new `didcomm()`/`tsp()` accessors.
+  The empty set can no longer be built.
+- **Behaviour (#1034):** `protocols.didcomm` is enforced. A `TSP_ONLY`
+  listener drops (and acks) DIDComm frames, live and in the offline drain,
+  instead of passing them to the `DIDCommHandler`. A listener with `tsp`
+  off likewise drops TSP frames found by the offline drain.
+- **Changed (breaking, #1034):** `start`/`start_with_tsp`/`add_listener`
+  validate each listener (`ListenerConfig::validate`, new) and fail with
+  `DIDCommServiceError::Config` (new variant). A listener that enables TSP in
+  a build without the `tsp` feature gets `ConfigError::TspFeatureDisabled`
+  (new) instead of being accepted and silently ignored. 0 handler concurrency
+  gets `ConfigError::ZeroHandlerConcurrency` (new). `start_with_tsp` in such
+  a build logs a warning that its TSP handler will never be called.
+- **Deprecated (#1033):** `DIDCommResponse::to`, `to_many` and `from`. A
+  response always goes to the authenticated sender, encrypted from the
+  listener's DID. These setters only ever rewrote headers, so a receiver
+  checking addressing rejected the reply. **Behaviour:** their values are now
+  ignored, with a warning when they differ, so the headers match who the
+  reply is really for and from. Use `AffinidiMessageService::send_message` to
+  reach anyone else.
+- **Fixed (#1028), regression test only:** a request without a `thid` that
+  arrives through the offline drain is answered with `thid` = its own id. The
+  fix shipped in 0.34.0 with SDK 0.49 (#1149), which stopped overwriting the
+  message id with the mediator's. A test now covers the handler context and
+  the reply.
+- New dependency: `affinidi-messaging-core` 0.1.13, for `ConnState`.
+
+
 ## 0.34.0 — affinidi-messaging-sdk 0.49; offline sync acks by the mediator's id
 
 - **Changed (breaking):** requires `affinidi-messaging-sdk` 0.49, whose types

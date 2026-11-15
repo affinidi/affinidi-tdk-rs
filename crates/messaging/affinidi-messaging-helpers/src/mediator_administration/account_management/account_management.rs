@@ -1,5 +1,5 @@
 use crate::{SharedConfig, account_management::acl_management::manage_account_acls};
-use affinidi_messaging_helpers::common::did::manually_enter_did_or_hash;
+use affinidi_messaging_helpers::common::{PromptResultExt, did::manually_enter_did_or_hash};
 use affinidi_messaging_sdk::tasks::messaging::account;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use console::style;
@@ -30,7 +30,7 @@ pub(crate) async fn account_management_menu(
             .default(0)
             .items(&selections[..])
             .interact()
-            .unwrap();
+            .unwrap_or_exit();
 
         match selection {
             0 => {
@@ -186,7 +186,7 @@ pub(crate) async fn manage_account_menu(
             .default(0)
             .items(&selections[..])
             .interact()
-            .unwrap();
+            .unwrap_or_exit();
 
         match selection {
             0 => {
@@ -277,7 +277,7 @@ async fn _change_account_type(
         .default(0)
         .items(&selections[..])
         .interact()
-        .unwrap();
+        .unwrap_or_exit();
 
     if selection == selections.len() - 1 {
         // No change, exit gracefully
@@ -338,8 +338,7 @@ async fn _change_account_queue_limit(
                 Err("Invalid queue limit")
             }
         }).allow_empty(true)
-        .interact_text()
-        .unwrap();
+        .interact_text().unwrap_or_exit();
 
     if send_input == "exit" {
         return Ok(None);
@@ -381,8 +380,7 @@ async fn _change_account_queue_limit(
                 Err("Invalid queue limit")
             }
         }).allow_empty(true)
-        .interact_text()
-        .unwrap();
+        .interact_text().unwrap_or_exit();
 
     if receive_input == "exit" {
         return Ok(None);
@@ -447,7 +445,7 @@ pub(crate) async fn select_did(
                 "Back",
             ])
             .interact()
-            .unwrap();
+            .unwrap_or_exit();
 
         match selection {
             0 => {
@@ -533,7 +531,7 @@ async fn _select_from_existing_dids(
         .with_prompt("Select DID (space to select, enter to continue)?")
         .items(&did_list)
         .interact()
-        .unwrap();
+        .unwrap_or_exit();
 
     if selected == did_list.len() - 2 && load_more_flag {
         Box::pin(_select_from_existing_dids(

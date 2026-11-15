@@ -107,7 +107,7 @@ pub async fn create_new_profile(
 /// Given an OOB Invitation link, this will send an accept message to the inviter
 pub async fn send_invitation_accept(
     state: &mut State,
-    state_tx: &UnboundedSender<State>,
+    state_tx: &UnboundedSender<Arc<State>>,
     atm: &ATM,
 ) -> anyhow::Result<()> {
     // Fetch the Invite message
@@ -126,7 +126,7 @@ pub async fn send_invitation_accept(
             ),
             Style::default().fg(Color::LightBlue),
         )));
-    state_tx.send(state.clone())?;
+    state_tx.send(Arc::new(state.clone()))?;
 
     // Parse the message
     let parsed_body: SuccessResponse<String> = match serde_json::from_str(&body) {
@@ -180,7 +180,7 @@ pub async fn send_invitation_accept(
             format!("Invitation originated from Remote DID ({invite_did})."),
             Style::default().fg(Color::LightBlue),
         )));
-    state_tx.send(state.clone())?;
+    state_tx.send(Arc::new(state.clone()))?;
 
     // Create a new temporary profile for the invitation
     let accept_temp_profile = create_new_profile(
@@ -205,7 +205,7 @@ pub async fn send_invitation_accept(
                 "Failed to get temp invite response profile info from mediator",
                 Style::default().fg(Color::Red),
             )));
-            state_tx.send(state.clone())?;
+            state_tx.send(Arc::new(state.clone()))?;
 
             warn!("Failed to get temp invite response profile info from mediator: {e}");
             return Err(anyhow::anyhow!(
@@ -239,7 +239,7 @@ pub async fn send_invitation_accept(
                         format!("Failed to add {invite_did} to ACL of temporary profile: {e}"),
                         Style::default().fg(Color::Red),
                     )));
-                state_tx.send(state.clone())?;
+                state_tx.send(Arc::new(state.clone()))?;
 
                 warn!(
                     "Failed to add {} to ACL of temporary profile: {}",
@@ -297,7 +297,7 @@ pub async fn send_invitation_accept(
             ),
             Style::default().fg(Color::LightBlue),
         )));
-    state_tx.send(state.clone())?;
+    state_tx.send(Arc::new(state.clone()))?;
 
     // Create a new secure profile for the established chat channel
     let accept_secure_profile = create_new_profile(
@@ -342,7 +342,7 @@ pub async fn send_invitation_accept(
             ),
             Style::default().fg(Color::LightBlue),
         )));
-    state_tx.send(state.clone())?;
+    state_tx.send(Arc::new(state.clone()))?;
 
     let Some(c) = state
         .chat_list
@@ -424,21 +424,21 @@ pub async fn send_invitation_accept(
             ),
             Style::default().fg(Color::LightBlue),
         )));
-    state_tx.send(state.clone())?;
+    state_tx.send(Arc::new(state.clone()))?;
 
     Ok(())
 }
 
 pub async fn create_invitation(
     state: &mut State,
-    state_tx: &UnboundedSender<State>,
+    state_tx: &UnboundedSender<Arc<State>>,
     atm: &ATM,
 ) -> anyhow::Result<()> {
     state.invite_popup.show_invite_popup = true;
     state.invite_popup.invite_error = None;
     state.invite_popup.messages.clear();
     // Send the state immediately so we render the popup while waiting for the rest to complete
-    state_tx.send(state.clone())?;
+    state_tx.send(Arc::new(state.clone()))?;
     if let Some(mediator_did) = state.settings.mediator_did.clone() {
         match create_new_profile(atm, &mediator_did, None, false, state).await {
             Ok(profile) => {
@@ -458,7 +458,7 @@ pub async fn create_invitation(
                     "Attempting initial authentication to mediator...",
                     Style::default().fg(Color::LightBlue),
                 )));
-                state_tx.send(state.clone())?;
+                state_tx.send(Arc::new(state.clone()))?;
 
                 // Add profile to the mediator
                 match atm.profile_add(&profile, true).await {
@@ -475,7 +475,7 @@ pub async fn create_invitation(
                                     .fg(Color::Blue),
                             ),
                         ]));
-                        state_tx.send(state.clone())?;
+                        state_tx.send(Arc::new(state.clone()))?;
 
                         // Ensure Mediator ACL set up is correctly setup
                         let profile_info = match atm.trust_tasks().account_get(&profile, None).await
@@ -486,7 +486,7 @@ pub async fn create_invitation(
                                     "Failed to get profile info from mediator",
                                     Style::default().fg(Color::Red),
                                 )));
-                                state_tx.send(state.clone())?;
+                                state_tx.send(Arc::new(state.clone()))?;
 
                                 warn!("Failed to get profile info from mediator: {e}");
                                 return Err(anyhow::anyhow!(
@@ -524,7 +524,7 @@ pub async fn create_invitation(
                                     "Mediator is not allowing DID owners to change their Access List Mode! Contact support.",
                                     Style::default().fg(Color::Red),
                                 )));
-                                state_tx.send(state.clone())?;
+                                state_tx.send(Arc::new(state.clone()))?;
                                 warn!("Failed to set access-list mode: {e}");
                                 return Err(anyhow::anyhow!(
                                     "Mediator is not allowing DID owners to change their Access List Mode! Contact support."
@@ -536,7 +536,7 @@ pub async fn create_invitation(
                             "Asking Mediator for OOB Invitation link...",
                             Style::default().fg(Color::LightBlue),
                         )));
-                        state_tx.send(state.clone())?;
+                        state_tx.send(Arc::new(state.clone()))?;
 
                         // Get the OOB Invite itself
                         match atm.oob_discovery().create_invite(&profile, None).await {

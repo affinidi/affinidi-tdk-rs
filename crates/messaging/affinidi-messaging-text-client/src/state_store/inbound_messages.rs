@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha256::digest;
 use tracing::error;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -124,7 +124,7 @@ async fn _handle_connection_setup(
     meta: &UnpackMetadata,
 ) {
     info!("Received connection setup message");
-    info!("Invite Message: {:#?}", message);
+    debug!("Invite message id({}) type({})", message.id, message.typ);
 
     let mut new_chat_name = chat_name_from_attachments(message.attachments.as_deref());
 
@@ -460,7 +460,10 @@ pub async fn handle_message(
             }
 
             let Some(mut_chat) = state.chat_list.chats.get_mut(&chat.name) else {
-                error!("Chats = {:#?}", state.chat_list.chats);
+                debug!(
+                    "Known chats: {:?}",
+                    state.chat_list.chats.keys().collect::<Vec<_>>()
+                );
                 warn!("Couldn't get mutable chat({})", &chat.name);
                 break 'label_break;
             };
@@ -612,7 +615,10 @@ pub async fn handle_message(
                             // to it. `handle_message` acks by `meta.sha256_hash`,
                             // the mediator's id for it (== the attachment id).
                             Ok((m, meta)) => {
-                                info!("Delivered message: id({:?})\n {:#?}", attachment.id, m);
+                                debug!(
+                                    "Delivered message: attachment id({:?}) message id({}) type({})",
+                                    attachment.id, m.id, m.typ
+                                );
                                 Box::pin(handle_message(atm, state, &m, &meta)).await;
                             }
                             Err(e) => {

@@ -35,9 +35,14 @@ fn should_restart(policy: &RestartPolicy, count: u32, was_success: bool) -> Shou
 }
 
 impl Listener {
+    /// Run the listener until shutdown or until its restart policy gives up.
+    /// `failed` is set when it gives up after a failure, so the service can
+    /// report [`ListenerState::Failed`](crate::ListenerState::Failed) rather
+    /// than `Stopped`.
     pub(crate) async fn run_with_restart(
         &mut self,
         restart_count: Arc<std::sync::atomic::AtomicU32>,
+        failed: Arc<std::sync::atomic::AtomicBool>,
     ) {
         let alias = self.config.profile.alias.clone();
         let restart_policy = self.config.restart_policy.clone();
@@ -119,6 +124,9 @@ impl Listener {
                     }
                 }
                 ShouldRestart::Stop => {
+                    if !was_success {
+                        failed.store(true, std::sync::atomic::Ordering::Release);
+                    }
                     if !was_success
                         && let RestartPolicy::OnFailure {
                             max_retries: Some(max),
@@ -146,6 +154,8 @@ impl Listener {
         if let Ok(profile) = self.profile() {
             let _ = profile.stop_websocket().await;
         }
+        // Whatever the exit, nothing can be sent through this listener now.
+        let _ = self.connection_tx.send(None);
     }
 }
 

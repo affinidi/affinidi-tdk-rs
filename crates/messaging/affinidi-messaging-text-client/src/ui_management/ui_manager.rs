@@ -43,7 +43,7 @@ impl UiManager {
 
     pub async fn main_loop(
         self,
-        mut state_rx: UnboundedReceiver<State>,
+        mut state_rx: UnboundedReceiver<std::sync::Arc<State>>,
         mut interrupt_rx: broadcast::Receiver<Interrupted>,
     ) -> anyhow::Result<Interrupted> {
         // consume the first state to initialize the ui app

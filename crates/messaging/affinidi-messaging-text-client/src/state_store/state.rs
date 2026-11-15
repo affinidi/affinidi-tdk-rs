@@ -159,7 +159,7 @@ impl State {
     /// since the last write are then on disk without waiting for exit.
     pub fn save_if_changed(
         &self,
-        file_path: &str,
+        file_path: impl AsRef<std::path::Path>,
         last_saved: &mut Option<Vec<u8>>,
     ) -> Result<(), std::io::Error> {
         let contents = serde_json::to_vec_pretty(self)?;
@@ -171,21 +171,24 @@ impl State {
         Ok(())
     }
 
-    pub fn save_to_file(&self, file_path: &str) -> Result<(), std::io::Error> {
+    pub fn save_to_file(
+        &self,
+        file_path: impl AsRef<std::path::Path>,
+    ) -> Result<(), std::io::Error> {
         write_private(file_path, &serde_json::to_vec_pretty(self)?)
     }
 
     /// Reads the state from `file_path`, or the default state if there is no
     /// such file. Any other failure, such as a file that does not parse, is an
     /// error, so the caller does not go on to overwrite the file.
-    pub fn load(file_path: &str) -> Result<Self, std::io::Error> {
+    pub fn load(file_path: impl AsRef<std::path::Path>) -> Result<Self, std::io::Error> {
         match Self::read_from_file(file_path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             result => result,
         }
     }
 
-    pub fn read_from_file(file_path: &str) -> Result<Self, std::io::Error> {
+    pub fn read_from_file(file_path: impl AsRef<std::path::Path>) -> Result<Self, std::io::Error> {
         let file = std::fs::File::open(file_path)?;
         let state: Self = serde_json::from_reader(file)?;
 
@@ -244,11 +247,14 @@ impl State {
 /// private keys. The contents go to a new file in the same directory, are
 /// synced, and are renamed over `file_path`, so an interrupted write leaves
 /// the previous file intact.
-fn write_private(file_path: &str, contents: &[u8]) -> Result<(), std::io::Error> {
+fn write_private(
+    file_path: impl AsRef<std::path::Path>,
+    contents: &[u8],
+) -> Result<(), std::io::Error> {
     use std::io::Write;
     use std::path::Path;
 
-    let path = Path::new(file_path);
+    let path = file_path.as_ref();
     let file_name = path
         .file_name()
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "no file name"))?;

@@ -1,6 +1,6 @@
 //! Example of how to manage administration accounts for the mediator
 use account_management::account_management::account_management_menu;
-use affinidi_messaging_helpers::common::{affinidi_logo::print_logo, check_path};
+use affinidi_messaging_helpers::common::{PromptResultExt, affinidi_logo::print_logo};
 use affinidi_messaging_sdk::{
     ATM,
     config::ATMConfig,
@@ -190,9 +190,6 @@ async fn init() -> Result<(ColorfulTheme, ATMConfig, TDKEnvironment), Box<dyn Er
         ..ColorfulTheme::default()
     };
 
-    // determine the right path to config files
-    check_path()?;
-
     println!(
         "{}",
         style("Welcome to the Affinidi Messaging Mediator Administration wizard").green(),
@@ -277,7 +274,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .default(0)
             .items(&selections[..])
             .interact()
-            .unwrap();
+            .unwrap_or_exit();
 
         println!();
         match selection {

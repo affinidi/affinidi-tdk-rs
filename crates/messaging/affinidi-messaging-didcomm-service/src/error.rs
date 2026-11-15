@@ -60,6 +60,18 @@ pub enum ConfigError {
     /// transport".
     #[error("at least one protocol (DIDComm or TSP) must be enabled")]
     NoProtocolEnabled,
+
+    /// The listener asks for TSP but this crate was built without its `tsp`
+    /// feature, so TSP frames could not be routed anywhere.
+    #[error(
+        "listener '{listener_id}' enables TSP, but affinidi-messaging-didcomm-service was built \
+         without the `tsp` feature"
+    )]
+    TspFeatureDisabled { listener_id: String },
+
+    /// `max_concurrent_handlers` is 0, which would never run a handler.
+    #[error("listener '{listener_id}': max_concurrent_handlers must be at least 1")]
+    ZeroHandlerConcurrency { listener_id: String },
 }
 
 #[derive(Debug, Error)]
@@ -97,6 +109,9 @@ pub enum DIDCommServiceError {
 
     #[error("Service startup failed: {0}")]
     StartupFailed(#[from] StartupError),
+
+    #[error("Invalid configuration: {0}")]
+    Config(#[from] ConfigError),
 
     #[error("Handler error: {0}")]
     Handler(String),
