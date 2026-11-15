@@ -5,7 +5,7 @@ KERI-verified key state.
 
 ```toml
 [dependencies]
-affinidi-did-webs = "0.1"
+affinidi-did-webs = "0.13"
 ```
 
 ## What it does

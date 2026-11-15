@@ -42,7 +42,7 @@ it expects. The presentation header alone does not bind a proof to a holder.
 
 ```toml
 [dependencies]
-affinidi-bbs = "0.1"
+affinidi-bbs = "0.4"
 ```
 
 ## Quick Start

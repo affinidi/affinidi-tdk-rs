@@ -39,14 +39,14 @@ round-tripping through a multikey string. The multikey-string helpers in
 
 ```toml
 [dependencies]
-affinidi-crypto = "0.1"
+affinidi-crypto = "0.3"
 ```
 
 Or with only specific curves:
 
 ```toml
 [dependencies]
-affinidi-crypto = { version = "0.1", default-features = false, features = ["ed25519", "p256"] }
+affinidi-crypto = { version = "0.3", default-features = false, features = ["ed25519", "p256"] }
 ```
 
 ## WASM Support

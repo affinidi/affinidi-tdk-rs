@@ -29,7 +29,7 @@ sequenceDiagram
 
 ```toml
 [dependencies]
-affinidi-meeting-place = "0.4"
+affinidi-meeting-place = "0.5"
 ```
 
 ## Related Crates

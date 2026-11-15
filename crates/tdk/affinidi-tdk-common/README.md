@@ -26,7 +26,7 @@ error types via `From<TDKError>` impls.
 
 ```toml
 [dependencies]
-affinidi-tdk-common = "0.6"
+affinidi-tdk-common = "0.7"
 ```
 
 ## Usage
