@@ -1,5 +1,29 @@
 # Affinidi DID Authentication
 
+## [0.3.21] - 2026-11-15
+
+`authenticate` retries are bounded in time (AgenticSec #529)
+
+### Changed — BEHAVIOUR (R3.6)
+
+- **`retry_limit = -1` is now bounded by a maximum elapsed time, default 15
+  minutes** (`DEFAULT_MAX_RETRY_ELAPSED`). `-1` still means "no attempt
+  limit", but a service that keeps failing retryably (`408`/`5xx`/timeouts) no
+  longer holds the call open forever: once the next backoff would end past
+  the bound, `authenticate` returns `DIDAuthError::RetriesExhausted` wrapping
+  the last attempt's error. The bound applies in every mode; a finite
+  `retry_limit` reached first ends the loop as before. A single attempt in
+  progress is bounded by the HTTP client's own timeouts, not cut short.
+  Rate-limit waits (`429`) stay capped by `MAX_RATE_LIMIT_WAIT`.
+- The `warn` logged on the first retry under `-1` now names the bound instead
+  of telling the caller to add its own timeout.
+
+### Added
+
+- `DIDAuthentication::authenticate_with_max_elapsed` — `authenticate` with a
+  caller-chosen bound in place of `DEFAULT_MAX_RETRY_ELAPSED`.
+- `DEFAULT_MAX_RETRY_ELAPSED` (15 minutes).
+
 ## [0.3.20] - 2026-11-15
 
 `retry_limit = -1` is documented and logged as unbounded (AgenticSec #529)

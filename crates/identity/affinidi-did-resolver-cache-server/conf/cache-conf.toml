@@ -58,6 +58,23 @@ enable_agent_names = "${ENABLE_AGENT_NAMES:false}"
 # unbounded backlog of pending fetches.
 agent_name_concurrency = "${AGENT_NAME_CONCURRENCY:16}"
 
+# Seconds a failed agent name lookup is remembered, so repeating a failing name
+# does not fetch it again. Only DEFINITIVE failures get this TTL: the host
+# answered without a redirect, the target is not a DID, the name is refused by
+# the address guard, too many redirect hops, or no resolver could handle it.
+# TRANSIENT failures (connection or DNS errors, timeouts, upstream 5xx/408/429)
+# are remembered for at most 5 seconds (never longer than this TTL), so a blip
+# does not become an outage for the name. Successes are not cached here.
+# Identical lookups in flight at the same time always share one fetch.
+# 0 disables the negative cache.
+# Default: 60
+agent_name_negative_cache_ttl = "${AGENT_NAME_NEGATIVE_CACHE_TTL:60}"
+
+# Most failed agent name lookups remembered at once (least recently used are
+# evicted first). 0 keeps the default.
+# Default: 10000
+agent_name_negative_cache_capacity = "${AGENT_NAME_NEGATIVE_CACHE_CAPACITY:10000}"
+
 ### ---------------------------------------------------------------------------
 ### Client limits. These are top-level settings: keep them ABOVE the [cache]
 ### header, because TOML puts every key after a table header into that table.

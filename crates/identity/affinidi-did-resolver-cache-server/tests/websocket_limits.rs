@@ -79,6 +79,10 @@ async fn serve_with(
         webvh_log_cache: None,
         agent_name_resolver: None,
         agent_name_permits: Arc::new(Semaphore::new(1)),
+        agent_name_lookups: affinidi_did_resolver_cache_server::name_lookup::AgentNameLookups::new(
+            1000,
+            Duration::from_secs(60),
+        ),
         rate_limiter: rate_limiter.clone(),
         client_ip_extractor: ClientIpExtractor::direct_peer(),
         ws_limits: Arc::new(ws_limits),

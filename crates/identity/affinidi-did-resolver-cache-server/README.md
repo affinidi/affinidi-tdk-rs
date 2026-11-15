@@ -85,6 +85,21 @@ order from the requests, and the client matches them by hash. At most
 `ws_max_inflight_per_connection` requests per connection are in progress at
 once; past that, the server stops reading the connection until one finishes.
 
+## Agent name lookups
+
+`GET /did/v1/resolve-name/{*name}` (and agent name requests on the WebSocket)
+is off unless `enable_agent_names` is set. When on, each lookup not answered
+from memory makes one outbound fetch to a host the caller chose, so:
+
+| Key (env var) | Default | Effect |
+|---|---|---|
+| `agent_name_concurrency` (`AGENT_NAME_CONCURRENCY`) | `16` | Lookups fetching upstream at once, across all clients. Over it: HTTP 503 with `Retry-After: 1` (shed, never queued). |
+| `agent_name_negative_cache_ttl` (`AGENT_NAME_NEGATIVE_CACHE_TTL`) | `60` s | How long a definitive failure (no redirect, not a DID, refused address, no resolver) is remembered. Transient failures (transport errors, timeouts, upstream 5xx/408/429) are remembered for at most 5 s. `0` caches no failure. |
+| `agent_name_negative_cache_capacity` (`AGENT_NAME_NEGATIVE_CACHE_CAPACITY`) | `10000` | Most failures remembered at once. |
+
+Identical lookups in flight at the same time share one fetch. Successes are
+not cached by this layer.
+
 ## Client limits
 
 | Key (env var) | Default | Effect |

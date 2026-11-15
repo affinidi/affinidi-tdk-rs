@@ -75,6 +75,12 @@ struct ConfigRaw {
     /// `default_agent_name_concurrency`.
     #[serde(default = "default_agent_name_concurrency")]
     pub agent_name_concurrency: String,
+    /// Seconds a definitive agent name failure is remembered; `0` disables.
+    #[serde(default = "default_agent_name_negative_cache_ttl")]
+    pub agent_name_negative_cache_ttl: String,
+    /// Most agent name failures remembered at once.
+    #[serde(default = "default_agent_name_negative_cache_capacity")]
+    pub agent_name_negative_cache_capacity: String,
     #[serde(default = "default_rate_limit_per_ip")]
     pub rate_limit_per_ip: String,
     #[serde(default = "default_rate_limit_burst")]
@@ -143,6 +149,22 @@ fn default_enable_agent_names() -> String {
 /// path, and a cache server exists precisely so the fetch happens rarely.
 fn default_agent_name_concurrency() -> String {
     "16".into()
+}
+
+/// Seconds a definitive agent name failure (no redirect, not a DID, refused
+/// by the SSRF guard, ...) is remembered, so a repeated failing name is not
+/// fetched again. Transient failures are remembered for at most
+/// `name_lookup::TRANSIENT_FAILURE_TTL`. `0` caches no failure.
+const DEFAULT_AGENT_NAME_NEGATIVE_CACHE_TTL_SECS: u64 = 60;
+fn default_agent_name_negative_cache_ttl() -> String {
+    DEFAULT_AGENT_NAME_NEGATIVE_CACHE_TTL_SECS.to_string()
+}
+
+/// Most agent name failures remembered at once. An entry is the name (at most
+/// `max_did_size` bytes) and a short message.
+const DEFAULT_AGENT_NAME_NEGATIVE_CACHE_CAPACITY: u64 = 10_000;
+fn default_agent_name_negative_cache_capacity() -> String {
+    DEFAULT_AGENT_NAME_NEGATIVE_CACHE_CAPACITY.to_string()
 }
 
 /// Sustained requests per second per client IP; `0` disables limiting.
@@ -240,6 +262,11 @@ pub struct Config {
     pub enable_websocket_endpoint: bool,
     pub enable_agent_names: bool,
     pub agent_name_concurrency: usize,
+    /// How long a definitive agent name failure is remembered; zero disables
+    /// the negative cache.
+    pub agent_name_negative_cache_ttl: Duration,
+    /// Most agent name failures remembered at once.
+    pub agent_name_negative_cache_capacity: u64,
     pub rate_limit_per_ip: u32,
     pub rate_limit_burst: u32,
     /// Proxies whose `X-Forwarded-For` names the client.
@@ -279,6 +306,14 @@ impl fmt::Debug for Config {
             .field("enable_http_endpoint", &self.enable_http_endpoint)
             .field("enable_agent_names", &self.enable_agent_names)
             .field("agent_name_concurrency", &self.agent_name_concurrency)
+            .field(
+                "agent_name_negative_cache_ttl",
+                &format!("{} seconds", self.agent_name_negative_cache_ttl.as_secs()),
+            )
+            .field(
+                "agent_name_negative_cache_capacity",
+                &self.agent_name_negative_cache_capacity,
+            )
             .field("rate_limit_per_ip", &self.rate_limit_per_ip)
             .field("rate_limit_burst", &self.rate_limit_burst)
             .field("enable_websocket_endpoint", &self.enable_websocket_endpoint)
@@ -334,6 +369,10 @@ impl Default for Config {
             enable_websocket_endpoint: true,
             enable_agent_names: false,
             agent_name_concurrency: 16,
+            agent_name_negative_cache_ttl: Duration::from_secs(
+                DEFAULT_AGENT_NAME_NEGATIVE_CACHE_TTL_SECS,
+            ),
+            agent_name_negative_cache_capacity: DEFAULT_AGENT_NAME_NEGATIVE_CACHE_CAPACITY,
             rate_limit_per_ip: 100,
             rate_limit_burst: 50,
             trusted_proxies: Vec::new(),
@@ -468,6 +507,16 @@ impl TryFrom<ConfigRaw> for Config {
                 "agent_name_concurrency",
                 &raw.agent_name_concurrency,
                 16,
+            )?,
+            // "0" disables the negative cache, which is the documented way to.
+            agent_name_negative_cache_ttl: Duration::from_secs(number(
+                "agent_name_negative_cache_ttl",
+                &raw.agent_name_negative_cache_ttl,
+            )?),
+            agent_name_negative_cache_capacity: ceiling(
+                "agent_name_negative_cache_capacity",
+                &raw.agent_name_negative_cache_capacity,
+                DEFAULT_AGENT_NAME_NEGATIVE_CACHE_CAPACITY,
             )?,
             // "0" disables limiting, which is the documented way to.
             rate_limit_per_ip: number("rate_limit_per_ip", &raw.rate_limit_per_ip)?,
@@ -829,6 +878,16 @@ mod tests {
                 "enable_websocket_endpoint",
             ),
             ("${ENABLE_AGENT_NAMES:false}", "nope", "enable_agent_names"),
+            (
+                "${AGENT_NAME_NEGATIVE_CACHE_TTL:60}",
+                "1m",
+                "agent_name_negative_cache_ttl",
+            ),
+            (
+                "${AGENT_NAME_NEGATIVE_CACHE_CAPACITY:10000}",
+                "10k",
+                "agent_name_negative_cache_capacity",
+            ),
         ] {
             let err = parse_config_str(&shipped_with(reference, value))
                 .err()
@@ -859,6 +918,35 @@ mod tests {
                     .unwrap();
             assert!(config.enable_websocket_endpoint, "{value}");
         }
+    }
+
+    #[test]
+    fn shipped_agent_name_cache_settings_take_effect() {
+        let config = parse_config_str(SHIPPED).unwrap();
+        assert_eq!(
+            config.agent_name_negative_cache_ttl,
+            Duration::from_secs(DEFAULT_AGENT_NAME_NEGATIVE_CACHE_TTL_SECS)
+        );
+        assert_eq!(
+            config.agent_name_negative_cache_capacity,
+            DEFAULT_AGENT_NAME_NEGATIVE_CACHE_CAPACITY
+        );
+        let config =
+            parse_config_str(&shipped_with("${AGENT_NAME_NEGATIVE_CACHE_TTL:60}", "0")).unwrap();
+        assert!(config.agent_name_negative_cache_ttl.is_zero());
+        let config = parse_config_str(&shipped_with(
+            "${AGENT_NAME_NEGATIVE_CACHE_CAPACITY:10000}",
+            "0",
+        ))
+        .unwrap();
+        assert_eq!(
+            config.agent_name_negative_cache_capacity,
+            DEFAULT_AGENT_NAME_NEGATIVE_CACHE_CAPACITY
+        );
+        // A misspelt key fails startup rather than leaving the default in force.
+        let text = format!("agent_name_negative_cache_tll = \"5\"\n{SHIPPED}");
+        let err = parse_config_str(&text).unwrap_err().to_string();
+        assert!(err.contains("agent_name_negative_cache_tll"), "{err}");
     }
 
     /// Two references on one line expand separately.
