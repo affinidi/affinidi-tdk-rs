@@ -2,7 +2,8 @@
 
 ## [0.49.2] - 2026-11-15
 
-One pickup drain, a stable ack id for live frames, and a friendlier
+One pickup drain, a stable ack id for live frames, a classified drain that
+keeps transient failures queued, and a friendlier
 certificate-path builder method. Additive; no behaviour change intended.
 
 - **One pickup drain (#1148).** `send_delivery_request` and
@@ -23,6 +24,18 @@ certificate-path builder method. Additive; no behaviour change intended.
   is fetched by a delivery request, so a consumer can pull with
   `live_stream_next_frame(.., auto_delete = false)`, ack after handling, and
   key a TSP frame in the same de-duplication record as its DIDComm frames.
+- **`send_delivery_request_classified` (`tsp` feature) and `DeliveryOutcome`.**
+  A sibling of `send_delivery_request_frames` that tells a permanent reject
+  (`DeliveryOutcome::Reject`: malformed, unsupported, invalid signature, or a
+  policy reject that is purged, the default; safe to ack) apart from a failure
+  that may clear (`DeliveryOutcome::Retry`: a transient unpack failure such as
+  a signer DID that cannot be resolved right now, or a policy reject retained
+  with `with_purge_policy_rejected_messages(false)`; leave it queued). It uses
+  the same classifier and the same split as `send_delivery_request`. Use it
+  instead of `send_delivery_request_frames` when you ack rejects: that function
+  still yields every failure, transient ones included, as `(None, id)`
+  (unchanged), so a caller that acks every `None` loses a message whose unpack
+  would have succeeded on a later pickup.
 - **`ATMConfigBuilder::with_ssl_certificate_paths`** takes any
   `IntoIterator<Item = impl Into<String>>` (`["ca.pem"]`,
   `environment.ssl_certificate_paths()`, a `Vec<String>`) and adds to the paths

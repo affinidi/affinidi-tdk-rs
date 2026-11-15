@@ -1384,6 +1384,7 @@ mod multiplexed_path_tests {
     use crate::handler::TspResponse;
     use affinidi_messaging_didcomm::{Message, UnpackMetadata};
     use affinidi_messaging_sdk::messages::compat::UnpackMetadata as SdkMeta;
+    use affinidi_messaging_sdk::protocols::message_pickup::DeliveryOutcome;
     use affinidi_tdk_common::profiles::TDKProfile;
     use async_trait::async_trait;
     use serde_json::json;
@@ -1569,7 +1570,7 @@ mod multiplexed_path_tests {
             .expect("live claim");
         let (set, handled, dropped) = sync
             .route_frames(vec![(
-                Some(InboundFrame::Tsp(Box::new(packed.clone()))),
+                DeliveryOutcome::Frame(InboundFrame::Tsp(Box::new(packed.clone()))),
                 id.clone(),
             )])
             .await
@@ -1592,13 +1593,59 @@ mod multiplexed_path_tests {
         assert!(l.in_flight.is_recent(&id), "acked by the live path");
 
         let (set, handled, dropped) = sync
-            .route_frames(vec![(Some(InboundFrame::Tsp(Box::new(packed))), id)])
+            .route_frames(vec![(
+                DeliveryOutcome::Frame(InboundFrame::Tsp(Box::new(packed))),
+                id,
+            )])
             .await
             .unwrap();
         assert!(
             set.is_empty() && handled.is_empty() && dropped.is_empty(),
             "a copy fetched before the live ack landed is not dispatched again"
         );
+    }
+
+    /// The offline drain acks a permanent reject but not a transient failure
+    /// (e.g. a signer DID that did not resolve this time): that one is neither
+    /// dispatched nor acked, stays queued, and is handled when a later sync
+    /// fetches it again and it now unpacks.
+    #[tokio::test]
+    async fn the_offline_drain_retries_a_transient_failure_and_acks_a_reject() {
+        let l = listener(Arc::new(Gate::default()), Duration::from_secs(5)).await;
+        let sync = offline_sync(&l);
+
+        let (set, handled, dropped) = sync
+            .route_frames(vec![
+                (DeliveryOutcome::Retry, "transient".to_string()),
+                (DeliveryOutcome::Reject, "permanent".to_string()),
+            ])
+            .await
+            .unwrap();
+        assert!(set.is_empty() && handled.is_empty());
+        let dropped_ids: Vec<&str> = dropped.iter().map(|c| c.id()).collect();
+        assert_eq!(
+            dropped_ids,
+            ["permanent"],
+            "only the permanent reject is acked"
+        );
+        drop(dropped);
+        assert!(
+            !l.in_flight.is_active("transient") && !l.in_flight.is_recent("transient"),
+            "a transient failure is neither claimed nor recorded as acked"
+        );
+
+        // Next tick: the same message comes back and now unpacks.
+        let packed = tsp_frame(&l, 5);
+        let (set, handled, dropped) = sync
+            .route_frames(vec![(
+                DeliveryOutcome::Frame(InboundFrame::Tsp(Box::new(packed))),
+                "transient".to_string(),
+            )])
+            .await
+            .unwrap();
+        assert!(set.is_empty() && dropped.is_empty());
+        let handled_ids: Vec<&str> = handled.iter().map(|c| c.id()).collect();
+        assert_eq!(handled_ids, ["transient"], "redelivered and handled");
     }
 
     /// A frame pulled just as the socket drops is not lost: nothing acked it on

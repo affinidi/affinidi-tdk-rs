@@ -21,6 +21,15 @@ before upgrading. Requires `affinidi-messaging-sdk` 0.49.2.
   offline drain's delivery attachment carries). A TSP frame the live stream is
   handling, or acked a moment ago, is no longer dispatched a second time by the
   offline drain.
+- **Behaviour (R1.1):** with the `tsp` feature, the offline drain no longer acks
+  a message that failed to unpack for a reason that may clear (for example a
+  signer DID that did not resolve this time). It is left queued and retried on
+  a later sync. It used to be acked as undeliverable and lost. Permanent
+  rejects (malformed, invalid signature, policy-rejected unless retained by the
+  SDK's `with_purge_policy_rejected_messages(false)`) are still acked. The
+  drain now uses the SDK's `send_delivery_request_classified`. The DIDComm-only
+  build already left transient failures queued. The live path is not affected:
+  the SDK transport handles transient unpack failures itself.
 - **Behaviour:** on the multiplexed live path a frame no handler here will take
   — a DIDComm frame on a TSP-only listener, a TSP frame with no `TspHandler`,
   a TSP frame that does not decode, or an unknown frame kind — is acked at once

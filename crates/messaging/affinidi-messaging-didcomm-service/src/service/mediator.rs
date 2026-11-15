@@ -16,6 +16,8 @@ use super::listener::Listener;
 use crate::config::Protocols;
 use crate::error::{DIDCommServiceError, StartupError};
 use crate::handler::{DIDCommHandler, TspHandler};
+#[cfg(feature = "tsp")]
+use affinidi_messaging_sdk::protocols::message_pickup::{DeliveryOutcome, InboundFrame};
 
 type SyncError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -247,7 +249,7 @@ impl OfflineSync {
         let frames = self
             .atm
             .message_pickup()
-            .send_delivery_request_frames(&self.profile, Some(OFFLINE_BATCH_LIMIT), true)
+            .send_delivery_request_classified(&self.profile, Some(OFFLINE_BATCH_LIMIT), true)
             .await?;
         let fetched = frames.len();
         debug!(profile = %self.profile.inner.alias, count = fetched, "Retrieved offline frames");
@@ -262,23 +264,37 @@ impl OfflineSync {
     /// id (the mediator's id for it, equal to `InboundFrame::ack_id` on the
     /// live path). Returns the spawned DIDComm handlers, the claims handled,
     /// and the claims dropped as undeliverable; a frame the live stream holds,
-    /// or acked a moment ago, is in neither (R1.7).
+    /// or acked a moment ago, is in neither (R1.7). Nor is a message that
+    /// failed for a reason that may clear (`DeliveryOutcome::Retry`, e.g. a
+    /// signer DID that did not resolve this time): it is left queued and
+    /// retried on a later sync rather than acked and lost.
     #[cfg(feature = "tsp")]
-    #[allow(clippy::type_complexity)]
     pub(crate) async fn route_frames(
         &self,
-        frames: Vec<(
-            Option<affinidi_messaging_sdk::protocols::message_pickup::InboundFrame>,
-            String,
-        )>,
+        frames: Vec<(DeliveryOutcome, String)>,
     ) -> Result<(JoinSet<()>, Vec<Claim>, Vec<Claim>), SyncError> {
-        use affinidi_messaging_sdk::protocols::message_pickup::InboundFrame;
-
         let alias = &self.profile.inner.alias;
         let mut set = JoinSet::new();
         let mut handled = Vec::new();
         let mut dropped = Vec::new();
-        for (frame, id) in frames {
+        for (outcome, id) in frames {
+            let frame = match outcome {
+                DeliveryOutcome::Frame(frame) => Some(frame),
+                // Can never be processed: acked below so it is not redelivered.
+                DeliveryOutcome::Reject => None,
+                // May clear: neither dispatched nor acked, so the mediator
+                // keeps it for a later sync.
+                DeliveryOutcome::Retry => {
+                    debug!(profile = %alias, "Offline message failed transiently; left queued for retry");
+                    continue;
+                }
+                // `DeliveryOutcome` is `#[non_exhaustive]`: leave an outcome
+                // this build does not know queued rather than ack it.
+                _ => {
+                    warn!(profile = %alias, "Unrecognised offline delivery outcome; left queued");
+                    continue;
+                }
+            };
             // One owner per message (R1.7): skip what the live stream is
             // handling, or handled and acked a moment ago.
             let Some(claim) = self.in_flight.claim(&id) else {
@@ -327,8 +343,9 @@ impl OfflineSync {
                     warn!(profile = %alias, "Unrecognised offline frame kind — dropping (acked)");
                     dropped.push(claim);
                 }
-                // Undeliverable (bad encoding / DIDComm unpack failure): drop it
-                // and ack it so the mediator stops redelivering.
+                // A permanent reject (bad encoding, invalid signature, policy
+                // reject): drop it and ack it so the mediator stops
+                // redelivering.
                 None => dropped.push(claim),
             }
         }
