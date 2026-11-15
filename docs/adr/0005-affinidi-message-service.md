@@ -1,6 +1,7 @@
 # ADR 0005 — `AffinidiMessageService`: one socket, DIDComm + TSP multiplexed
 
-- **Status:** Proposed
+- **Status:** Accepted — implemented in `affinidi-messaging-didcomm-service`
+  0.3.13 (`AffinidiMessageService`, #556); TSP responses from handlers in 0.3.14
 - **Date:** 2026-06-29
 - **Relates to:** `affinidi-messaging-didcomm-service` (`DIDCommService`); the
   raw-TSP WebSocket delivery mode (#534) + SDK consumer `atm.tsp().connect_websocket`

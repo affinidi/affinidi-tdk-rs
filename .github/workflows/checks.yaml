@@ -57,9 +57,10 @@ jobs:
     with:
       toolchain: "1.95.0"
       # line-tables-only: file and line numbers in backtraces, without full
-      # debug info. A test build of the workspace was near the hosted runner's
-      # disk, and the vta-sdk crossing's second trust-tasks-rs (~3 GB) killed
-      # the runner mid-build (#940). Local builds keep the default.
+      # debug info. A full-debuginfo test build of the workspace sits near the
+      # hosted runner's disk limit; it ran out mid-build in #940 (then pushed
+      # over by a second trust-tasks-rs that has since left the graph). Kept
+      # because the margin is still thin. Local builds keep the default.
       rustflags: "-D warnings --cfg tracing_unstable -C debuginfo=line-tables-only"
       # paste (RUSTSEC-2024-0436) and crypto-bigint 0.5 (RUSTSEC-2026-0387) are
       # suppressed, for the reasons below. Every entry must still match
@@ -106,7 +107,7 @@ jobs:
       verifyPublish: ${{ github.event_name == 'pull_request' }}
       deprecationCheck: true
       # Paid larger runner for check/clippy/verify-publish/deprecation-check
-      # when the repo variable is set. See docs/ci-cost.md.
+      # when the repo variable is set. See docs/ci-cost.md for the sizing.
       runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-24.04' }}
 
   # Tests run on every event, including PRs — this is the gate that matters.
@@ -115,9 +116,10 @@ jobs:
     with:
       toolchain: "1.95.0"
       # line-tables-only: file and line numbers in backtraces, without full
-      # debug info. A test build of the workspace was near the hosted runner's
-      # disk, and the vta-sdk crossing's second trust-tasks-rs (~3 GB) killed
-      # the runner mid-build (#940). Local builds keep the default.
+      # debug info. A full-debuginfo test build of the workspace sits near the
+      # hosted runner's disk limit; it ran out mid-build in #940 (then pushed
+      # over by a second trust-tasks-rs that has since left the graph). Kept
+      # because the margin is still thin. Local builds keep the default.
       rustflags: "-D warnings --cfg tracing_unstable -C debuginfo=line-tables-only"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-24.04' }}

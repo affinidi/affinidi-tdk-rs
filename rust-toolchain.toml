@@ -1,5 +1,6 @@
 [toolchain]
 channel = "1.95.0"
 # Pin to specific version to prevent drift between local dev and CI
-# Must be >= rust-version in Cargo.toml (currently 1.95.0, raised
-# from 1.94.0 to satisfy vta-sdk 0.7.0's MSRV)
+# Must be >= rust-version in Cargo.toml (currently 1.95.0).
+# scripts/check-toolchain-sync.sh enforces that, and that every workflow
+# `toolchain:` pin and README MSRV string matches.

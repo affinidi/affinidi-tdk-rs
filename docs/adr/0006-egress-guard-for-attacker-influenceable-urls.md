@@ -1,6 +1,7 @@
 # ADR 0006 — Egress guard for attacker-influenceable URLs
 
-- **Status:** Proposed
+- **Status:** Accepted — implemented in `affinidi-net-guard` 0.1.0 (#788), used by
+  `affinidi-did-web`, `affinidi-did-webs`, `agent-names` and `affinidi-tdk-common`
 - **Date:** 2026-09-11
 - **Relates to:** the SSRF guard in `affinidi-did-web` 0.1.4 (`HostPolicy`,
   `guarded_dns_resolver`); [ADR 0003](0003-public-api-semver-policy.md) (semver
