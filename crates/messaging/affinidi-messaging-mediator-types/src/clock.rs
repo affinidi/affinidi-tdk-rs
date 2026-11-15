@@ -13,6 +13,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// A source of the current Unix time.
 ///
+/// Not the same trait as `affinidi_tsp::keystate::Clock`, which is a
+/// monotonic interval clock with an arbitrary origin, for measuring silences
+/// and rate limits inside one process. This one is wall-clock time, for
+/// expiries that have to mean the same thing on another host or after a
+/// restart. Neither crate depends on the other, and the two answer different
+/// questions, so they are kept apart (#1141).
+///
 /// Production code holds an `Arc<dyn Clock>` (a [`SystemClock`]); tests inject a
 /// `TestClock` they can advance by hand to exercise expiry paths instantly.
 pub trait Clock: Send + Sync + std::fmt::Debug {

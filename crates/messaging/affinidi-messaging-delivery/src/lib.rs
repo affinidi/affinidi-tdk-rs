@@ -25,6 +25,13 @@
 //! - [`service`] — [`MessagingService`], the front-end: `send` / `request` /
 //!   `subscribe` over N transports, with one inbound dispatcher that routes,
 //!   acks once after handoff, and consumes receipts.
+//! - [`inbox`] — the receiving side's [`InboxStore`]: an unsolicited message
+//!   is recorded before it is acked or receipted, and a re-sent copy of one
+//!   already recorded is acked and receipted without reaching subscribers
+//!   again. [`InMemoryInboxStore`] is the default; back it with a durable
+//!   store ([`MessagingService::with_inbox`]) for a receipt to mean the
+//!   message survives a restart. Bounded per sender and in total, with
+//!   retention the service applies itself.
 //!
 //! # Wiring
 //!
@@ -85,11 +92,17 @@
 //!
 //! # What the layer does not do
 //!
-//! - **Deduplicate inbound messages.** The idempotency key dedups *sends*; a
-//!   retried transmission can reach the recipient twice, and a receiving
-//!   application that must act once deduplicates on its own identifier.
-//! - **Persist inbound messages.** A message is acked and receipted once it is
-//!   in a subscriber's in-memory queue (see [`MessagingService::subscribe`]).
+//! - **Deduplicate everything inbound.** The [`inbox`] dedups application
+//!   messages from an authenticated sender, by the sender's idempotency key or
+//!   message id and the payload digest, within its retention window. A message without an authenticated sender, a relationship
+//!   control message, a reply handed to a `request` waiter, and a message that
+//!   reached only some subscribers before being offered again can still reach
+//!   the application twice (see [`MessagingService::subscribe`]).
+//! - **Persist inbound messages durably by default.** The default
+//!   [`InMemoryInboxStore`] holds records for the life of the process only; a
+//!   host that needs a receipt to survive a restart supplies a durable
+//!   [`InboxStore`] and calls [`MessagingService::redeliver_pending`] after
+//!   subscribing at startup.
 //!
 //! [`MessageTransport`]: affinidi_messaging_core::MessageTransport
 
@@ -103,6 +116,9 @@ pub mod confirm;
 #[cfg(any(test, feature = "conformance"))]
 pub mod conformance;
 pub mod drain;
+/// The receiving side's record of inbound messages: durable handoff and
+/// receiver-side dedup.
+pub mod inbox;
 pub mod outbox;
 /// Which recipients are known to send delivery receipts (VTI-TRN-064).
 pub mod reach;
@@ -120,6 +136,10 @@ pub use confirm::{
     sweep_confirmations_with, sweep_confirmations_with_reach,
 };
 pub use drain::{DrainReport, drain_loop, drain_loop_via, drain_once, drain_once_via};
+pub use inbox::{
+    INBOX_REAP_INTERVAL, InMemoryInboxStore, InboxError, InboxKey, InboxLimits, InboxReapReport,
+    InboxRecord, InboxRefusal, InboxRetention, InboxState, InboxStore, Recorded, payload_digest,
+};
 pub use outbox::{
     InMemoryOutboxStore, Key, OutboxEntry, OutboxError, OutboxState, OutboxStore, Transition,
     UnconfirmedReason,

@@ -375,7 +375,11 @@ impl ATMError {
     ///   failure, a policy rejection — is a deterministic property of the
     ///   bytes (or of local configuration). Retrying identical input cannot
     ///   change it.
-    pub(crate) fn is_transient_unpack_failure(&self) -> bool {
+    ///
+    /// A TSP sender whose key state is not yet confirmed (Rev 3 §7.4.2: a
+    /// refresh after a silence failed, or is in progress) is reported as an
+    /// [`ATMError::DIDError`], so it is transient too: leave the frame queued.
+    pub fn is_transient_unpack_failure(&self) -> bool {
         matches!(
             self,
             ATMError::DIDError(_)

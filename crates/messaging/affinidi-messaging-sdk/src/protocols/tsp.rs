@@ -2969,6 +2969,15 @@ impl TspOps<'_> {
         // record is cleared before it is sent.
         let cancelled_digest = digests.invite.or(digests.accept);
         let new_state = advance_state(store, our_did, peer_did, event).await?;
+        // The shared receive path measures silence only inside a relationship,
+        // so a control message that just formed one starts the measurement
+        // here (as `TspAgent::receive` does).
+        if !prior.admits_application_message() && new_state.admits_application_message() {
+            self.atm
+                .inner
+                .tsp_key_state
+                .record_seen(peer_did, self.atm.inner.config.clock().unix_millis() as u64);
+        }
 
         // Record the digests as the handshake produces them: the invite's
         // identifies this direction, the accept's the other (§7.2.1).
@@ -3393,9 +3402,7 @@ impl TspOps<'_> {
             )));
         }
 
-        let unpacked = self
-            .unpack_with_fresh_key_state(profile_did, &meta.sender, qb2)
-            .await?;
+        let unpacked = self.receive_verified(profile_did, qb2).await?.unpacked;
 
         // Rev 3 §7.2.2: an application message from a VID we hold no
         // relationship with is dropped. "It is not permissible that one
@@ -3468,9 +3475,7 @@ impl TspOps<'_> {
             )));
         }
 
-        let unpacked = self
-            .unpack_with_fresh_key_state(profile_did, &meta.sender, qb2)
-            .await?;
+        let unpacked = self.receive_verified(profile_did, qb2).await?.unpacked;
 
         self.learn_tsp_supported(profile_did, &unpacked.sender, CapabilitySource::Observed)
             .await?;
@@ -3547,9 +3552,7 @@ impl TspOps<'_> {
             )));
         }
 
-        let unpacked = self
-            .unpack_with_fresh_key_state(profile_did, &meta.sender, qb2)
-            .await?;
+        let unpacked = self.receive_verified(profile_did, qb2).await?.unpacked;
 
         let control = unpacked.control.ok_or_else(|| {
             ATMError::MsgReceiveError("TSP message is not a control message".into())
@@ -3767,129 +3770,56 @@ impl TspOps<'_> {
 
     // ── Internal helpers ────────────────────────────────────────────────────
 
-    /// Resolve a DID-based VID to its TSP public keys + endpoints.
     /// Force a re-resolution of `did`, returning to its provenance chain rather
     /// than the cached document.
     ///
     /// Rev 3 §7.4.2 makes the cached value precisely what may have gone stale,
-    /// so the cache entry is evicted before resolving. Unlike the synchronous
-    /// resolver in `affinidi-tsp`, the SDK is async and can do the work rather
-    /// than only signalling that it is needed.
+    /// so the cache entry is evicted before resolving.
     async fn refresh_vid(&self, did: &str) -> Result<affinidi_tsp::ResolvedVid, ATMError> {
         self.atm.inner.tdk_common.did_resolver().remove(did).await;
         self.resolve_vid(did).await
     }
 
-    /// Re-resolve `did` unless its per-peer rate limit is in force.
+    /// Open `qb2`, addressed to `profile_did`, through the TSP receive path
+    /// shared with `affinidi_tsp::TspAgent` ([`affinidi_tsp::receive`]):
+    /// addressing, the relationship lookup, key-state freshness (Rev 3
+    /// §7.4.2) and verification. The relationship gate (§7.2.2) and control
+    /// handling stay with the caller.
     ///
-    /// `Ok(None)` means the limit is in force and nothing was attempted; the
-    /// caller proceeds on the key state it already holds. §7.4.2 bounds this
-    /// because re-resolution can be provoked by a message that has not been
-    /// authenticated, and resolution is more expensive than the message
-    /// provoking it, so the cost would otherwise land on the peer's
-    /// infrastructure rather than on this endpoint.
-    async fn refresh_key_state(
-        &self,
-        did: &str,
-        now_ms: u64,
-    ) -> Result<Option<affinidi_tsp::ResolvedVid>, ATMError> {
-        let policy = self.atm.inner.config.tsp_key_state_policy();
-        if !self
-            .atm
-            .inner
-            .tsp_key_state
-            .may_resolve(did, policy.resolution_rate_limit, now_ms)
-        {
-            return Ok(None);
-        }
-        self.atm.inner.tsp_key_state.record_resolved(did, now_ms);
-        self.refresh_vid(did).await.map(Some)
-    }
-
-    /// Verify and decrypt `qb2` from `sender_vid`, applying the key-state
-    /// freshness rules of Rev 3 §7.4.2 on the way.
-    ///
-    /// Two occasions refresh the sender's key state, both only where this
-    /// endpoint resolves key state for itself and holds a relationship with the
-    /// sender:
-    ///
-    /// * a message arriving after a silence longer than the re-verification
-    ///   threshold is not acted on until the key state has been refreshed —
-    ///   the case that matters under compromise, since stale key state is
-    ///   internally consistent, so a message signed with a compromised key
-    ///   verifies and gives no warning;
-    /// * a verification failure is retried once after a refresh, since the
-    ///   failure may be a rotation not yet observed.
-    ///
-    /// Outside a relationship neither applies and a failure is discarded at
-    /// once, or anyone could make this endpoint resolve by sending it noise.
-    pub(crate) async fn unpack_with_fresh_key_state(
+    /// Key state is refreshed after a silence longer than the re-verification
+    /// threshold and retried once after a verification failure, both only
+    /// where this endpoint resolves key state for itself and holds a
+    /// relationship with the sender. After a silence the message is discarded
+    /// until the sender's key state is confirmed by a refresh that succeeded;
+    /// the per-peer rate limit bounds how often that is attempted, and a
+    /// failed refresh backs the next one off.
+    pub(crate) async fn receive_verified(
         &self,
         profile_did: &str,
-        sender_vid: &str,
         qb2: &[u8],
-    ) -> Result<affinidi_tsp::message::direct::UnpackedMessage, ATMError> {
+    ) -> Result<affinidi_tsp::receive::Verified, ATMError> {
         let (_signing_key, decryption_key) = self.profile_tsp_keys(profile_did).await?;
         let policy = self.atm.inner.config.tsp_key_state_policy();
-        let now_ms = self.atm.inner.config.clock().unix_millis() as u64;
-
-        let established = self
-            .relationship_store()
-            .get(profile_did, sender_vid)
-            .await?
-            .admits_application_message();
-        let watching = policy.self_resolving && established;
-
-        let mut sender = self.resolve_vid(sender_vid).await?;
-
-        if watching
-            && self.atm.inner.tsp_key_state.silent_longer_than(
-                sender_vid,
-                policy.reverification_threshold,
-                now_ms,
-            )
-        {
-            match self.refresh_key_state(sender_vid, now_ms).await {
-                Ok(Some(fresh)) => sender = fresh,
-                // Rate-limited: this peer's allowance is spent, so proceed on
-                // the key state we hold.
-                Ok(None) => {}
-                Err(e) => {
-                    return Err(ATMError::MsgReceiveError(format!(
-                        "key state for {sender_vid} could not be confirmed after a silence: {e}"
-                    )));
-                }
-            }
-        }
-
-        let unpacked = match direct::unpack(qb2, &decryption_key, &sender.signing_key) {
-            Ok(unpacked) => unpacked,
-            Err(first_error) => {
-                if !watching {
-                    return Err(ATMError::MsgReceiveError(format!(
-                        "couldn't unpack TSP message: {first_error}"
-                    )));
-                }
-                match self.refresh_key_state(sender_vid, now_ms).await {
-                    Ok(Some(fresh)) => direct::unpack(qb2, &decryption_key, &fresh.signing_key)
-                        .map_err(|e| {
-                            ATMError::MsgReceiveError(format!("couldn't unpack TSP message: {e}"))
-                        })?,
-                    // No refresh was possible, so the original failure stands.
-                    _ => {
-                        return Err(ATMError::MsgReceiveError(format!(
-                            "couldn't unpack TSP message: {first_error}"
-                        )));
-                    }
-                }
-            }
+        let sources = ReceiveSources {
+            ops: self,
+            failure: std::sync::Mutex::new(None),
         };
-
-        // The message verified, so the key state behind it is confirmed now.
-        self.atm.inner.tsp_key_state.record_seen(sender_vid, now_ms);
-        Ok(unpacked)
+        let ctx = affinidi_tsp::receive::ReceiveContext {
+            resolver: &sources,
+            relationships: &sources,
+            key_state: &self.atm.inner.tsp_key_state,
+            policy: &policy,
+            now_ms: self.atm.inner.config.clock().unix_millis() as u64,
+        };
+        match affinidi_tsp::receive::receive(&ctx, profile_did, &decryption_key, qb2).await {
+            Ok(verified) => Ok(verified),
+            // A resolver or store failure is reported as the SDK error it was,
+            // not as an unpack failure.
+            Err(e) => Err(sources.take_failure().unwrap_or_else(|| receive_error(e))),
+        }
     }
 
+    /// Resolve a DID-based VID to its TSP public keys + endpoints.
     async fn resolve_vid(&self, did: &str) -> Result<affinidi_tsp::ResolvedVid, ATMError> {
         let resolver = DidVidResolver::new(self.atm.inner.tdk_common.did_resolver().clone());
         resolver
@@ -3945,6 +3875,93 @@ impl TspOps<'_> {
             }
         }
         None
+    }
+}
+
+/// The [`ATMError`] for a failure of the shared TSP receive path that was not
+/// a resolver or store failure.
+///
+/// Key state that is not confirmed (Rev 3 §7.4.2: a refresh failed, or is in
+/// progress) may clear once a refresh succeeds, so it is an
+/// [`ATMError::DIDError`], which
+/// [`is_transient_unpack_failure`](ATMError::is_transient_unpack_failure)
+/// treats as "leave the message queued", never as "delete it". Anything else
+/// is a property of the bytes.
+fn receive_error(e: affinidi_tsp::TspError) -> ATMError {
+    if e.is_transient() {
+        ATMError::DIDError(format!(
+            "TSP message not accepted yet: the sender's key state is not confirmed; it may be \
+             accepted on a later attempt: {e}"
+        ))
+    } else {
+        ATMError::MsgReceiveError(format!("couldn't unpack TSP message: {e}"))
+    }
+}
+
+/// The SDK's resolver and relationship store, as the shared TSP receive path
+/// ([`affinidi_tsp::receive`]) reads them.
+///
+/// A failure of either is kept as the [`ATMError`] it was: a resolution or
+/// store failure propagates out of the receive path, and the caller reports
+/// it as that error rather than as a failure to unpack. A failed *refresh* is
+/// not kept, because the receive path may absorb it and report the
+/// verification failure that prompted it instead.
+struct ReceiveSources<'a, 'b> {
+    ops: &'a TspOps<'b>,
+    failure: std::sync::Mutex<Option<ATMError>>,
+}
+
+impl ReceiveSources<'_, '_> {
+    fn keep(&self, e: ATMError) -> affinidi_tsp::TspError {
+        let message = e.to_string();
+        let mut failure = self
+            .failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if failure.is_none() {
+            *failure = Some(e);
+        }
+        affinidi_tsp::TspError::DidResolution(message)
+    }
+
+    fn take_failure(&self) -> Option<ATMError> {
+        self.failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+}
+
+impl affinidi_tsp::receive::AsyncVidResolver for ReceiveSources<'_, '_> {
+    async fn resolve(
+        &self,
+        vid: &str,
+    ) -> Result<affinidi_tsp::ResolvedVid, affinidi_tsp::TspError> {
+        self.ops.resolve_vid(vid).await.map_err(|e| self.keep(e))
+    }
+
+    async fn refresh(
+        &self,
+        vid: &str,
+    ) -> Result<affinidi_tsp::ResolvedVid, affinidi_tsp::TspError> {
+        self.ops
+            .refresh_vid(vid)
+            .await
+            .map_err(|e| affinidi_tsp::TspError::DidResolution(e.to_string()))
+    }
+}
+
+impl affinidi_tsp::receive::RelationshipLookup for ReceiveSources<'_, '_> {
+    async fn relationship_state(
+        &self,
+        our_vid: &str,
+        their_vid: &str,
+    ) -> Result<RelationshipState, affinidi_tsp::TspError> {
+        self.ops
+            .relationship_store()
+            .get(our_vid, their_vid)
+            .await
+            .map_err(|e| self.keep(e))
     }
 }
 
@@ -4112,6 +4129,32 @@ mod tests {
     use affinidi_tsp::message::direct;
     use affinidi_tsp::{MessageType, PrivateVid};
     use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+
+    /// Key state the receive path could not confirm because a refresh failed
+    /// is a failure that may clear: every inbound path treats it as "leave the
+    /// frame queued". A verification failure against confirmed key state is
+    /// not, and is released.
+    #[test]
+    fn unconfirmed_key_state_is_a_transient_unpack_failure() {
+        let unconfirmed = super::receive_error(affinidi_tsp::TspError::KeyStateUnconfirmed {
+            reason: "the refresh failed: resolver unreachable".into(),
+            verification: None,
+        });
+        assert!(unconfirmed.is_transient_unpack_failure(), "{unconfirmed}");
+
+        let after_failed_refresh =
+            super::receive_error(affinidi_tsp::TspError::KeyStateUnconfirmed {
+                reason: "did not verify and the refresh failed".into(),
+                verification: Some(Box::new(affinidi_tsp::TspError::Verification(
+                    "bad signature".into(),
+                ))),
+            });
+        assert!(after_failed_refresh.is_transient_unpack_failure());
+
+        let definitive =
+            super::receive_error(affinidi_tsp::TspError::Verification("bad signature".into()));
+        assert!(!definitive.is_transient_unpack_failure(), "{definitive}");
+    }
 
     /// Our own mediator wins when the document lists it (no hop to add);
     /// otherwise the first one listed; nothing listed is nothing to route by.

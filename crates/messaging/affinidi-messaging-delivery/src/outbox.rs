@@ -95,10 +95,12 @@ pub struct OutboxEntry {
     /// that already has an entry returns that entry's state and neither
     /// enqueues nor transmits again.
     ///
-    /// The delivery layer does **not** deduplicate on the receiving side. A
-    /// retried transmission (a send that timed out but arrived, a rebind) can
-    /// reach the recipient twice, and a receiving application that must act
-    /// once deduplicates on an identifier it carries in its own payload.
+    /// On the receiving side, a [`MessagingService`](crate::MessagingService)'s inbox dedups an
+    /// application message by its sender and the delivery id the sender
+    /// stamped, so a sender that stamps this key as its delivery id has a
+    /// retried transmission (a send that timed out but arrived, a rebind)
+    /// reach the recipient's application once. See
+    /// [`crate::inbox`] for the cases it does not cover.
     ///
     /// [`MessagingService::send`]: crate::MessagingService::send
     pub idempotency_key: Key,

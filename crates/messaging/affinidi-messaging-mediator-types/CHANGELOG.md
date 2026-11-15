@@ -1,5 +1,24 @@
 # Affinidi Messaging Mediator Types
 
+## [0.1.4] - 2026-11-15
+
+`MediatorACLSet`: `acl` is the single source of truth, on the wire too (#1141)
+
+- The struct now holds only the packed `acl: u64`. The nineteen named flags it
+  used to store (private fields, written only by the setters) are gone.
+- **Serialize is unchanged on the wire:** the same JSON object, the same field
+  names and order, each named flag now computed from `acl`, so a reader that
+  takes the named flags (an older mediator, a UI) keeps working and always
+  sees what `acl` enforces.
+- **Deserialize reads `acl` alone** and clears unassigned bits 19-63, as
+  `from_u64` does. The named flags are optional on input and ignored; a value
+  whose flags disagree with its `acl` is read as `acl` says, and logged with
+  the `tracing` feature. Before, such a value was accepted with both, and the
+  flags a reader saw could contradict the ACL enforced. A value that has only
+  `acl` is now accepted; one without `acl` is refused, as before.
+- `Debug` shows `acl` only.
+- `clock::Clock` documents why it is not `affinidi-tsp`'s `keystate::Clock`.
+
 ## [0.1.3] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

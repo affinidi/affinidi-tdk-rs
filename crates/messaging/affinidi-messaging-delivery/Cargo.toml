@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-messaging-delivery"
 description = "Reliable messaging delivery layer (durable outbox + drain) over the MessageTransport trait"
-version = "0.3.1"
+version = "0.3.2"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -33,6 +33,8 @@ futures-util = { workspace = true, features = ["default"] }
 # The layer-receipt (§5a) wire body is a tiny typed JSON message.
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+# Binds an inbox record to its payload (`inbox::payload_digest`).
+sha2.workspace = true
 # `MessagingService` spawns the inbound dispatcher (`rt`) and uses
 # broadcast/oneshot/watch (`sync`); the drain uses `time`.
 tokio = { workspace = true, features = ["rt", "sync", "time"] }

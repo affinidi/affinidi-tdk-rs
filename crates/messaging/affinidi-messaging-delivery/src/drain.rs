@@ -35,8 +35,9 @@ pub const QUEUE_FULL_MAX_WAIT: Duration = Duration::from_secs(10 * 60);
 /// destination holds back every other destination for as long as its send
 /// hangs. A send that runs out of time is a failed attempt like any other: it
 /// is retried with backoff. If the stalled attempt did arrive, the recipient
-/// receives the message twice — the delivery layer does not deduplicate on the
-/// receiving side — and a receipt for either copy settles the entry.
+/// receives the message twice; a recipient running this layer's inbox hands it
+/// to its application once (keyed by the delivery id, when the sender stamped
+/// one), and a receipt for either copy settles the entry.
 pub const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long the drain waits for [`MessageTransport::delivery_scope`] once an

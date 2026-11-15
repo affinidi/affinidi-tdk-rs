@@ -454,6 +454,17 @@ impl ATM {
             .map(|sender| sender.subscribe())
     }
 
+    /// Report an inbound message this process could not process, and is about
+    /// to delete or give up on, on the unprocessable-message channel (if one is
+    /// configured; see [`get_unprocessable_message_channel`](Self::get_unprocessable_message_channel)).
+    ///
+    /// For a consumer of the SDK's inbound streams that makes its own
+    /// drop/dead-letter decisions (a service framework, say), so those reach
+    /// the same channel as the SDK's own. Never blocks or fails.
+    pub fn report_unprocessable(&self, attachment_id: Option<String>, raw: String, reason: String) {
+        crate::protocols::message_pickup::emit_unprocessable(self, attachment_id, raw, reason);
+    }
+
     /// Get the TDK Shared State
     pub fn get_tdk(&self) -> &TDKSharedState {
         &self.inner.tdk_common

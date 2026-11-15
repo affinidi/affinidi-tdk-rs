@@ -105,12 +105,26 @@ pub struct ListenerConfig {
     /// handler's message was not acked, so the mediator redelivers it. Default
     /// [`DEFAULT_SHUTDOWN_DRAIN_TIMEOUT`].
     pub shutdown_drain_timeout: Duration,
+    /// How long one handler invocation may run. A handler past it is aborted
+    /// and counts as a failure for its message, like a panic. Must be
+    /// non-zero. Default [`DEFAULT_HANDLER_TIMEOUT`].
+    pub handler_timeout: Duration,
+    /// How many times a message's handler may fail (panic or time out) before
+    /// the message is dead-lettered: acked, so the mediator stops redelivering
+    /// it, reported on the SDK's unprocessable-message channel, and logged at
+    /// error. Counted per mediator message id across the live stream and the
+    /// offline drain. Default [`DEFAULT_MAX_HANDLER_FAILURES`]; 0 is read as 1.
+    pub max_handler_failures: u32,
 }
 
 /// Default for [`ListenerConfig::max_concurrent_handlers`].
 pub const DEFAULT_MAX_CONCURRENT_HANDLERS: usize = 64;
 /// Default for [`ListenerConfig::shutdown_drain_timeout`].
 pub const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+/// Default for [`ListenerConfig::handler_timeout`].
+pub const DEFAULT_HANDLER_TIMEOUT: Duration = Duration::from_secs(60);
+/// Default for [`ListenerConfig::max_handler_failures`].
+pub const DEFAULT_MAX_HANDLER_FAILURES: u32 = 5;
 
 impl std::fmt::Debug for ListenerConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -127,6 +141,8 @@ impl std::fmt::Debug for ListenerConfig {
             .field("protocols", &self.protocols)
             .field("max_concurrent_handlers", &self.max_concurrent_handlers)
             .field("shutdown_drain_timeout", &self.shutdown_drain_timeout)
+            .field("handler_timeout", &self.handler_timeout)
+            .field("max_handler_failures", &self.max_handler_failures)
             .finish()
     }
 }
@@ -172,6 +188,8 @@ impl Default for ListenerConfig {
             relationship_store: None,
             max_concurrent_handlers: DEFAULT_MAX_CONCURRENT_HANDLERS,
             shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
+            handler_timeout: DEFAULT_HANDLER_TIMEOUT,
+            max_handler_failures: DEFAULT_MAX_HANDLER_FAILURES,
         }
     }
 }
@@ -189,6 +207,11 @@ impl ListenerConfig {
         }
         if self.max_concurrent_handlers == 0 {
             return Err(ConfigError::ZeroHandlerConcurrency {
+                listener_id: self.id.clone(),
+            });
+        }
+        if self.handler_timeout.is_zero() {
+            return Err(ConfigError::ZeroHandlerTimeout {
                 listener_id: self.id.clone(),
             });
         }

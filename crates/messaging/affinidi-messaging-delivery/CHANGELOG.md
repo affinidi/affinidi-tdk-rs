@@ -1,5 +1,74 @@
 # Changelog
 
+## [0.3.2] - 2026-11-15
+
+Inbox: a receipt means the message is recorded, and re-sends are not delivered twice (#1140)
+
+- **New `inbox` module: `InboxStore`, `InMemoryInboxStore` (with
+  `InboxLimits`), `InboxRecord`, `InboxKey`, `InboxState`, `Recorded`,
+  `InboxRefusal`, `InboxRetention`, `InboxReapReport`, `InboxError`,
+  `payload_digest`, `INBOX_REAP_INTERVAL`, and `inbox::conformance` checks
+  for a store implementation** (under the `conformance` feature). The
+  dispatcher records an unsolicited application message from a
+  transport-authenticated sender **before** it acks the message (a delete at
+  the mediator) and before it sends any receipt the message asked for. Keyed
+  by the sender, its idempotency key (the delivery id it stamped) or, with
+  none, the message id, **and the SHA-256 of the payload**.
+- `MessagingService::with_inbox(store)` replaces the default
+  `InMemoryInboxStore` (call it before the first `subscribe()`);
+  `MessagingService::inbox()` returns it; `with_inbox_retention` sets how long
+  records are kept; `MessagingService::redeliver_pending()` hands records that
+  were recorded but never taken — a process that stopped with them buffered —
+  to the current subscribers. Call it after subscribing at startup.
+
+**Behaviour (R3.6):**
+
+- **Receiver-side dedup.** A copy of a recorded message — a sender's re-send
+  or rebind under the same idempotency key with the same content, a mediator
+  redelivery — is acked and receipted again (the sender evidently missed the
+  first receipt) but **not** handed to subscribers when the record is consumed
+  or the message is still queued to a subscriber in this process. **An id
+  reused for different content is not a copy**: it is recorded and delivered
+  (and receipted) as a message of its own, and the reuse is logged at warn.
+  Not covered: messages without an authenticated sender, relationship-control
+  messages, replies handed to a `request` waiter, and a message that reached
+  some subscribers' queues but not all (left unacked and offered to every
+  subscriber again, as before).
+- **The dedup decision is atomic in a process.** The key is claimed in flight
+  before the inbox is asked, so two copies handled at once (or a copy and
+  `redeliver_pending`) cannot both be queued; a copy whose twin is still being
+  recorded is left unacked rather than receipted unrecorded. A record leaves
+  the in-flight set only after the store has marked it consumed, so a consumed
+  message is never queued again.
+- **Receipt ⇒ recorded.** An inbox that cannot record leaves the message
+  unacked, unreceipted and undelivered, for the mediator to offer again. With
+  the default in-memory inbox, "recorded" lasts for the life of the process;
+  supply a durable `InboxStore` for a receipt to survive a restart.
+- **The inbox is bounded** (a remote sender must not be able to grow it).
+  `InMemoryInboxStore` limits pending records and pending payload bytes per
+  sender (defaults 1 000 and 16 MiB) — so one sender cannot starve the others
+  — and records and pending bytes in total (100 000 and 128 MiB), evicting
+  the oldest consumed records first. A message the store refuses
+  (`Recorded::Refused`) is left unacked and unreceipted at the mediator
+  (backpressure), logged at warn at most once a minute. `mark_consumed` drops
+  the stored payload; the record keeps the key and digest for dedup. Durable
+  stores must meet the same contract (`InboxStore` docs, `conformance`).
+- **Retention is applied by the service**, every `INBOX_REAP_INTERVAL` (60 s),
+  per `InboxRetention`: consumed records after 7 days (the dedup window — a
+  copy arriving later is delivered again); pending records never acked after
+  1 day (the mediator still holds them); pending records that **were** acked
+  — they exist nowhere else — are logged at error once overdue and kept until
+  consumed, or until `acked_pending_max_age` if set.
+- A record is consumed once a subscriber it was queued to has taken it from
+  its `subscribe()` stream and every other one has taken it or been dropped: a
+  subscriber that goes away no longer pins it. `redeliver_pending` hands one
+  record over at most 3 times per process, then logs at error and leaves it.
+- Corrected the docs that said the layer does not deduplicate inbound
+  messages (`lib.rs`, `README.md`, `OutboxEntry::idempotency_key`,
+  `drain::SEND_TIMEOUT`, `subscribe`, `with_receipts`, the receipt module).
+- Unchanged and tracked in #1168: a subscriber whose queue is full holds the
+  single dispatcher for up to `SUBSCRIBER_SEND_TIMEOUT` (10 s) per message.
+
 ## [0.3.1] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

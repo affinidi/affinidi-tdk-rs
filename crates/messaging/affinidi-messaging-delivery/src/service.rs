@@ -7,9 +7,9 @@
 //! single-transport API (`new`/`with_receipts`) is a thin shim over the
 //! multi-transport core: it installs one `"default"` transport as the primary.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use affinidi_messaging_core::{
@@ -23,6 +23,10 @@ use tokio::task::JoinHandle;
 use crate::ack::{AckQueue, AckStats};
 use crate::clock::now_unix_ms;
 use crate::confirm::confirm_delivered_by;
+use crate::inbox::{
+    INBOX_REAP_INTERVAL, InMemoryInboxStore, InboxError, InboxKey, InboxRecord, InboxRetention,
+    InboxState, InboxStore, Recorded,
+};
 use crate::outbox::{Key, OutboxEntry, OutboxState, OutboxStore};
 use crate::reach::ReceiptReach;
 use crate::receipt::{self, PackedReceipt, ReceiptPacker, ReceiptRequest};
@@ -148,15 +152,17 @@ type WaiterMap = Arc<Mutex<HashMap<String, Waiter>>>;
 /// Each subscriber has its own bounded queue. When one is full the dispatcher
 /// waits, up to [`SUBSCRIBER_SEND_TIMEOUT`], for that subscriber to make room:
 /// backpressure, not loss. A message is acked (deleted at the mediator), and
-/// receipted, only once every live subscriber has taken it into its queue;
-/// one that a subscriber could not take in time is left unacked, so the
-/// mediator offers it again. (This replaced a `broadcast` ring that overwrote
-/// the oldest message of a slow subscriber *after* it had been acked.)
+/// receipted, only once it is recorded in the [`InboxStore`] and every live
+/// subscriber has taken it into its queue; one that a subscriber could not
+/// take in time is left unacked, so the mediator offers it again. (This
+/// replaced a `broadcast` ring that overwrote the oldest message of a slow
+/// subscriber *after* it had been acked.)
 ///
-/// Taken into a queue is not processed: a message buffered here when the
-/// process stops is gone, ack and receipt already sent. Durable handoff — an
-/// inbox store, or an ack the application gives after its own persist — is
-/// not built yet.
+/// Taken into a queue is not processed. The inbox record stays
+/// [`Pending`](InboxState::Pending) until every subscriber it was queued to
+/// has taken it from its stream, so a message still buffered here when the
+/// process stops is redelivered from a durable inbox by
+/// [`MessagingService::redeliver_pending`].
 const SUBSCRIBE_BUFFER: usize = 256;
 
 /// How long the dispatcher waits for a full subscriber queue before leaving
@@ -196,7 +202,23 @@ struct ServiceInner {
     waiters: WaiterMap,
     /// One bounded queue per `subscribe()` stream; closed ones are pruned as
     /// they are found.
-    subscribers: Mutex<Vec<mpsc::Sender<Inbound>>>,
+    subscribers: Mutex<Vec<mpsc::Sender<Queued>>>,
+    /// The receiving side's record of what it took from a transport: written
+    /// before an unsolicited message is acked or receipted, and the dedup
+    /// anchor for later copies. Replaceable until the first subscriber exists
+    /// ([`MessagingService::with_inbox`]).
+    inbox: RwLock<Arc<dyn InboxStore>>,
+    /// Inbox keys queued to a subscriber in this process and not yet taken
+    /// by all of them. A copy arriving meanwhile is acked, not queued again.
+    in_flight: Arc<Mutex<HashSet<InboxKey>>>,
+    /// How long inbox records are kept; applied every [`INBOX_REAP_INTERVAL`].
+    inbox_retention: RwLock<InboxRetention>,
+    /// How many times `redeliver_pending` has handed each pending record over
+    /// in this process, so a record no subscriber takes is not re-queued
+    /// forever. Pruned to the current pending set on every call.
+    redeliveries: Mutex<HashMap<InboxKey, u32>>,
+    /// Rate limit for the warning logged when the inbox refuses a record.
+    refusal_log: Mutex<RateLimitedLog>,
     receipt_packer: Option<Arc<dyn ReceiptPacker>>,
     /// Recipients whose receipts have settled one of this service's deliveries
     /// — the recipients known to send receipts (VTI-TRN-064 item 1).
@@ -217,7 +239,191 @@ struct ServiceInner {
     ack_slow_until: Mutex<Option<tokio::time::Instant>>,
 }
 
+/// One unsolicited message in a subscriber's queue, with this queue's share
+/// of the ticket that marks its inbox record consumed.
+struct Queued {
+    inbound: Inbound,
+    holder: Option<Holder>,
+}
+
+/// One subscriber queue's share of a [`ConsumeTicket`]. Resolved when it is
+/// dropped: taken if the subscriber's stream yielded the message, not taken if
+/// the queue was dropped with it unread (the subscriber went away).
+struct Holder {
+    ticket: Arc<ConsumeTicket>,
+    taken: bool,
+}
+
+impl Holder {
+    /// The subscriber's stream yielded the message.
+    fn take(mut self) {
+        self.taken = true;
+    }
+}
+
+impl Drop for Holder {
+    fn drop(&mut self) {
+        self.ticket.resolve(self.taken);
+    }
+}
+
+/// Shared by every subscriber queue one inbox-recorded message went into.
+///
+/// Each queue's [`Holder`] resolves it once — taken, or dropped unread with a
+/// subscriber that went away — so a vanished subscriber does not pin the
+/// record. When every holder has resolved, the record is marked
+/// [`Consumed`](InboxState::Consumed) if any of them took it, and then (only
+/// then, so a consumed message cannot be queued again in between) the key
+/// leaves the in-flight set. If none took it, the key leaves the in-flight set
+/// and the record stays `Pending` for redelivery.
+struct ConsumeTicket {
+    key: InboxKey,
+    /// Starts at `usize::MAX` and is brought down to the number of holders once
+    /// the handoff completes ([`ConsumeTicket::settle`]); each holder counts it
+    /// down, and reaching zero finishes the ticket. After a partial handoff it
+    /// is never settled, so it never finishes: the record stays pending.
+    remaining: AtomicUsize,
+    any_taken: AtomicBool,
+    finished: AtomicBool,
+    inbox: Arc<dyn InboxStore>,
+    in_flight: Arc<Mutex<HashSet<InboxKey>>>,
+}
+
+impl ConsumeTicket {
+    /// One holder resolved.
+    fn resolve(&self, taken: bool) {
+        if taken {
+            self.any_taken.store(true, Ordering::Release);
+        }
+        if self.remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.finish();
+        }
+    }
+
+    /// The handoff to `holders` queues completed.
+    fn settle(&self, holders: usize) {
+        // Remove every slot that is not a holder in one step, preserving the
+        // resolutions already counted. Landing on exactly zero means every
+        // holder resolved before this ran, and `resolve` never saw 1 -> 0.
+        let untaken = usize::MAX - holders;
+        if self.remaining.fetch_sub(untaken, Ordering::AcqRel) == untaken {
+            self.finish();
+        }
+    }
+
+    fn finish(&self) {
+        self.finished.store(true, Ordering::Release);
+        if !self.any_taken.load(Ordering::Acquire) {
+            release_in_flight(&self.in_flight, &self.key);
+            return;
+        }
+        let key = self.key.clone();
+        let inbox = self.inbox.clone();
+        let in_flight = self.in_flight.clone();
+        let mark = async move {
+            // No readable clock: keep the anchor rather than have the reaper
+            // take it at once; the store's bounds still evict it.
+            let now = now_unix_ms().unwrap_or(u64::MAX);
+            if let Err(e) = inbox.mark_consumed(&key, now).await {
+                tracing::warn!(
+                    error = %e,
+                    sender = %key.sender,
+                    id = %key.id,
+                    "could not mark an inbox record consumed; it stays pending and may be \
+                     redelivered"
+                );
+            }
+            // Only once the store says consumed: until then a copy arriving
+            // finds the key in flight and is not queued again.
+            release_in_flight(&in_flight, &key);
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(mark);
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "subscribe() stream polled outside a Tokio runtime; the inbox record stays \
+                     pending"
+                );
+                release_in_flight(&self.in_flight, &self.key);
+            }
+        }
+    }
+}
+
+impl Drop for ConsumeTicket {
+    fn drop(&mut self) {
+        if !self.finished.load(Ordering::Acquire) {
+            release_in_flight(&self.in_flight, &self.key);
+        }
+    }
+}
+
+fn release_in_flight(in_flight: &Mutex<HashSet<InboxKey>>, key: &InboxKey) {
+    in_flight
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(key);
+}
+
+/// A warning logged at most once per [`REFUSAL_LOG_INTERVAL`], counting the
+/// occurrences it stood for.
+#[derive(Default)]
+struct RateLimitedLog {
+    last: Option<tokio::time::Instant>,
+    suppressed: u64,
+}
+
+/// See [`RateLimitedLog`].
+const REFUSAL_LOG_INTERVAL: Duration = Duration::from_secs(60);
+
+/// How many times `redeliver_pending` hands one record over in a process
+/// before it stops trying and says so.
+const MAX_REDELIVERIES: u32 = 3;
+
 impl ServiceInner {
+    fn inbox(&self) -> Arc<dyn InboxStore> {
+        self.inbox
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Log an inbox refusal, at most once per [`REFUSAL_LOG_INTERVAL`].
+    fn log_refusal(&self, key: &InboxKey, why: &str) {
+        let mut log = self
+            .refusal_log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = tokio::time::Instant::now();
+        if log
+            .last
+            .is_some_and(|last| now.duration_since(last) < REFUSAL_LOG_INTERVAL)
+        {
+            log.suppressed += 1;
+            return;
+        }
+        tracing::warn!(
+            sender = %key.sender,
+            reason = why,
+            suppressed = log.suppressed,
+            "inbox refused an inbound message; leaving it unacked at the mediator \
+             (backpressure). Further refusals are logged once a minute"
+        );
+        log.last = Some(now);
+        log.suppressed = 0;
+    }
+
+    /// Claim `key` for queueing in this process. `false` if it is already
+    /// claimed: queued to a subscriber and not yet resolved, or being recorded.
+    fn claim_in_flight(&self, key: &InboxKey) -> bool {
+        self.in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(key.clone())
+    }
+
     /// Install `transport` under `id`: spawn its forwarder (pumping `inbound()`
     /// into the merged channel), store the slot, and update the primary.
     ///
@@ -373,6 +579,8 @@ pub struct MessagingService {
     /// like the dispatcher — a parked ack outliving its service would be acking
     /// for a transport set that no longer exists.
     _ack_retry: JoinHandle<()>,
+    /// Applies the inbox retention every [`INBOX_REAP_INTERVAL`].
+    _inbox_reap: JoinHandle<()>,
 }
 
 impl MessagingService {
@@ -404,9 +612,12 @@ impl MessagingService {
     /// transport it arrived on (VTI-TRN-061). A message that did not ask gets
     /// nothing; one that nobody took is left unacked and gets no receipt.
     ///
-    /// Handed off is not persisted: the receipt says the message reached this
-    /// process's consumer queue, not that the application has stored it. See
-    /// [`subscribe`](Self::subscribe).
+    /// An unsolicited message is recorded in the [`InboxStore`] before it is
+    /// receipted, so with a durable inbox ([`with_inbox`](Self::with_inbox))
+    /// a receipt means the message is recorded and survives a restart. With
+    /// the default [`InMemoryInboxStore`] it is recorded only for the life of
+    /// the process. A reply to a `request` is handed to its waiter and is not
+    /// recorded. See [`subscribe`](Self::subscribe).
     pub fn with_receipts(
         transport: Arc<dyn MessageTransport>,
         outbox: Arc<dyn OutboxStore>,
@@ -440,6 +651,11 @@ impl MessagingService {
             outbox,
             waiters,
             subscribers: Mutex::new(Vec::new()),
+            inbox: RwLock::new(Arc::new(InMemoryInboxStore::new())),
+            in_flight: Arc::new(Mutex::new(HashSet::new())),
+            inbox_retention: RwLock::new(InboxRetention::default()),
+            redeliveries: Mutex::new(HashMap::new()),
+            refusal_log: Mutex::new(RateLimitedLog::default()),
             receipt_packer,
             reach: Arc::new(ReceiptReach::new()),
             inbound_tx,
@@ -454,11 +670,15 @@ impl MessagingService {
         // gone quiet, so waiting for its next message to drive the retry would
         // wait for the thing that is not happening.
         let ack_retry = tokio::spawn(run_ack_retry(inner.clone()));
+        // The inbox is fed by remote senders, so its retention is not left to
+        // the host to remember.
+        let inbox_reap = tokio::spawn(run_inbox_reap(inner.clone()));
 
         Self {
             inner,
             _dispatcher: dispatcher,
             _ack_retry: ack_retry,
+            _inbox_reap: inbox_reap,
         }
     }
 
@@ -815,19 +1035,30 @@ impl MessagingService {
     /// installed transports. Each subscriber gets its own stream and its own
     /// bounded queue, and sees every such message.
     ///
-    /// The dispatcher acks a message — deleting it at the mediator — and sends
-    /// any receipt it asked for once every live subscriber's queue has taken
-    /// it. A subscriber that stops reading holds the dispatcher back (up to
-    /// [`SUBSCRIBER_SEND_TIMEOUT`] per message, after which the message is left
-    /// unacked for the mediator to redeliver) rather than losing messages.
-    /// Drop the stream to unsubscribe.
+    /// An application message from a transport-authenticated sender is first
+    /// recorded in the [`InboxStore`] (see [`crate::inbox`]), keyed by the
+    /// sender and its idempotency key (the delivery id it stamped) or, without
+    /// one, the message id. The dispatcher acks it — deleting it at the
+    /// mediator — and sends any receipt it asked for once it is recorded and
+    /// every live subscriber's queue has taken it. A subscriber that stops
+    /// reading holds the dispatcher back (up to [`SUBSCRIBER_SEND_TIMEOUT`] per
+    /// message, after which the message is left unacked for the mediator to
+    /// redeliver) rather than losing messages. Drop the stream to unsubscribe.
     ///
-    /// Delivery to a subscriber is at-least-once: a message left unacked is
-    /// offered again, and may already have reached a subscriber that did take
-    /// it. The layer does not deduplicate inbound messages; a consumer that
-    /// must act once deduplicates on an identifier in the message itself. A
-    /// message still in a subscriber's queue when the process stops was
-    /// already acked and is lost — durable handoff is not built yet.
+    /// A copy of a message already recorded — a sender's re-send, a rebind, a
+    /// redelivery — is acked and receipted again but **not** handed to
+    /// subscribers when its record is consumed or it is still queued in this
+    /// process. Duplicates still reach a subscriber when a message reached
+    /// some subscribers' queues but not all (it is left unacked and offered to
+    /// all of them again), and for messages the inbox does not cover: those
+    /// without an authenticated sender, and relationship-control messages.
+    ///
+    /// The record is marked consumed once a subscriber it was queued to has
+    /// taken it from this stream and every other one has taken it or been
+    /// dropped. One still queued when the process stops stays pending; with a
+    /// durable inbox, call
+    /// [`redeliver_pending`](Self::redeliver_pending) after subscribing at
+    /// startup to hand it over again.
     pub fn subscribe(&self) -> BoxStream<'static, Inbound> {
         let (tx, rx) = mpsc::channel(SUBSCRIBE_BUFFER);
         self.inner
@@ -836,8 +1067,101 @@ impl MessagingService {
             .expect("subscribers mutex")
             .push(tx);
         Box::pin(stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|item| (item, rx))
+            rx.recv().await.map(|queued: Queued| {
+                if let Some(holder) = queued.holder {
+                    holder.take();
+                }
+                (queued.inbound, rx)
+            })
         }))
+    }
+
+    /// Use `inbox` as this service's [`InboxStore`] in place of the default
+    /// [`InMemoryInboxStore`]. Call it right after construction, before the
+    /// first [`subscribe`](Self::subscribe): nothing is recorded while there
+    /// is no subscriber, so no record is lost by the swap.
+    pub fn with_inbox(self, inbox: Arc<dyn InboxStore>) -> Self {
+        *self
+            .inner
+            .inbox
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = inbox;
+        self
+    }
+
+    /// The [`InboxStore`] this service records inbound messages in.
+    pub fn inbox(&self) -> Arc<dyn InboxStore> {
+        self.inner.inbox()
+    }
+
+    /// Keep inbox records per `retention` in place of the default
+    /// [`InboxRetention`]. The service applies it every
+    /// [`INBOX_REAP_INTERVAL`].
+    pub fn with_inbox_retention(self, retention: InboxRetention) -> Self {
+        *self
+            .inner
+            .inbox_retention
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = retention;
+        self
+    }
+
+    /// Hand every [`Pending`](InboxState::Pending) inbox record to the current
+    /// subscribers: messages recorded (and acked) but not taken by every
+    /// subscriber they were queued to — typically by a process that stopped
+    /// with them still buffered. Records already queued in this process are
+    /// skipped. Returns how many were handed off; with no subscriber, none.
+    ///
+    /// Call it once after subscribing at startup. A message that reached a
+    /// subscriber just before the process stopped, but whose record had not
+    /// yet been marked consumed, is delivered again.
+    pub async fn redeliver_pending(&self) -> Result<usize, InboxError> {
+        let inbox = self.inner.inbox();
+        let pending = inbox.pending().await?;
+        {
+            // Forget counts for records that are no longer pending.
+            let keys: HashSet<&InboxKey> = pending.iter().map(|r| &r.key).collect();
+            self.inner
+                .redeliveries
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .retain(|k, _| keys.contains(k));
+        }
+        let mut handed_off = 0;
+        for record in pending {
+            if live_subscribers(&self.inner).is_empty() {
+                break;
+            }
+            if !self.inner.claim_in_flight(&record.key) {
+                continue;
+            }
+            let attempts = {
+                let mut counts = self
+                    .inner
+                    .redeliveries
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let n = counts.entry(record.key.clone()).or_default();
+                *n += 1;
+                *n
+            };
+            if attempts > MAX_REDELIVERIES {
+                release_in_flight(&self.inner.in_flight, &record.key);
+                tracing::error!(
+                    sender = %record.key.sender,
+                    id = %record.key.id,
+                    acked = record.acked,
+                    attempts = MAX_REDELIVERIES,
+                    "a pending inbox record was handed to subscribers {MAX_REDELIVERIES} times in \
+                     this process and none took it; no longer re-queued until a restart"
+                );
+                continue;
+            }
+            if queue_recorded(&self.inner, &inbox, record.key.clone(), record.to_inbound()).await {
+                handed_off += 1;
+            }
+        }
+        Ok(handed_off)
     }
 
     /// The one status a health endpoint reads, aggregated across all transports
@@ -1138,7 +1462,7 @@ async fn run_dispatcher(inner: Arc<ServiceInner>, mut rx: mpsc::Receiver<(Transp
             // reply that arrived a moment after its caller gave up is worth
             // delivering to whoever else is listening rather than discarding.
             Some(tx) => match tx.send(item.message.clone()) {
-                Ok(()) => true,
+                Ok(()) => Handoff::Ack(None),
                 Err(_) => deliver_unsolicited(&inner, item).await,
             },
             None => deliver_unsolicited(&inner, item).await,
@@ -1160,25 +1484,105 @@ async fn run_dispatcher(inner: Arc<ServiceInner>, mut rx: mpsc::Receiver<(Transp
         // Leaving it unacked is the whole point of the contract: the mediator
         // keeps its copy and offers it again on the next pickup, where a
         // subscriber that has since appeared collects it.
-        if handed_off {
-            // A receipt only once the message is held (VTI-TRN-061): a message
-            // nobody took is not held, and is redelivered and receipted then.
-            if let (Some(request), Some(packer)) = (receipt_request, inner.receipt_packer.clone()) {
-                spawn_receipt(&inner, packer, &src_id, request);
+        match handed_off {
+            Handoff::Ack(key) => {
+                // A receipt only once the message is held (VTI-TRN-061): a
+                // message nobody took is not held, and is redelivered and
+                // receipted then.
+                if let (Some(request), Some(packer)) =
+                    (receipt_request, inner.receipt_packer.clone())
+                {
+                    spawn_receipt(&inner, packer, &src_id, request);
+                }
+                ack_via_source(&inner, &src_id, ack).await;
+                // The mediator's copy is (being) deleted: the record is now the
+                // only one, which the inbox reaper must not drop silently.
+                if let Some(key) = key
+                    && let Err(e) = inner.inbox().mark_acked(&key).await
+                {
+                    tracing::warn!(error = %e, "could not mark an inbox record acked");
+                }
             }
-            ack_via_source(&inner, &src_id, ack).await;
-        } else {
-            // Counted as well as logged. This arm is the contract working, not
-            // a failure, which is exactly why it needs a number: a consumer
-            // that never subscribes produces a steady climb here and no other
-            // symptom until the recipient's queue fills.
-            inner.acks.record_no_consumer();
-            tracing::warn!(
-                transport = %src_id,
-                thread_id = ?item_thread_id,
-                "inbound message had no consumer — leaving it unacked so the mediator \
-                 redelivers it, rather than acking (deleting) a message nobody received"
-            );
+            Handoff::Defer => {
+                // Not held here, by choice (inbox refused or failed, or a
+                // concurrent copy is still being recorded): left unacked, logged
+                // where the decision was made.
+            }
+            Handoff::Leave => {
+                // Counted as well as logged. This arm is the contract working, not
+                // a failure, which is exactly why it needs a number: a consumer
+                // that never subscribes produces a steady climb here and no other
+                // symptom until the recipient's queue fills.
+                inner.acks.record_no_consumer();
+                tracing::warn!(
+                    transport = %src_id,
+                    thread_id = ?item_thread_id,
+                    "inbound message had no consumer — leaving it unacked so the mediator \
+                     redelivers it, rather than acking (deleting) a message nobody received"
+                );
+            }
+        }
+    }
+}
+
+/// What the dispatcher does with a message once it has tried to hand it off.
+enum Handoff {
+    /// Held — by a waiter, by subscribers, or already by the inbox (a copy):
+    /// ack it, send any receipt, and note the ack on its inbox record.
+    Ack(Option<InboxKey>),
+    /// Nobody took it: leave it unacked, counted as no-consumer.
+    Leave,
+    /// Deliberately not taken now (the inbox refused or failed to record it, or
+    /// a concurrent copy has not finished recording): leave it unacked.
+    Defer,
+}
+
+/// Apply the inbox retention every [`INBOX_REAP_INTERVAL`], logging what had
+/// to be removed or is overdue.
+async fn run_inbox_reap(inner: Arc<ServiceInner>) {
+    let mut ticker = tokio::time::interval(INBOX_REAP_INTERVAL);
+    ticker.tick().await;
+    loop {
+        ticker.tick().await;
+        let Some(now) = crate::clock::now_for_pass("inbox reap") else {
+            continue;
+        };
+        let retention = *inner
+            .inbox_retention
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match inner.inbox().reap(now, &retention).await {
+            Ok(report) => {
+                if report.unacked_pending_removed > 0 {
+                    tracing::warn!(
+                        removed = report.unacked_pending_removed,
+                        "removed pending inbox records past their maximum age that were never \
+                         acked; the mediator still holds them and offers them again"
+                    );
+                }
+                if report.acked_pending_overdue > 0 {
+                    tracing::error!(
+                        overdue = report.acked_pending_overdue,
+                        "pending inbox records past their maximum age were acked to the mediator \
+                         and never taken by a subscriber; they exist only in the inbox and are \
+                         kept until consumed"
+                    );
+                }
+                if report.acked_pending_removed > 0 {
+                    tracing::error!(
+                        removed = report.acked_pending_removed,
+                        "removed acked inbox records no subscriber ever took, past \
+                         acked_pending_max_age: these messages are lost"
+                    );
+                }
+                if report.consumed_removed > 0 {
+                    tracing::debug!(
+                        removed = report.consumed_removed,
+                        "reaped consumed inbox records"
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "inbox reap failed"),
         }
     }
 }
@@ -1211,26 +1615,176 @@ fn take_waiter(
     }
 }
 
+/// The live subscribers, pruning those whose stream was dropped.
+fn live_subscribers(inner: &ServiceInner) -> Vec<mpsc::Sender<Queued>> {
+    let mut subscribers = inner.subscribers.lock().expect("subscribers mutex");
+    subscribers.retain(|tx| !tx.is_closed());
+    subscribers.clone()
+}
+
 /// Offer an unsolicited inbound to every `subscribe()` consumer.
 ///
-/// Returns whether it was handed off: at least one live subscriber, and every
-/// live subscriber's queue took it. A full queue is waited on for up to
-/// [`SUBSCRIBER_SEND_TIMEOUT`]; a subscriber that still has no room fails the
-/// handoff, and [`run_dispatcher`] then leaves the message unacked. A
-/// subscriber that took it gets it again on redelivery — duplicates rather than
-/// loss. Subscribers whose stream was dropped are pruned.
-async fn deliver_unsolicited(inner: &Arc<ServiceInner>, item: Inbound) -> bool {
-    let subscribers: Vec<mpsc::Sender<Inbound>> = {
-        let mut subscribers = inner.subscribers.lock().expect("subscribers mutex");
-        subscribers.retain(|tx| !tx.is_closed());
-        subscribers.clone()
+/// For a message the inbox covers, the dedup decision is atomic for this
+/// process: the key is claimed in flight **before** the inbox is asked, so two
+/// copies (or a copy and `redeliver_pending`) cannot both decide to queue it.
+/// Then:
+///
+/// - claimed elsewhere: a copy of a message being recorded or still queued.
+///   Acked (and receipted) if its record exists, else deferred;
+/// - recorded new, or recorded earlier but never consumed: queued;
+/// - recorded and consumed: a copy, acked and receipted, not queued;
+/// - refused or failed: deferred, left unacked (backpressure).
+///
+/// No subscriber, or a subscriber whose full queue had no room within
+/// [`SUBSCRIBER_SEND_TIMEOUT`], fails the handoff ([`Handoff::Leave`]).
+async fn deliver_unsolicited(inner: &Arc<ServiceInner>, item: Inbound) -> Handoff {
+    if live_subscribers(inner).is_empty() {
+        return Handoff::Leave;
+    }
+    let Some(key) = InboxKey::of(&item) else {
+        // Not covered by the inbox: handed off as before, without dedup.
+        return if queue_to_subscribers(inner, item, None).await {
+            Handoff::Ack(None)
+        } else {
+            Handoff::Leave
+        };
     };
+    let inbox = inner.inbox();
+
+    if !inner.claim_in_flight(&key) {
+        // Another copy holds the key. If its record exists, this copy is a
+        // duplicate of a held message; if it is still being recorded, wait for
+        // the mediator to offer this copy again.
+        return match inbox.get(&key).await {
+            Ok(Some(_)) => {
+                tracing::debug!(
+                    sender = %key.sender,
+                    id = %key.id,
+                    "duplicate of a message still queued to subscribers; acked, not re-delivered"
+                );
+                Handoff::Ack(Some(key))
+            }
+            _ => {
+                tracing::debug!(
+                    sender = %key.sender,
+                    id = %key.id,
+                    "a copy of this message is being recorded; leaving this one unacked"
+                );
+                Handoff::Defer
+            }
+        };
+    }
+
+    let Some(now) = now_unix_ms() else {
+        release_in_flight(&inner.in_flight, &key);
+        tracing::warn!(
+            "system clock is before the unix epoch; cannot record the inbound message, leaving \
+             it unacked"
+        );
+        return Handoff::Defer;
+    };
+    let record = InboxRecord::from_inbound(key.clone(), &item, now);
+    match inbox.record(record).await {
+        Ok(Recorded::New { id_reused }) => {
+            if id_reused {
+                tracing::warn!(
+                    sender = %key.sender,
+                    id = %key.id,
+                    "sender reused an id for a message with different content; delivering it as \
+                     a distinct message"
+                );
+            }
+        }
+        // Recorded before but never consumed (a restart, or a subscriber that
+        // had no room), and we hold the claim: hand it over now.
+        Ok(Recorded::Duplicate(InboxState::Pending)) => {}
+        Ok(Recorded::Duplicate(_consumed)) => {
+            release_in_flight(&inner.in_flight, &key);
+            tracing::debug!(
+                sender = %key.sender,
+                id = %key.id,
+                "duplicate of a message the application already took; acked, not re-delivered"
+            );
+            return Handoff::Ack(Some(key));
+        }
+        Ok(Recorded::Refused(refusal)) => {
+            release_in_flight(&inner.in_flight, &key);
+            inner.log_refusal(&key, &format!("{refusal:?}"));
+            return Handoff::Defer;
+        }
+        Err(e) => {
+            release_in_flight(&inner.in_flight, &key);
+            tracing::error!(
+                error = %e,
+                "could not record the inbound message in the inbox; leaving it unacked for \
+                 redelivery"
+            );
+            return Handoff::Defer;
+        }
+    }
+    if queue_recorded(inner, &inbox, key.clone(), item).await {
+        Handoff::Ack(Some(key))
+    } else {
+        Handoff::Leave
+    }
+}
+
+/// Queue an inbox-recorded message (whose key the caller has claimed in
+/// flight) to every live subscriber, with a ticket that marks the record
+/// consumed once they have resolved it. The claim is released by the ticket:
+/// at once if the handoff fails, once the record is consumed otherwise.
+async fn queue_recorded(
+    inner: &Arc<ServiceInner>,
+    inbox: &Arc<dyn InboxStore>,
+    key: InboxKey,
+    item: Inbound,
+) -> bool {
+    let ticket = Arc::new(ConsumeTicket {
+        key,
+        remaining: AtomicUsize::new(usize::MAX),
+        any_taken: AtomicBool::new(false),
+        finished: AtomicBool::new(false),
+        inbox: inbox.clone(),
+        in_flight: inner.in_flight.clone(),
+    });
+    let handed_off = queue_to_subscribers(inner, item, Some(&ticket)).await;
+    if !handed_off {
+        // Left unacked for the mediator to offer again: release the claim now,
+        // so that copy is queued to everyone, and stop the ticket (whose
+        // holders may linger in queues that did take it) from releasing a
+        // claim taken by that later copy.
+        ticket.finished.store(true, Ordering::Release);
+        release_in_flight(&inner.in_flight, &ticket.key);
+    }
+    handed_off
+}
+
+/// Send `item` into every live subscriber's queue, each with a [`Holder`] of
+/// `ticket` if given.
+///
+/// The ticket is settled only when every subscriber took the message: after a
+/// partial handoff the record must stay pending (the message is left unacked
+/// and offered to everyone again), so it is never settled and never finishes.
+async fn queue_to_subscribers(
+    inner: &Arc<ServiceInner>,
+    item: Inbound,
+    ticket: Option<&Arc<ConsumeTicket>>,
+) -> bool {
+    let subscribers = live_subscribers(inner);
     let mut taken = 0usize;
     let mut refused = 0usize;
     for tx in &subscribers {
-        match tokio::time::timeout(SUBSCRIBER_SEND_TIMEOUT, tx.send(item.clone())).await {
+        let queued = Queued {
+            inbound: item.clone(),
+            holder: ticket.map(|t| Holder {
+                ticket: t.clone(),
+                taken: false,
+            }),
+        };
+        match tokio::time::timeout(SUBSCRIBER_SEND_TIMEOUT, tx.send(queued)).await {
             Ok(Ok(())) => taken += 1,
-            // Dropped since the snapshot: no longer a subscriber.
+            // Dropped since the snapshot: no longer a subscriber. (Its holder
+            // came back in the error and was dropped, resolving it.)
             Ok(Err(_closed)) => {}
             Err(_elapsed) => refused += 1,
         }
@@ -1244,7 +1798,13 @@ async fn deliver_unsolicited(inner: &Arc<ServiceInner>, item: Inbound) -> bool {
              message unacked for redelivery — a consumer is not draining its subscribe() stream"
         );
     }
-    taken > 0 && refused == 0
+    let handed_off = taken > 0 && refused == 0;
+    if handed_off && let Some(ticket) = ticket {
+        // Every subscriber was offered a holder; the ones that were closed
+        // have already resolved theirs (not taken).
+        ticket.settle(subscribers.len());
+    }
+    handed_off
 }
 
 /// The receipt `item` asks for, if it asks for one and can have one.
@@ -3006,5 +3566,497 @@ mod tests {
         assert_eq!(e.state, OutboxState::Queued);
         assert_eq!(e.attempts, 0);
         assert_eq!(e.settled_at_ms, None);
+    }
+
+    // ── Inbox: durable handoff and receiver-side dedup (#1140) ──────────────
+
+    async fn next_within(sub: &mut BoxStream<'static, Inbound>, ms: u64) -> Option<Inbound> {
+        tokio::time::timeout(Duration::from_millis(ms), sub.next())
+            .await
+            .ok()
+            .flatten()
+    }
+
+    /// A sender's re-send under the same idempotency key is acked and
+    /// receipted again — the sender evidently missed the first receipt — but
+    /// the application sees the message once.
+    #[tokio::test]
+    async fn a_resent_message_is_acked_and_receipted_but_not_redelivered() {
+        let h = mock();
+        let packer = MockPacker::new();
+        let svc = MessagingService::with_receipts(
+            h.transport.clone(),
+            Arc::new(InMemoryOutboxStore::new()),
+            packer.clone(),
+        );
+        let mut sub = svc.subscribe();
+
+        h.inbound_tx
+            .send(inbound("m-1", None, "q-1").with_delivery_id("idem-1"))
+            .unwrap();
+        let first = next_within(&mut sub, 2000).await.expect("first copy");
+        assert_eq!(first.message.id, "m-1");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        // The re-send: a new transmission (new message id, new ack handle),
+        // same idempotency key.
+        h.inbound_tx
+            .send(inbound("m-1-retry", None, "q-2").with_delivery_id("idem-1"))
+            .unwrap();
+        assert!(
+            next_within(&mut sub, 200).await.is_none(),
+            "a re-send of a message already taken must not reach the application again"
+        );
+        assert_eq!(
+            h.transport.acked.lock().unwrap().as_slice(),
+            &["q-1", "q-2"],
+            "both copies are acked, so the mediator does not keep offering the re-send"
+        );
+        assert_eq!(
+            packer.requests.lock().unwrap().len(),
+            2,
+            "the re-send is receipted again"
+        );
+
+        // The same key from another sender is a different message.
+        let mut other = inbound("m-2", None, "q-3").with_delivery_id("idem-1");
+        other.message.sender = Some("did:example:carol".into());
+        h.inbound_tx.send(other).unwrap();
+        assert_eq!(
+            next_within(&mut sub, 2000)
+                .await
+                .expect("another sender's message")
+                .message
+                .id,
+            "m-2"
+        );
+    }
+
+    /// A copy that arrives while the first is still in a subscriber's queue is
+    /// not queued a second time.
+    #[tokio::test]
+    async fn a_copy_of_a_message_still_queued_is_not_queued_again() {
+        let h = mock();
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let mut sub = svc.subscribe();
+
+        // Without a delivery id the message id is the dedup key.
+        h.inbound_tx.send(inbound("same", None, "q-1")).unwrap();
+        h.inbound_tx.send(inbound("same", None, "q-2")).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert!(next_within(&mut sub, 2000).await.is_some());
+        assert!(next_within(&mut sub, 200).await.is_none(), "queued once");
+        assert_eq!(h.transport.acked.lock().unwrap().len(), 2);
+    }
+
+    /// An inbox that refuses every record.
+    struct FailingInbox;
+
+    #[async_trait::async_trait]
+    impl InboxStore for FailingInbox {
+        async fn record(&self, _record: InboxRecord) -> Result<Recorded, InboxError> {
+            Err(InboxError::Backend("disk full".into()))
+        }
+        async fn get(&self, _key: &InboxKey) -> Result<Option<InboxRecord>, InboxError> {
+            Ok(None)
+        }
+        async fn mark_acked(&self, _key: &InboxKey) -> Result<bool, InboxError> {
+            Ok(false)
+        }
+        async fn mark_consumed(&self, _key: &InboxKey, _now: u64) -> Result<bool, InboxError> {
+            Ok(false)
+        }
+        async fn pending(&self) -> Result<Vec<InboxRecord>, InboxError> {
+            Ok(Vec::new())
+        }
+        async fn reap(
+            &self,
+            _now_ms: u64,
+            _retention: &InboxRetention,
+        ) -> Result<crate::inbox::InboxReapReport, InboxError> {
+            Ok(Default::default())
+        }
+    }
+
+    /// A message the inbox could not record is neither acked, receipted, nor
+    /// handed to the application: the mediator keeps it and offers it again.
+    #[tokio::test]
+    async fn a_message_the_inbox_cannot_record_is_not_acked_or_receipted() {
+        let h = mock();
+        let packer = MockPacker::new();
+        let svc = MessagingService::with_receipts(
+            h.transport.clone(),
+            Arc::new(InMemoryOutboxStore::new()),
+            packer.clone(),
+        )
+        .with_inbox(Arc::new(FailingInbox));
+        let mut sub = svc.subscribe();
+
+        h.inbound_tx
+            .send(inbound("m-1", None, "q-1").with_delivery_id("idem-1"))
+            .unwrap();
+        assert!(next_within(&mut sub, 200).await.is_none());
+        assert!(h.transport.acked.lock().unwrap().is_empty());
+        assert!(packer.requests.lock().unwrap().is_empty());
+    }
+
+    /// A packer that checks, as it is asked for a receipt, that the message
+    /// it confirms is already in the inbox.
+    struct InboxCheckingPacker {
+        inbox: Arc<InMemoryInboxStore>,
+        recorded_first: Mutex<Vec<bool>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ReceiptPacker for InboxCheckingPacker {
+        async fn pack_receipt(
+            &self,
+            request: &ReceiptRequest,
+        ) -> Result<PackedReceipt, MessagingError> {
+            let key = InboxKey::new(
+                request.to.clone(),
+                request.confirms.clone(),
+                crate::inbox::payload_digest(b"{}"),
+            );
+            let recorded = self.inbox.get(&key).await.unwrap().is_some();
+            self.recorded_first.lock().unwrap().push(recorded);
+            Ok(PackedReceipt::Sent)
+        }
+    }
+
+    /// Receipt ⇒ recorded: by the time a receipt is built, the message it
+    /// confirms is in the inbox.
+    #[tokio::test]
+    async fn a_receipt_is_sent_only_after_the_inbox_records_the_message() {
+        let h = mock();
+        let inbox = Arc::new(InMemoryInboxStore::new());
+        let packer = Arc::new(InboxCheckingPacker {
+            inbox: inbox.clone(),
+            recorded_first: Mutex::new(Vec::new()),
+        });
+        let svc = MessagingService::with_receipts(
+            h.transport.clone(),
+            Arc::new(InMemoryOutboxStore::new()),
+            packer.clone(),
+        )
+        .with_inbox(inbox.clone());
+        let mut sub = svc.subscribe();
+
+        h.inbound_tx
+            .send(inbound("m-1", None, "q-1").with_delivery_id("idem-1"))
+            .unwrap();
+        assert!(next_within(&mut sub, 2000).await.is_some());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(packer.recorded_first.lock().unwrap().as_slice(), &[true]);
+        assert_eq!(
+            inbox
+                .get(&InboxKey::new(
+                    ALICE,
+                    "idem-1",
+                    crate::inbox::payload_digest(b"{}"),
+                ))
+                .await
+                .unwrap()
+                .map(|r| r.state),
+            Some(InboxState::Consumed),
+            "taken from the stream, so consumed"
+        );
+    }
+
+    /// A restart over a persisted inbox (the same store, reused): a message
+    /// the previous process handed to the application is deduplicated, and one
+    /// it acked but left in a subscriber's queue is handed over again.
+    #[tokio::test]
+    async fn a_restart_over_a_persisted_inbox_dedups_and_redelivers_pending() {
+        let inbox = Arc::new(InMemoryInboxStore::new());
+
+        // Process 1: takes "seen", and acks "buffered" without the subscriber
+        // ever reading it.
+        {
+            let h = mock();
+            let svc =
+                MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()))
+                    .with_inbox(inbox.clone());
+            let mut sub = svc.subscribe();
+            h.inbound_tx
+                .send(inbound("m-seen", None, "q-1").with_delivery_id("seen"))
+                .unwrap();
+            assert!(next_within(&mut sub, 2000).await.is_some());
+            h.inbound_tx
+                .send(inbound("m-buffered", None, "q-2").with_delivery_id("buffered"))
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert_eq!(
+                h.transport.acked.lock().unwrap().as_slice(),
+                &["q-1", "q-2"]
+            );
+            // The process stops with "buffered" still queued.
+            drop(sub);
+            drop(svc);
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        // Process 2, over the same inbox.
+        let h = mock();
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()))
+            .with_inbox(inbox.clone());
+        let mut sub = svc.subscribe();
+
+        assert_eq!(svc.redeliver_pending().await.unwrap(), 1);
+        let replayed = next_within(&mut sub, 2000)
+            .await
+            .expect("the buffered message");
+        assert_eq!(replayed.message.id, "m-buffered");
+        assert_eq!(replayed.delivery_id.as_deref(), Some("buffered"));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        // The mediator offers both again (say the acks were lost): neither
+        // reaches the application, and both are acked.
+        h.inbound_tx
+            .send(inbound("m-seen", None, "q-3").with_delivery_id("seen"))
+            .unwrap();
+        h.inbound_tx
+            .send(inbound("m-buffered", None, "q-4").with_delivery_id("buffered"))
+            .unwrap();
+        assert!(next_within(&mut sub, 200).await.is_none());
+        assert_eq!(
+            h.transport.acked.lock().unwrap().as_slice(),
+            &["q-3", "q-4"]
+        );
+        assert!(inbox.pending().await.unwrap().is_empty());
+    }
+
+    /// An inbox whose `record` takes a while, so two copies interleave.
+    struct SlowInbox(InMemoryInboxStore);
+
+    #[async_trait::async_trait]
+    impl InboxStore for SlowInbox {
+        async fn record(&self, record: InboxRecord) -> Result<Recorded, InboxError> {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            self.0.record(record).await
+        }
+        async fn get(&self, key: &InboxKey) -> Result<Option<InboxRecord>, InboxError> {
+            self.0.get(key).await
+        }
+        async fn mark_acked(&self, key: &InboxKey) -> Result<bool, InboxError> {
+            self.0.mark_acked(key).await
+        }
+        async fn mark_consumed(&self, key: &InboxKey, now: u64) -> Result<bool, InboxError> {
+            self.0.mark_consumed(key, now).await
+        }
+        async fn pending(&self) -> Result<Vec<InboxRecord>, InboxError> {
+            self.0.pending().await
+        }
+        async fn reap(
+            &self,
+            now_ms: u64,
+            retention: &InboxRetention,
+        ) -> Result<crate::inbox::InboxReapReport, InboxError> {
+            self.0.reap(now_ms, retention).await
+        }
+    }
+
+    /// Two copies handled at the same moment (the dedup decision racing
+    /// itself) reach the application exactly once.
+    #[tokio::test]
+    async fn two_concurrent_copies_are_delivered_exactly_once() {
+        let h = mock();
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()))
+            .with_inbox(Arc::new(SlowInbox(InMemoryInboxStore::new())));
+        let mut sub = svc.subscribe();
+        let copy = || inbound("m-1", None, "q").with_delivery_id("idem-1");
+
+        let (a, b) = tokio::join!(
+            deliver_unsolicited(&svc.inner, copy()),
+            deliver_unsolicited(&svc.inner, copy()),
+        );
+        assert!(next_within(&mut sub, 2000).await.is_some(), "one delivery");
+        assert!(next_within(&mut sub, 200).await.is_none(), "and only one");
+        // One copy was held; the other was left for the mediator to offer
+        // again (it was still being recorded), never acked unrecorded.
+        let held = [&a, &b]
+            .iter()
+            .filter(|h| matches!(h, Handoff::Ack(_)))
+            .count();
+        assert_eq!(held, 1);
+
+        // Offered again once the first is recorded and taken: acked, not
+        // delivered.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(matches!(
+            deliver_unsolicited(&svc.inner, copy()).await,
+            Handoff::Ack(Some(_))
+        ));
+        assert!(next_within(&mut sub, 200).await.is_none());
+    }
+
+    /// A sender that reuses an id for different content gets both messages
+    /// delivered, each recorded on its own; an identical re-send is still a
+    /// copy.
+    #[tokio::test]
+    async fn an_id_reused_for_different_content_is_delivered_as_its_own_message() {
+        let h = mock();
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()));
+        let mut sub = svc.subscribe();
+
+        let mut first = inbound("m-1", None, "q-1").with_delivery_id("idem-1");
+        first.message.payload = b"one".to_vec();
+        let mut second = inbound("m-2", None, "q-2").with_delivery_id("idem-1");
+        second.message.payload = b"two".to_vec();
+        h.inbound_tx.send(first.clone()).unwrap();
+        h.inbound_tx.send(second).unwrap();
+
+        let a = next_within(&mut sub, 2000).await.expect("first");
+        let b = next_within(&mut sub, 2000)
+            .await
+            .expect("second, distinct content");
+        assert_eq!(a.message.payload, b"one");
+        assert_eq!(b.message.payload, b"two");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let mut again = first;
+        again.ack = InboundAck("q-3".into());
+        h.inbound_tx.send(again).unwrap();
+        assert!(
+            next_within(&mut sub, 200).await.is_none(),
+            "same content is a copy"
+        );
+        assert_eq!(h.transport.acked.lock().unwrap().len(), 3);
+    }
+
+    /// A sender over its inbox quota is left unacked and unreceipted
+    /// (backpressure), and does not starve another sender.
+    #[tokio::test]
+    async fn a_sender_over_its_quota_is_left_unacked_and_others_still_get_through() {
+        let h = mock();
+        let packer = MockPacker::new();
+        let limits = crate::inbox::InboxLimits {
+            max_pending_per_sender: 1,
+            ..Default::default()
+        };
+        let svc = MessagingService::with_receipts(
+            h.transport.clone(),
+            Arc::new(InMemoryOutboxStore::new()),
+            packer.clone(),
+        )
+        .with_inbox(Arc::new(InMemoryInboxStore::with_limits(limits)));
+        // Never read, so Alice's first message stays pending.
+        let _sub = svc.subscribe();
+
+        h.inbound_tx
+            .send(inbound("m-1", None, "q-1").with_delivery_id("a1"))
+            .unwrap();
+        h.inbound_tx
+            .send(inbound("m-2", None, "q-2").with_delivery_id("a2"))
+            .unwrap();
+        let mut carol = inbound("m-3", None, "q-3").with_delivery_id("c1");
+        carol.message.sender = Some("did:example:carol".into());
+        h.inbound_tx.send(carol).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        assert_eq!(
+            h.transport.acked.lock().unwrap().as_slice(),
+            &["q-1", "q-3"],
+            "the refused message is left at the mediator"
+        );
+        let confirmed: Vec<String> = packer
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.confirms.clone())
+            .collect();
+        assert_eq!(confirmed, ["a1", "c1"], "and is not receipted");
+    }
+
+    /// A subscriber that goes away does not pin the record: once the one that
+    /// stayed takes the message, it is consumed.
+    #[tokio::test]
+    async fn a_dropped_subscriber_does_not_keep_a_record_pending() {
+        let h = mock();
+        let inbox = Arc::new(InMemoryInboxStore::new());
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()))
+            .with_inbox(inbox.clone());
+        let mut stays = svc.subscribe();
+        let leaves = svc.subscribe();
+
+        h.inbound_tx
+            .send(inbound("m-1", None, "q-1").with_delivery_id("idem-1"))
+            .unwrap();
+        assert!(next_within(&mut stays, 2000).await.is_some());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let key = InboxKey::new(ALICE, "idem-1", crate::inbox::payload_digest(b"{}"));
+        assert_eq!(
+            inbox.get(&key).await.unwrap().unwrap().state,
+            InboxState::Pending,
+            "still waiting on the second subscriber"
+        );
+
+        drop(leaves);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let record = inbox.get(&key).await.unwrap().unwrap();
+        assert_eq!(record.state, InboxState::Consumed);
+        assert!(record.acked);
+        assert!(
+            record.payload.is_empty(),
+            "a consumed record holds no payload"
+        );
+    }
+
+    /// `redeliver_pending` hands a record over a bounded number of times in a
+    /// process when no subscriber ever takes it.
+    #[tokio::test]
+    async fn redeliver_pending_does_not_loop_on_a_record_nobody_takes() {
+        let h = mock();
+        let inbox = Arc::new(InMemoryInboxStore::new());
+        let item = inbound("m-1", None, "q-1").with_delivery_id("idem-1");
+        let key = InboxKey::of(&item).unwrap();
+        inbox
+            .record(InboxRecord::from_inbound(key, &item, 1))
+            .await
+            .unwrap();
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()))
+            .with_inbox(inbox.clone());
+
+        for round in 1..=MAX_REDELIVERIES {
+            let sub = svc.subscribe();
+            assert_eq!(svc.redeliver_pending().await.unwrap(), 1, "round {round}");
+            // The subscriber goes away without reading it.
+            drop(sub);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let _sub = svc.subscribe();
+        assert_eq!(
+            svc.redeliver_pending().await.unwrap(),
+            0,
+            "no longer re-queued"
+        );
+        assert_eq!(inbox.pending().await.unwrap().len(), 1, "but kept");
+    }
+
+    /// The service applies the inbox retention on its own: no host loop.
+    #[tokio::test(start_paused = true)]
+    async fn the_service_reaps_the_inbox_on_its_own() {
+        let h = mock();
+        let inbox = Arc::new(InMemoryInboxStore::new());
+        let svc = MessagingService::new(h.transport.clone(), Arc::new(InMemoryOutboxStore::new()))
+            .with_inbox(inbox.clone())
+            .with_inbox_retention(InboxRetention {
+                consumed_ttl: Duration::ZERO,
+                ..InboxRetention::default()
+            });
+        let mut sub = svc.subscribe();
+        h.inbound_tx
+            .send(inbound("m-1", None, "q-1").with_delivery_id("idem-1"))
+            .unwrap();
+        assert!(next_within(&mut sub, 2000).await.is_some());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(inbox.len(), 1, "the consumed anchor");
+
+        // Wall-clock milliseconds must pass for a zero TTL to expire.
+        std::thread::sleep(Duration::from_millis(5));
+        tokio::time::sleep(crate::inbox::INBOX_REAP_INTERVAL * 2).await;
+        assert!(inbox.is_empty(), "reaped by the service's own pass");
     }
 }

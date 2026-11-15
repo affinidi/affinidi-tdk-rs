@@ -13,6 +13,7 @@ use tracing::{debug, error, info, warn};
 
 use super::inflight::{Claim, InFlight};
 use super::listener::Listener;
+use super::poison::{Disposition, HandlerGuard, report_dead_letter};
 use crate::config::Protocols;
 use crate::error::{DIDCommServiceError, StartupError};
 use crate::handler::{DIDCommHandler, TspHandler};
@@ -89,7 +90,14 @@ pub(crate) struct OfflineSync {
     pub auto_delete: bool,
     #[cfg_attr(not(feature = "tsp"), allow(dead_code))]
     pub protocols: Protocols,
+    /// The listener's handler guard (timeout, poison-frame dead-lettering),
+    /// shared so a frame's failures count across both paths.
+    pub guard: Arc<HandlerGuard>,
 }
+
+/// Handler tasks of one batch, each yielding its message's claim and what to
+/// do with it.
+pub(crate) type HandlerSet = JoinSet<(Claim, Disposition)>;
 
 /// What one batch did, to decide whether to fetch another straight away.
 struct BatchOutcome {
@@ -157,11 +165,13 @@ impl OfflineSync {
         Ok(self.permits.clone().acquire_owned().await?)
     }
 
-    /// Run a DIDComm handler on its own task, holding a handler permit.
+    /// Run a DIDComm handler on its own task, holding a handler permit, under
+    /// the handler guard.
     fn spawn_dispatch(
         &self,
-        set: &mut JoinSet<()>,
+        set: &mut HandlerSet,
         permit: OwnedSemaphorePermit,
+        claim: Claim,
         message: affinidi_messaging_didcomm::Message,
         meta: affinidi_messaging_didcomm::UnpackMetadata,
     ) {
@@ -169,20 +179,72 @@ impl OfflineSync {
         let atm = self.atm.clone();
         let profile = self.profile.clone();
         let handler = self.handler.clone();
+        let guard = self.guard.clone();
         set.spawn(async move {
             let _permit = permit;
             // The batch is acked below, once every handler has returned.
-            Listener::dispatch_message(&listener_id, &atm, &profile, &handler, message, meta, None)
+            let disposition = guard
+                .run(claim.id(), async move {
+                    Listener::dispatch_message(
+                        &listener_id,
+                        &atm,
+                        &profile,
+                        &handler,
+                        message,
+                        meta,
+                        None,
+                    )
+                    .await;
+                    true
+                })
                 .await;
+            (claim, disposition)
         });
     }
 
-    async fn join_all(&self, mut set: JoinSet<()>) {
+    /// Wait for every handler of the batch. Returns the claims handled and the
+    /// claims dead-lettered (reported here); a claim left queued is released
+    /// unacked.
+    pub(crate) async fn join_all(&self, mut set: HandlerSet) -> (Vec<Claim>, Vec<Claim>) {
+        let mut handled = Vec::new();
+        let mut dead = Vec::new();
         while let Some(result) = set.join_next().await {
-            if let Err(e) = result
-                && e.is_panic()
-            {
-                error!(profile = %self.profile.inner.alias, error = %e, "Offline handler task panicked");
+            match result {
+                Ok((claim, disposition)) => {
+                    self.settle(claim, disposition, &mut handled, &mut dead)
+                }
+                // The guard catches handler panics; this is the wrapper task
+                // itself, whose claim was dropped (released unacked).
+                Err(e) => {
+                    error!(profile = %self.profile.inner.alias, error = %e, "Offline handler task failed")
+                }
+            }
+        }
+        (handled, dead)
+    }
+
+    /// Sort one guarded handler's outcome.
+    fn settle(
+        &self,
+        claim: Claim,
+        disposition: Disposition,
+        handled: &mut Vec<Claim>,
+        dead: &mut Vec<Claim>,
+    ) {
+        match disposition {
+            Disposition::Ack => handled.push(claim),
+            // A failure that may clear: released unacked, so a later sync
+            // offers it again.
+            Disposition::Leave => drop(claim),
+            Disposition::DeadLetter { attempts, why } => {
+                report_dead_letter(
+                    &self.atm,
+                    &self.profile.inner.alias,
+                    claim.id(),
+                    attempts,
+                    why,
+                );
+                dead.push(claim);
             }
         }
     }
@@ -254,8 +316,11 @@ impl OfflineSync {
         let fetched = frames.len();
         debug!(profile = %self.profile.inner.alias, count = fetched, "Retrieved offline frames");
 
-        let (set, handled, dropped) = self.route_frames(frames).await?;
-        self.join_all(set).await;
+        let (set, mut handled, mut dropped) = self.route_frames(frames).await?;
+        let (more_handled, dead) = self.join_all(set).await;
+        handled.extend(more_handled);
+        // Dead letters are acked like undeliverable frames: always.
+        dropped.extend(dead);
         let acked = self.ack(handled, dropped).await?;
         Ok(BatchOutcome { fetched, acked })
     }
@@ -272,7 +337,7 @@ impl OfflineSync {
     pub(crate) async fn route_frames(
         &self,
         frames: Vec<(DeliveryOutcome, String)>,
-    ) -> Result<(JoinSet<()>, Vec<Claim>, Vec<Claim>), SyncError> {
+    ) -> Result<(HandlerSet, Vec<Claim>, Vec<Claim>), SyncError> {
         let alias = &self.profile.inner.alias;
         let mut set = JoinSet::new();
         let mut handled = Vec::new();
@@ -305,8 +370,7 @@ impl OfflineSync {
                 Some(InboundFrame::DidComm(message, meta)) if self.protocols.didcomm() => {
                     let permit = self.acquire().await?;
                     let meta = super::listener::convert_meta(*meta);
-                    self.spawn_dispatch(&mut set, permit, *message, meta);
-                    handled.push(claim);
+                    self.spawn_dispatch(&mut set, permit, claim, *message, meta);
                 }
                 Some(InboundFrame::DidComm(..)) => {
                     debug!(profile = %alias, "Offline DIDComm frame on a listener with DIDComm disabled; dropped (acked)");
@@ -318,15 +382,29 @@ impl OfflineSync {
                             // TSP frames are handled in order, one at a time: a
                             // peer's invite must be recorded before its payload.
                             let _permit = self.acquire().await?;
-                            Listener::dispatch_tsp(
-                                &self.listener_id,
-                                &self.atm,
-                                &self.profile,
-                                h,
-                                *packed,
-                            )
-                            .await;
-                            handled.push(claim);
+                            let (listener_id, atm, profile, h) = (
+                                self.listener_id.clone(),
+                                self.atm.clone(),
+                                self.profile.clone(),
+                                h.clone(),
+                            );
+                            // `false` from the dispatch is a failure that may
+                            // clear (an unresolvable sender, unconfirmed key
+                            // state): `Leave`, released unacked for a later sync.
+                            let disposition = self
+                                .guard
+                                .run(claim.id(), async move {
+                                    Listener::dispatch_tsp(
+                                        &listener_id,
+                                        &atm,
+                                        &profile,
+                                        &h,
+                                        *packed,
+                                    )
+                                    .await
+                                })
+                                .await;
+                            self.settle(claim, disposition, &mut handled, &mut dropped);
                         }
                         (_, false) => {
                             debug!(profile = %alias, "Offline TSP frame on a listener with TSP disabled; dropped (acked)");
@@ -373,8 +451,7 @@ impl OfflineSync {
         let fetched = offline_messages.len();
         debug!(profile = %alias, count = fetched, "Retrieved offline messages");
 
-        let mut set = JoinSet::new();
-        let mut handled = Vec::new();
+        let mut set = HandlerSet::new();
         for (message, meta) in offline_messages {
             // Claim by the mediator's id for the message (`sha256_hash`, the
             // delivery attachment id), which is also what it is acked by. The
@@ -385,12 +462,11 @@ impl OfflineSync {
             };
             let permit = self.acquire().await?;
             let meta = super::listener::convert_meta(meta);
-            self.spawn_dispatch(&mut set, permit, message, meta);
-            handled.push(claim);
+            self.spawn_dispatch(&mut set, permit, claim, message, meta);
         }
 
-        self.join_all(set).await;
-        let acked = self.ack(handled, Vec::new()).await?;
+        let (handled, dead) = self.join_all(set).await;
+        let acked = self.ack(handled, dead).await?;
         Ok(BatchOutcome { fetched, acked })
     }
 }

@@ -41,6 +41,16 @@ use std::time::{Duration, Instant};
 
 /// A source of monotonic time, injectable so the freshness rules can be tested
 /// without sleeping.
+///
+/// Deliberately not `affinidi_messaging_mediator_types::clock::Clock`, which
+/// reads wall-clock Unix time for expiries that must agree across hosts and
+/// restarts. This one measures intervals inside one process (a peer's silence,
+/// a rate limit), where a step in the wall clock must not shorten or stretch
+/// them, so its origin is arbitrary. `affinidi-tsp` is a protocol crate with no
+/// dependency on the mediator types, so the two are kept apart (#1141). What a
+/// [`KeyStateTracker`] needs is only that one tracker is always fed from one
+/// clock: the messaging SDK feeds its tracker wall-clock milliseconds from its
+/// configured clock, and `TspAgent` this monotonic one.
 pub trait Clock: Send + Sync + std::fmt::Debug {
     /// Milliseconds since an arbitrary fixed origin. Must be monotonic.
     fn now_ms(&self) -> u64;

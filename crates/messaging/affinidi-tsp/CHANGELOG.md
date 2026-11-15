@@ -1,5 +1,42 @@
 # Affinidi TSP Changelog
 
+## [0.4.2] - 2026-11-15
+
+One receive path for `TspAgent` and the messaging SDK (#1141)
+
+- **New `receive` module.** `receive::receive` is the TSP receive path —
+  addressing, the relationship lookup, key-state freshness (Rev 3 §7.4.2) and
+  verification — as one async function over two small traits,
+  `AsyncVidResolver` and `RelationshipLookup`. `SyncVidResolver` adapts a
+  synchronous `VidResolver`, and `TspStore` implements `RelationshipLookup`.
+  `TspAgent::receive` now runs it (completing in one poll, since everything
+  the agent hands it is synchronous), and the messaging SDK runs it in place
+  of its own copy, so a fix to the freshness rules is made once. Applying a
+  control message to relationship state is still each endpoint's own (the two
+  keep it in different stores); see the module docs.
+- **`receive::message_ids` / `MessageIds`.** The two ids a TSP message has —
+  the SHA-256 of the wire bytes (the hop id a mediator and the SDK use,
+  `MetaEnvelope::sha256`) and the BLAKE2s-256 the `messaging-core` adapter
+  reports as `ReceivedMessage::id` — computed together, so one can be found
+  from the other. Neither id changes. `receive::Verified` carries both.
+- **New `TspError::KeyStateUnconfirmed { reason, verification }`** and
+  `TspError::is_transient()`. `receive::receive` returns it when the sender's
+  key state cannot be confirmed for a reason that may clear — a refresh after
+  a silence failed, is in flight, or is rate-limited after one failed; or a
+  message that did not verify inside a relationship and whose refresh failed
+  (`verification` carries that failure). A receiver that can leave the message
+  queued should, rather than discard it. A failure against freshly or
+  recently-successfully refreshed key state is returned as is (definitive).
+  `TspError` is `#[non_exhaustive]`, so the variant is additive.
+  `TspAgent::receive` maps it back to what it returned before (`Discarded`,
+  or the verification failure).
+- `keystate::Clock` documents why it is not the mediator types' `Clock`
+  (monotonic interval clock vs. wall-clock Unix time).
+- No behaviour change for `TspAgent`: the shared path is the agent's own
+  freshness logic, moved. One ordering detail: an agent asked to receive for a
+  VID it holds no private key for now reports `VidNotFound` before checking
+  the envelope's addressee.
+
 ## [0.4.1] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

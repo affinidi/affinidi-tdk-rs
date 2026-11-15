@@ -72,6 +72,9 @@ pub enum ConfigError {
     /// `max_concurrent_handlers` is 0, which would never run a handler.
     #[error("listener '{listener_id}': max_concurrent_handlers must be at least 1")]
     ZeroHandlerConcurrency { listener_id: String },
+    /// `handler_timeout` is zero, which would fail every handler.
+    #[error("listener '{listener_id}': handler_timeout must be non-zero")]
+    ZeroHandlerTimeout { listener_id: String },
 }
 
 #[derive(Debug, Error)]
