@@ -1,6 +1,8 @@
 # Affinidi Crypto Changelog
 
-## Unreleased (0.3.2) — public JWKs drop `"d": null`; multikeys are length-checked
+## [0.3.2] - 2026-11-15
+
+public JWKs drop `"d": null`; multikeys are length-checked
 
 **Behaviour changes (R3.6).** Released as a patch: signatures are unchanged,
 and every change makes output spec-conformant or refuses input that was
@@ -31,7 +33,9 @@ already unusable. Consumers should still read this list.
   `affinidi-encoding` 0.1.7.
 
 
-## Unreleased (0.3.1) — `p256::verify` reports a malformed signature as `Decoding`
+## [0.3.1] - 2026-11-13
+
+`p256::verify` reports a malformed signature as `Decoding`
 
 **Behaviour change (R3.6).** `p256::verify` returns `CryptoError::Decoding`
 for a signature that is not a valid 64-byte `r || s` encoding. It returned
@@ -42,7 +46,9 @@ well-formed signature that does not verify is still `Ok(false)`.
 - Docs: the crate docs list P-521 among the generated key types, and the
   `jose` feature comment no longer says key agreement is still to come.
 
-## Unreleased (0.3.0) — key pairs wipe themselves when dropped
+## [0.3.0] - 2026-11-13
+
+key pairs wipe themselves when dropped
 
 ### Breaking
 
@@ -105,7 +111,9 @@ well-formed signature that does not verify is still `Ok(false)`.
   `affinidi-crypto` 0.2 and build against the published 0.2.12 until they move
   to 0.3 in a following release.
 
-## Unreleased (0.2.12) — key pairs print without their private key; Concat KDF takes any whole-byte length
+## [0.2.12] - 2026-11-12
+
+key pairs print without their private key; Concat KDF takes any whole-byte length
 
 - **Changed:** every generated key pair (`ed25519`, `p256`, `p384`, `p521`,
   `secp256k1`, `ml_dsa`, `slh_dsa` `KeyPair`) derived `Debug`, so `{:?}`
@@ -142,7 +150,9 @@ well-formed signature that does not verify is still `Ok(false)`.
   `derive_*` functions and `aes_kw::unwrap` stay plain `Vec<u8>` / `[u8; 32]`;
   callers that hold them should wrap them in `Zeroizing`.
 
-## Unreleased (0.2.11) — A128GCM / A256GCM content encryption
+## [0.2.11] - 2026-10-11
+
+A128GCM / A256GCM content encryption
 
 `jose` gains AES-GCM content encryption: `jose::gcm` (free functions) and the
 `A128Gcm` / `A256Gcm` implementations of `ContentEncryption`. These are the JWE
@@ -156,14 +166,18 @@ the same `aes` 0.9 as the CBC and key-wrap code. Tests: RFC 7516 Appendix A.1
 (A256GCM), the GCM specification's test case 4 (A128GCM), RFC 7518 Appendix C
 (the ECDH-ES direct CEK), tamper and length refusals.
 
-## Unreleased (0.2.10) — drop `rand_core` 0.6, `getrandom` 0.4 on wasm
+## [0.2.10] - 2026-10-01
+
+drop `rand_core` 0.6, `getrandom` 0.4 on wasm
 
 No behaviour change and no public API change. `rand_core` 0.6 was declared but
 no longer imported — every RNG call already goes through `rand` 0.10 — so it is
 removed. The wasm32 `getrandom` pin moves from 0.2 (`js`) to 0.4 (`wasm_js`),
 the version `rand` 0.10 actually uses.
 
-## Unreleased (0.2.9) — RustCrypto digest 0.11 generation
+## [0.2.9] - 2026-09-07
+
+RustCrypto digest 0.11 generation
 
 `sha2` 0.11, `hmac` 0.13, `aes` 0.9, `cbc` 0.2.
 
@@ -190,14 +204,16 @@ The API changes were renames, all in JOSE:
 76 tests green, including the AES-KW and CBC-HMAC round-trips that exercise
 every one of the above.
 
-## Unreleased (0.2.8) — dependency refresh
+## [0.2.8] - 2026-08-23
+
+dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
 - No source or API change; the bumps are declaration-only and the crate
   compiles unmodified against them. Bumped workspace-wide in the same
   change so no two versions of these crates are compiled side by side.
 
-## 2nd August 2026 (0.2.7)
+## [0.2.7] - 2026-08-02
 
 Moves this crate to the **elliptic-curve 0.14** family (`p256` / `k256` /
 `p384` / `p521` 0.13 -> 0.14), which brings rand_core 0.10, digest 0.11 and
@@ -216,7 +232,7 @@ Crypto behaviour is unchanged — the golden/KAT vectors (`p256_sign_verify_roun
 `secp256k1_es256k_golden` RFC 6979, `ecdh_1pu_x25519_kek_golden`,
 `concat_kdf_es_golden`, `a256cbc_hs512_golden`) all still pass.
 
-## 31st July 2026 (0.2.6)
+## [0.2.6] - 2026-07-31
 
 **`PrivateKeyAgreement::X25519` now holds `[u8; 32]` instead of an
 `x25519_dalek::StaticSecret`.** Holding the dalek type put the x25519-dalek
@@ -238,7 +254,7 @@ Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) p
 `[patch.crates-io]`, and a minor bump would break the redirect and pull a second
 copy from crates.io.
 
-## 16th July 2026 (0.2.5)
+## [0.2.5] - 2026-07-16
 
 Adds `jose::signing::verify_secp256k1` — ECDSA secp256k1 signature verification
 (JWS `alg: ES256K`), accepting compressed or uncompressed SEC1 public points —
@@ -247,7 +263,7 @@ deterministic RFC 6979 golden vector plus roundtrip KATs. Patch bump keeps the
 `[patch.crates-io]` redirect valid — see
 [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md).
 
-## 4th July 2026 (0.2.4)
+## [0.2.4] - 2026-07-04
 
 Adds `KeyType::key_agreement_curve() -> Option<Curve>` (gated on the `jose`
 feature) — the single source of truth for the secrets-resolver `KeyType` →
@@ -260,7 +276,7 @@ or not. Additive (verify-only new method); patch bump keeps the
 `[patch.crates-io]` redirect valid — see
 [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md).
 
-## 30th June 2026 (0.2.3)
+## [0.2.3] - 2026-06-30
 
 Adds `jose::signing::verify_p256` — ECDSA P-256 signature verification over
 SHA-256 (JWS `alg: ES256`), accepting compressed or uncompressed SEC1 public
@@ -268,7 +284,7 @@ points. Additive (verify-only); locked by a deterministic RFC 6979 golden
 vector in `jose::kat`. Patch bump (additive) keeps the `[patch.crates-io]`
 redirect valid — see [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md).
 
-## 13th June 2026 (0.2.2)
+## [0.2.2] - 2026-06-13
 
 Semver wave (W7/W8 — release W11). `CryptoError` and `Params` are now
 `#[non_exhaustive]`, and `JWK` / `ECParams` / `OctectParams` / `KeyPair` are
@@ -277,14 +293,14 @@ Patch bump (not minor) so the `[patch.crates-io]` redirect keeps resolving for
 external consumers — see [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md)
 and [the migration guide](../../../docs/migration/2026-06-semver-wave.md).
 
-## 13th June 2026 (0.2.1)
+## [0.2.1] - 2026-06-13
 
 RNG hygiene (W4): the PQC key generators (ML-DSA, SLH-DSA) now seed a CSPRNG
 directly from the OS (`StdRng::try_from_rng(&mut SysRng)`) instead of the
 thread-local RNG. The `thread_rng` feature is dropped from the `rand` (0.10)
 dependency in favour of `sys_rng` + `std_rng`. No public API change.
 
-## 6th June 2026 (0.2.0)
+## [0.2.0] - 2026-06-06
 
 **Breaking release.** Adds P-384/P-521 key agreement and makes the
 key-agreement enums `#[non_exhaustive]` — the major-version bump is taken
@@ -318,7 +334,7 @@ patch.
   deliberately left exhaustive so the secrets-resolver encode/decode paths
   still fail to compile if a new key type is unhandled.)
 
-## 4th June 2026 (0.1.12)
+## [0.1.12] - 2026-06-04
 
 - **FIX (#348):** Tightened the `affinidi-encoding` dependency from the
   loose `"0.1"` to `"0.1.4"`. The `bls12381` module (added in 0.1.11)
@@ -329,14 +345,14 @@ patch.
   external consumers. The workspace `[patch.crates-io]` redirect masked
   this in-tree. No API change.
 
-## 1st June 2026 (0.1.11)
+## [0.1.11] - 2026-06-01
 
 - **FEATURE (#346):** BLS12-381 G2 `did:key` support for BBS+ issuer
   keys. Adds `KeyType::Bls12381G2` and a new `bls12381` module that
   encodes a G2 public key as a `did:key` (multicodec `0xeb`). Requires
   `affinidi-encoding >= 0.1.4` for the `BLS12381_G2_PUB` codec constant.
 
-## 1st June 2026 (0.1.10)
+## [0.1.10] - 2026-06-01
 
 - **FEATURE (#327, `jose`):** Added
   `jose::ecdh::derive_sender_key_1pu_legacy`, the sender-side counterpart
@@ -345,7 +361,7 @@ patch.
   exercise its decrypt fallback. Completes the surface didcomm needs to
   drop its bespoke crypto (PR 5d).
 
-## 1st June 2026 (0.1.9)
+## [0.1.9] - 2026-06-01
 
 - **FEATURE — `jose` key agreement + ECDH derivation (#327, off by
   default).** Builds on 0.1.8, completing the curve-bearing half of the
@@ -368,7 +384,7 @@ patch.
     enables the `p256` / `k256` features, and those crates gain the
     `ecdh` cargo feature. Still **off by default**.
 
-## 1st June 2026 (0.1.8)
+## [0.1.8] - 2026-06-01
 
 - **FEATURE — `jose` module (#327, off by default).** Adds the JOSE
   crypto primitives previously hand-rolled in
@@ -396,7 +412,7 @@ patch.
     `subtle` and enables `ed25519`); **off by default**, so existing
     dependents are unaffected.
 
-## 28th May 2026 (0.1.7)
+## [0.1.7] - 2026-05-28
 
 - **SECURITY (HIGH):** Redact the private `d` scalar in `Debug` output for
   `ECParams` (P-256 / P-384 / secp256k1) and `OctectParams` (Ed25519 /
@@ -407,7 +423,7 @@ patch.
   `d` as `<redacted>` when present. Regression test asserts the private
   scalar never appears in formatted output.
 
-## 24th May 2026 (0.1.6)
+## [0.1.6] - 2026-05-24
 
 - **FIX:** Build against stable `ml-dsa 0.1.0`. The `KeyGen` trait was
   removed from `ml-dsa`'s root module between `0.1.0-rc.8` and the
@@ -422,7 +438,7 @@ patch.
   of rc-to-rc API drift that just bit `ml-dsa`. To be relaxed when
   `slh-dsa 0.2.0` ships stable.
 
-## 20th April 2026 (0.1.5)
+## [0.1.5] - 2026-04-20
 
 - **FEATURE:** `did_key` module (behind the `ed25519` feature) adds a
   raw-bytes API for apps doing HPKE, sealed transfer, or other non-
@@ -447,7 +463,7 @@ patch.
   transitively pulled in via `ml-dsa` / `slh-dsa`'s own `rand_core`
   feature, never imported here.
 
-## 18th April 2026 (0.1.4)
+## [0.1.4] - 2026-04-18
 
 - **FEATURE:** `post-quantum` Cargo feature (off by default) with
   `ml-dsa` and `slh-dsa` sub-flags. Adds:
@@ -470,6 +486,8 @@ patch.
   features; internal ExpandedSigningKey wipes matrix on drop.
   Intermediate B32 seed buffers wrapped in `zeroize::Zeroizing`.
 
-## 0.1.2 — prior releases
+## [0.1.2] - 2026-04-17
+
+prior releases
 
 (No CHANGELOG recorded for earlier 0.1.x releases.)

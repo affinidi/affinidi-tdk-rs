@@ -1,6 +1,8 @@
 # Affinidi TSP Changelog
 
-## 0.4.0 — received messages say whether they were sealed; the adapter's relationship calls return what to send
+## [0.4.0] - 2026-11-15
+
+received messages say whether they were sealed; the adapter's relationship calls return what to send
 
 Breaking (#1024, #1027, #1026).
 
@@ -39,7 +41,9 @@ Breaking (#1024, #1027, #1026).
   items it describes.
 
 
-## 0.3.4 — HPKE refuses an all-zero X25519 shared secret; derived secrets are wiped
+## [0.3.4] - 2026-11-12
+
+HPKE refuses an all-zero X25519 shared secret; derived secrets are wiped
 
 The classical HPKE-Base suite (`crypto::hpke`, DHKEM(X25519, HKDF-SHA256)) now
 refuses an all-zero X25519 output, as RFC 9180 §7.1.4 requires of `Encap` and
@@ -56,7 +60,9 @@ No API change: the functions involved are crate-private. Behaviour change
 (R3.6): a peer key of small order is refused instead of being used. No real
 X25519 key has small order.
 
-## 0.3.3 — one encoding per signed message; key state confirmed before use after a silence
+## [0.3.3] - 2026-11-12
+
+one encoding per signed message; key state confirmed before use after a silence
 
 **Signature attachment.** The `-C` attachment group and the `-K` indexed
 signature group must now hold exactly one signature: the `-K` group ends where
@@ -126,7 +132,9 @@ messages after a silence are discarded. A custom resolver whose `refresh`
 cannot succeed synchronously should implement `completed_refresh`, or its
 peers stay unconfirmed after a silence. No wire format changes for conforming encoders.
 
-## 0.3.2 — a repeated invite does not reopen a relationship
+## [0.3.2] - 2026-11-12
+
+a repeated invite does not reopen a relationship
 
 `TspAgent::receive` applied every verified invite to the relationship FSM. A
 signed invite verifies for as long as the sender's key does, so a second copy
@@ -159,7 +167,9 @@ relationship reopened; it is refused. A peer still waiting on a lost accept
 recovers by sending a new invite. The history is in memory, like the rest of
 `TspStore`. No wire format changes.
 
-## 0.3.1 — payload frames are read within their `-Z` count
+## [0.3.1] - 2026-11-12
+
+payload frames are read within their `-Z` count
 
 `unpack` panicked on a routed or nested payload whose `-Z` count was shorter
 than the fields it framed (for example `-ZAA` followed by a full `XHOP`
@@ -172,20 +182,10 @@ and a field that runs past it is a `TspError::InvalidMessage`. This applies
 to every layout, so `unpack` and `forward_routed` return an error for such a
 frame rather than panicking or reading past it. Frames this crate builds
 always declare their full length and are unaffected. No API change.
-## 0.3.1 — payload frames are read within their `-Z` count
 
-`unpack` panicked on a routed or nested payload whose `-Z` count was shorter
-than the fields it framed (for example `-ZAA` followed by a full `XHOP`
-layout): the inner message was sliced from past the end of the frame. The
-other layouts read their fields from bytes beyond the declared frame instead
-of stopping at its end.
+## [0.3.0] - 2026-10-22
 
-The payload frame is now decoded from the extent its `-Z` count declares,
-and a field that runs past it is a `TspError::InvalidMessage`. This applies
-to every layout, so `unpack` and `forward_routed` return an error for such a
-frame rather than panicking or reading past it. Frames this crate builds
-always declare their full length and are unaffected. No API change.
-## Unreleased (0.3.0) — TSP 1.0 (`YTSP-BAA`)
+TSP 1.0 (`YTSP-BAA`
 
 **Breaking on the wire.** Follows the released specification,
 trustoverip/tswg-tsp-specification@`ccda6b3` (PR #86), and the reference
@@ -212,14 +212,18 @@ implementation `tsp_sdk` 0.16.0.
   vector, which is unpacked, re-packed byte for byte, and has its
   `Signature_new` checked with `verify_referral`.
 
-## Unreleased (0.2.2) — `salsa20` 0.11, drop `rand_core` 0.6
+## [0.2.2] - 2026-10-01
+
+`salsa20` 0.11, drop `rand_core` 0.6
 
 No behaviour change and no public API change. Sealed-box and control-nonce
 randomness now come from `rand` 0.10 instead of `rand_core` 0.6's `OsRng`
 (both are the OS CSPRNG), and HSalsa20 takes salsa20 0.11's key type. The
 TSP Rev 3 spec vectors pass unchanged.
 
-## Unreleased (0.2.1) — relationship re-establishment (recovery)
+## [0.2.1] - 2026-09-17
+
+relationship re-establishment (recovery
 
 - **Relationship re-establishment (recovery).** `RelationshipState::transition`
   now accepts `ReceiveInvite` from the established states instead of raising
@@ -265,7 +269,9 @@ TSP Rev 3 spec vectors pass unchanged.
   that half, as the Go and Dart implementations do, was refused as naming
   "an unrecognised relationship".
 
-## Unreleased (0.2.0) — Trust Spanning Protocol specification Rev 3
+## [0.2.0] - 2026-09-15
+
+Trust Spanning Protocol specification Rev 3
 
 Carries the 0.1.16 dependency move below as well: this branch merged it in,
 so if 0.2.0 ships first there is no separate 0.1.16 release and the section
@@ -463,7 +469,9 @@ a post-quantum ciphertext offered classical keys is refused rather than misread.
 The harness no longer needs a local checkout of the reference or any patches to
 it; see `docs/tsp/interop.md`.
 
-## Unreleased (0.1.16) — `sha2` 0.11, `hkdf` 0.13, `blake2` 0.11, `chacha20poly1305` 0.11
+## [0.1.16] - 2026-09-07
+
+`sha2` 0.11, `hkdf` 0.13, `blake2` 0.11, `chacha20poly1305` 0.11
 
 No behaviour change and no public API change: these are private dependencies
 here, which is what lets each crate move on its own schedule. Verified by
@@ -477,7 +485,7 @@ generic-array with hybrid-array, so `aead::generic_array::GenericArray` became
 
 99 tests green, including the HPKE seal/open round-trips.
 
-## 31st August 2026 (0.1.15)
+## [0.1.15] - 2026-08-31
 
 **Bug fix: a DID-valued `TSPTransport` endpoint was returned as a transport URL.**
 
@@ -510,7 +518,7 @@ pins this crate through `[patch.crates-io]`, and a minor bump would break the
 redirect and pull a second copy from crates.io. Deserialization is unaffected —
 the new field is `#[serde(default)]`.
 
-## 31st July 2026 (0.1.14)
+## [0.1.14] - 2026-07-31
 
 Moves to **curve25519-dalek 5** (`ed25519-dalek` 2 -> 3, `x25519-dalek` 2 -> 3),
 which brings rand_core 0.10 and signature 3 with it. rand 0.10 renamed `OsRng`
@@ -521,33 +529,33 @@ Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) p
 `[patch.crates-io]`, and a minor bump would break the redirect and pull a second
 copy from crates.io.
 
-## 19th July 2026
+## [0.1.13] - 2026-07-19
 
-### 0.1.13 — affinidi-did-common 0.4
+affinidi-did-common 0.4
 
 - Bumped the `affinidi-did-common` requirement from `"0.3"` to `"0.4"`.
   No functional change to this crate: `Document` gained a typed
   `also_known_as` field, which is additive.
 
-## 30th June 2026
+## [0.1.12] - 2026-06-30
 
-### 0.1.12 — rustfmt-only
+rustfmt-only
 
 - Pure `cargo fmt` reformatting (use-statement, function-signature and call wrapping in
   `lib.rs`, `message/envelope.rs`, `message/wire.rs` and the `alice_and_bob` example).
   No code or behaviour change. Restores a clean `cargo fmt --all --check` for the workspace.
 
-## 29th June 2026 (docs)
+## [0.1.11] - 2026-06-29
 
-### 0.1.11 — README: reflect full reference interop
+README: reflect full reference interop
 
 - README now states that `affinidi-tsp` wire-interoperates with the ToIP reference
   (`tsp-sdk`) for all message types (replacing the stale "does not interoperate" note).
   Docs-only; no code change.
 
-## 29th June 2026 (control)
+## [0.1.10] - 2026-06-29
 
-### 0.1.10 — spec-compliant relationship Control (full tsp_sdk wire parity)
+spec-compliant relationship Control (full tsp_sdk wire parity)
 
 - **Relationship Control (invite / accept / cancel) now matches the ToIP reference and
   interoperates both directions** — completing full TSP wire parity (Direct/Routed/Nested/
@@ -566,9 +574,9 @@ copy from crates.io.
 - Wire-breaking for Control (Direct/Routed/Nested unchanged); accept/cancel APIs now take the
   thread digest.
 
-## 29th June 2026 (later)
+## [0.1.9] - 2026-06-29
 
-### 0.1.9 — spec-compliant Routed/Nested payloads + reference-aligned size cap
+spec-compliant Routed/Nested payloads + reference-aligned size cap
 
 - **Routed and Nested payloads now match the ToIP reference (`tsp_sdk`) and interoperate
   both directions.** The payload frame inside `-Z` is now kind-encoded per the spec:
@@ -587,9 +595,9 @@ copy from crates.io.
 - Wire-breaking for Routed/Nested (Direct unchanged/byte-exact); API: `next_hop` signature
   changed, `pack_with_hops` added, `pack_routed`/`pack_nested` public signatures unchanged.
 
-## 29th June 2026
+## [0.1.8] - 2026-06-29
 
-### 0.1.8 — spec conformance (2/2): CESR wire framing + RFC-9180 HPKE (tsp-sdk interop)
+spec conformance (2/2): CESR wire framing + RFC-9180 HPKE (tsp-sdk interop)
 
 - Rewrote the Direct-message wire format to the TSP spec's CESR framing (the `-E` envelope
   frame, `YTSP` version, var-data VID codes, `G` ciphertext code, `-Z`/`XSCS` payload frame,
@@ -606,9 +614,9 @@ copy from crates.io.
 - Wire-breaking but API-stable (`pack`/`unpack`/`pack_routed`/`pack_nested` signatures
   unchanged), so consumers need no code changes beyond rebuilding.
 
-## 28th June 2026
+## [0.1.7] - 2026-06-28
 
-### 0.1.7 — spec conformance (1/2): ChaCha20Poly1305 HPKE AEAD + empty HPKE info
+spec conformance (1/2): ChaCha20Poly1305 HPKE AEAD + empty HPKE info
 
 - The HPKE AEAD is now **ChaCha20Poly1305** (was AES-128-GCM) and the HPKE `info` is
   now empty/`NULL` (was `"TSP-v1-direct"`), matching the TSP spec (v1.0 Implementor's
@@ -623,9 +631,9 @@ copy from crates.io.
   the reference (`tsp-sdk`) lands once both are done. See
   [`docs/tsp/interop.md`](../../../docs/tsp/interop.md).
 
-## 22nd June 2026
+## [0.1.6] - 2026-06-22
 
-### 0.1.6 — ingress sniff + keys-free envelope metadata
+ingress sniff + keys-free envelope metadata
 
 - New `message::meta` module for relays/mediators that must route a message
   without holding keys: `is_tsp` (cheap first-byte classifier — every TSP
@@ -636,7 +644,9 @@ copy from crates.io.
 - Re-exported at the crate root (`is_tsp`, `MetaEnvelope`, `TSP_MAGIC_BYTE`).
 - Purely additive; patch bump 0.1.5 → 0.1.6.
 
-### 0.1.5 — routed & nested message modes (§5.3 / §5.5)
+## [0.1.5] - 2026-06-22
+
+routed & nested message modes (§5.3 / §5.5)
 
 - New `message::routed` module implementing TSP routed mode (multi-hop relay
   through intermediaries, with the remaining route carried inside each
@@ -655,7 +665,9 @@ copy from crates.io.
 - Purely additive; patch bump 0.1.4 → 0.1.5. 84 tests incl. a full multi-hop
   crypto round-trip and a two-intermediary agent-level relay.
 
-### 0.1.4 — DID-document VID resolver
+## [0.1.4] - 2026-06-22
+
+DID-document VID resolver
 
 - New `DidVidResolver` (behind the existing `did-resolver` feature): resolves a
   DID (`did:web` / `did:webvh` / `did:peer` / `did:key`) to a `ResolvedVid` via
@@ -669,15 +681,17 @@ copy from crates.io.
 - Purely additive; patch bump keeps the `0.1` pin valid. No behaviour change to
   existing APIs.
 
-## 14th June 2026
+## [0.1.3] - 2026-06-14
 
-### 0.1.3 — non_exhaustive TspError (W7 sweep)
+non_exhaustive TspError (W7 sweep)
 
 - `TspError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
   additively. Patch bump keeps the `0.1` pin valid; consumers that `match` it
   must add a `_` wildcard arm. No behaviour change.
 
-### 0.1.2 — build fix: drop deprecated `GenericArray::from_slice`
+## [0.1.2] - 2026-06-14
+
+build fix: drop deprecated `GenericArray::from_slice`
 
 - The HPKE module (`crypto/hpke.rs`) no longer calls the now-deprecated
   `GenericArray::from_slice` for the AES-128-GCM key/nonce — the key is built via

@@ -1,6 +1,8 @@
 # Affinidi Messaging Mediator Types
 
-## 0.1.2 — `MediatorACLSet::from_u64` clears unassigned bits
+## [0.1.2] - 2026-11-15
+
+`MediatorACLSet::from_u64` clears unassigned bits
 
 Bits 19-63 of an ACL value are unassigned and documented as "must stay zero",
 but `from_u64` (and so `from_hex_string`) kept them, so two values enforcing
@@ -10,7 +12,9 @@ still accepts whatever `acl` the JSON holds; that is tracked with the
 `MediatorACLSet` wire-format follow-up (#1141).
 
 
-## 0.1.1 — audit actions for DID multiplexing
+## [0.1.1] - 2026-11-10
+
+audit actions for DID multiplexing
 
 Three new `AuditAction` values, so the mediator can audit what the
 `messaging/mux/*` specs require it to:
@@ -21,7 +25,9 @@ Three new `AuditAction` values, so the mediator can audit what the
 
 `AuditAction` is `#[non_exhaustive]`, so this is additive.
 
-## 0.1.0 — the mediator protocol types, as a crate of their own
+## [0.1.0] - 2026-10-13
+
+the mediator protocol types, as a crate of their own
 
 The `types` module of `affinidi-messaging-mediator-common` 0.17.6 (ACLs,
 accounts, audit, message pickup, problem reports, `Clock`), as its own crate.

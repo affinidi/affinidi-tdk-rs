@@ -1,6 +1,8 @@
 # Affinidi OpenID4VCI Changelog
 
-## Unreleased (0.2.3) — documented as OpenID4VCI draft 13
+## [0.2.3] - 2026-11-15
+
+documented as OpenID4VCI draft 13
 
 Docs only; no code or wire change (#1060).
 
@@ -14,7 +16,9 @@ Docs only; no code or wire change (#1060).
   and no batch request/response types.
 - OpenID4VCI 1.0 Final types are tracked in #1152.
 
-## Unreleased (0.2.2) — key proof freshness check does not overflow
+## [0.2.2] - 2026-11-12
+
+key proof freshness check does not overflow
 
 - **Fixed:** `KeyProof::verify_claims` (and so `verify`) computed
   `now + IAT_FUTURE_LEEWAY_SECS` and `now - iat` with plain `i64` arithmetic on
@@ -23,13 +27,13 @@ Docs only; no code or wire change (#1060).
   passed the `max_age_secs` check. Both bounds now saturate.
 - **Behaviour (stricter):** a proof with a negative `iat` is refused.
 
-## 14th June 2026 Release 0.2.1
+## [0.2.1] - 2026-06-14
 
 - `Oid4vciError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
   additively. Patch bump keeps the `0.2` pin valid; consumers that `match` it
   must add a `_` wildcard arm. No behaviour change. (W7 sweep)
 
-## 3rd June 2026 Release 0.1.3
+## [0.1.3] - 2026-06-03
 
 ### Added
 
@@ -59,7 +63,7 @@ Docs only; no code or wire change (#1060).
   call `proof::KeyProof` before issuing. (Closing a footgun: the function
   returned `Ok` for a request bearing a forged/expired proof.)
 
-## 28th May 2026 Release 0.1.2
+## [0.1.2] - 2026-05-28
 
 ### Security
 

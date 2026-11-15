@@ -1,6 +1,8 @@
 # Affinidi Trust Lists Changelog
 
-## Unreleased (0.2.1) — empty identities are not indexed
+## [0.2.1] - 2026-11-13
+
+empty identities are not indexed
 
 - A service identity with no value (an empty `X509Certificate`, `X509SKI` or
   `X509SubjectName` element, or an empty key, SKI, name or DID built in code)
@@ -15,7 +17,9 @@ Behaviour change (R3.6), patch bump: an empty value could previously match an
 entry built from an empty identity element and report `Trusted`; it now never
 does. Index fingerprints are unchanged from 0.2.0 and are only held in memory.
 
-## Unreleased (0.2.0) — chain signatures verified; list dates and identities parsed
+## [0.2.0] - 2026-11-12
+
+chain signatures verified; list dates and identities parsed
 
 Breaking (R3.6). No in-workspace caller outside `affinidi-tdk`'s re-export
 (`affinidi-tdk` 0.38.0).
@@ -69,13 +73,17 @@ Breaking (R3.6). No in-workspace caller outside `affinidi-tdk`'s re-export
 - `x509-parser` now uses its `verify-aws` feature (`aws-lc-rs`, already in the
   workspace lockfile). `rcgen` (already in the workspace) is a dev-dependency.
 
-## Unreleased (0.1.6) — `sha2` 0.11
+## [0.1.6] - 2026-09-15
+
+`sha2` 0.11
 
 No behaviour change; the crate's only use is `Sha256::digest`, which is
 unchanged across the bump. Moves onto the same `sha2` line as the rest of the
 workspace's crypto crates.
 
-## Unreleased (0.1.5) — quick-xml 0.42, x509-parser 0.18
+## [0.1.5] - 2026-09-06
+
+quick-xml 0.42, x509-parser 0.18
 
 - **`quick-xml` 0.41 → 0.42**, which required a source migration. 0.42 makes
   names and text `&str` throughout where they were byte slices, so
@@ -91,16 +99,18 @@ workspace's crypto crates.
 
 37 tests green, including the entity-reference cases.
 
-## Unreleased (0.1.4) — dependency refresh
+## [0.1.4] - 2026-08-23
+
+dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
 - No source or API change; the bumps are declaration-only and the crate
   compiles unmodified against them. Bumped workspace-wide in the same
   change so no two versions of these crates are compiled side by side.
 
-## 14th June 2026
+## [0.1.2] - 2026-06-14
 
-### 0.1.2 — non_exhaustive TrustListError (W7 sweep)
+non_exhaustive TrustListError (W7 sweep)
 
 - `TrustListError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
   additively. Patch bump keeps the `0.1` pin valid; consumers that `match` it

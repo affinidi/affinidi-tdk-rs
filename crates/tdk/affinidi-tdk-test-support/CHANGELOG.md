@@ -1,32 +1,42 @@
 # Affinidi TDK Test Support
 
-## Unreleased (0.12.2) — affinidi-status-list 0.2
+## [0.12.2] - 2026-11-15
+
+affinidi-status-list 0.2
 
 - **Changed:** requires `affinidi-status-list` 0.2. `CredentialScenario`
   allocates status indices from a `StatusListAllocator` (index allocation
   moved there). No public API change: the status list is private to the
   scenario.
 
-## Unreleased (0.12.1) — affinidi-crypto 0.3
+## [0.12.1] - 2026-11-13
+
+affinidi-crypto 0.3
 
 - **Changed:** requires `affinidi-crypto` 0.3, from the workspace path again.
   No code change. The re-exported `Curve`, `PrivateKeyAgreement` and
   `PublicKeyAgreement` now refer to `affinidi-crypto` 0.3.
-## Unreleased (0.12.0) — mdoc 0.6
+## [0.12.0] - 2026-11-13
+
+mdoc 0.6
 
 `mdoc_scenario` takes and returns `affinidi-mdoc` types, and `affinidi-mdoc`
 moves to 0.6, so this crate moves a minor with it. No source change: the
 scenario already sets the device key and validity that `MdocBuilder` now
 requires.
 
-## Unreleased (0.11.1) — affinidi-crypto from the registry
+## [0.11.1] - 2026-11-13
+
+affinidi-crypto from the registry
 
 - **Changed:** `affinidi-crypto` is a plain `"0.2"` requirement instead of a
   path dependency, because the workspace copy is now 0.3. This crate builds
   against the published 0.2.12 until the workspace moves to 0.3. No code or
   behaviour change.
 
-## Unreleased (0.11.0) — affinidi-sd-jwt 0.2
+## [0.11.0] - 2026-11-12
+
+affinidi-sd-jwt 0.2
 
 - **Changed:** `CredentialScenario::verify_with` takes a
   `&dyn HolderKeyVerifier` in place of the holder `JwtVerifier`: the KB-JWT is
@@ -37,7 +47,9 @@ requires.
   `CredentialScenario::issue_sd_jwt_vc_bound_to` (issue with another `cnf.jwk`).
 - `affinidi-sd-jwt` 0.2 and `affinidi-vc` 0.3.
 
-## Unreleased (0.10.0) — mdoc 0.5
+## [0.10.0] - 2026-11-12
+
+mdoc 0.5
 
 `mdoc_scenario` takes and returns `affinidi-mdoc` types, and `affinidi-mdoc`
 moves to 0.5, so this crate moves a minor with it. No library source change.
@@ -45,27 +57,35 @@ The `mdoc_disallowed_alg_is_rejected` test now expects a mislabelled
 `issuerAuth` to be refused even when the caller names its declared `alg`, as
 mdoc 0.5 checks the header against the verifier's algorithm.
 
-## Unreleased (0.9.0) — mdoc 0.4
+## [0.9.0] - 2026-10-21
+
+mdoc 0.4
 
 `mdoc_scenario` takes and returns `affinidi-mdoc` types (`SessionTranscript`,
 `DeviceResponse`), and `affinidi-mdoc` moves to 0.4, so this crate moves a minor
 with it. No source change.
 
-## Unreleased (0.8.6) — authcrypt fixtures name their sender key id
+## [0.8.6] - 2026-09-25
+
+authcrypt fixtures name their sender key id
 
 - `didcomm_fuzz::PackedEnvelope::sender_kid()` returns the envelope's bound
   `skid`, and `signer_kid()` a signed envelope's signature `kid`, for building
   the `SenderKey` / `SignerKey` that `affinidi-messaging-didcomm` 0.15.9's
   `unpack_bound` / `decrypt_bound` take. Additive; the struct is unchanged.
 
-## Unreleased (0.8.5) — document the did:webvh host policy
+## [0.8.5] - 2026-09-12
+
+document the did:webvh host policy
 
 - Documentation only. A DID minted with `MockDidWebServer::webvh_authority`
   (`did:webvh:…:localhost%3A<port>`) resolves only through a resolver that
   allows private hosts, because `didwebvh-rs` 0.7 refuses `localhost` by
   default. The module docs now show the `HostPolicy::AllowPrivate` opt-in.
 
-## Unreleased (0.8.4) — dependency refresh
+## [0.8.4] - 2026-09-01
+
+dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
 - Bumps `coset` 0.3 → 0.4, alongside `affinidi-mdoc` 0.3. `coset` is internal
@@ -76,7 +96,7 @@ with it. No source change.
   compiles unmodified against them. Bumped workspace-wide in the same
   change so no two versions of these crates are compiled side by side.
 
-## 31st July 2026 (0.8.2)
+## [0.8.2] - 2026-07-31
 
 Moves to **curve25519-dalek 5** (`ed25519-dalek` 2 -> 3, `x25519-dalek` 2 -> 3),
 which brings rand_core 0.10 and signature 3 with it. rand 0.10 renamed `OsRng`
@@ -89,17 +109,17 @@ copy from crates.io.
 
 ## Changelog history
 
-## 19th July 2026
+## [0.8.1] - 2026-07-19
 
-### 0.8.1 — affinidi-did-common 0.4
+affinidi-did-common 0.4
 
 - Bumped the `affinidi-did-common` requirement from `"0.3"` to `"0.4"`.
   No functional change to this crate: `Document` gained a typed
   `also_known_as` field, which is additive.
 
-## 14th June 2026
+## [0.7.0] - 2026-06-14
 
-### 0.7.0 — documented testing API + cookbook (TI6)
+documented testing API + cookbook (TI6)
 
 - **Published.** `publish` flipped to `true` — the fixture API stabilised with
   the TI-series and external consumers can now pull this in as a
@@ -116,7 +136,9 @@ copy from crates.io.
   `docker-compose.test.yml` path lives at `docs/testing/cookbook.md`.
 - No behaviour change to any fixture.
 
-### 0.6.0 — seeded did:peer generation (TI4a)
+## [0.6.0] - 2026-06-14
+
+seeded did:peer generation (TI4a)
 
 - `determinism`: deterministic `did:peer` identities. `did_peer_from_seed(seed,
   keys, service)` and the `didcomm_identity_from_seed(seed, service)` convenience
@@ -129,9 +151,9 @@ copy from crates.io.
 - TI4's injectable clock follows separately as TI4b (a `Clock` trait threaded
   through the mediator + SDK).
 
-## 13th June 2026
+## [0.5.0] - 2026-06-13
 
-### 0.5.0 — mdoc (COSE) + OID4VP present/verify flows (TI5b)
+mdoc (COSE) + OID4VP present/verify flows (TI5b)
 
 - `mdoc_scenario`: mdoc flows on `CredentialScenario` reusing the shared
   issuer/holder/verifier identities — `issue_mdoc` (MSO signed with the issuer's
@@ -151,14 +173,18 @@ copy from crates.io.
   `Oid4vp` variants. Closes the credentials/protocols e2e gap for both eIDAS
   formats (TI5 acceptance criteria).
 
-### 0.4.0 — shared test-vector layout + loader (TI7)
+## [0.4.0] - 2026-06-13
+
+shared test-vector layout + loader (TI7)
 
 - `vectors`: a documented `tests/vectors/<source>/…` convention plus a loader
   (`load_json`, `load_str`, `load_json_dir`, `vectors_root`) so interop vectors
   drop in without bespoke loader code. `affinidi-bbs` migrated onto it as the
   reference. Supports the BBS-signing KAT and JOSE-crypto vector work.
 
-### 0.3.0 — CredentialScenario sd-jwt-vc fixture (TI5a)
+## [0.3.0] - 2026-06-13
+
+CredentialScenario sd-jwt-vc fixture (TI5a)
 
 - `credential_scenario`: `CredentialScenario` stands up deterministic
   issuer/holder/verifier `did:key` identities, an in-memory `BitstringStatusList`,
@@ -168,7 +194,9 @@ copy from crates.io.
   `Ed25519Signer` / `Ed25519Verifier` (the SD-JWT crate provides only an HMAC
   test signer); the verifier enforces an algorithm allowlist before the signature.
 
-### 0.2.0 — did:web/webvh mock server + StaticResolver (TI2)
+## [0.2.0] - 2026-06-13
+
+did:web/webvh mock server + StaticResolver (TI2)
 
 - `did_web::MockDidWebServer`: an in-process HTTP origin (ephemeral `127.0.0.1`
   port) serving `did.json` / `did.jsonl` (+ witness) with fault injection
@@ -180,7 +208,9 @@ copy from crates.io.
   and a recorded call log for cache-stampede / dedup assertions.
 - Unblocks the W1/W2/W3 cache-server/SDK hardening regression tests.
 
-### 0.1.0 — scaffold (TI0)
+## [0.1.0] - 2026-06-13
+
+scaffold (TI0)
 
 - New `affinidi-tdk-test-support` crate: the shared home for cross-cutting,
   in-process integration-test fixtures across the TDK workspace, complementing

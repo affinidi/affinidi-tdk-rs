@@ -1,6 +1,8 @@
 # Affinidi BBS
 
-## 0.4.3 — generators cached, multi-scalar multiplication for B and T2
+## [0.4.3] - 2026-11-15
+
+generators cached, multi-scalar multiplication for B and T2
 
 Performance only; signatures, proofs and every fixture are unchanged (#1055).
 
@@ -18,7 +20,9 @@ Performance only; signatures, proofs and every fixture are unchanged (#1055).
   verify 12.4 → 4.7 ms, proof gen 15.9 → 4.0 ms, proof verify 12.5 → 3.8 ms
   (warm cache; the first call per api_id still builds the generators).
 
-## 0.4.2 — signatures parse from exactly 80 bytes; secret intermediates wiped
+## [0.4.2] - 2026-11-13
+
+signatures parse from exactly 80 bytes; secret intermediates wiped
 
 **Behaviour change (R3.6).** `Signature::from_bytes` now requires exactly 80
 bytes and returns `BbsError::InvalidSignature` otherwise. It used to read the
@@ -36,7 +40,9 @@ output and all IETF fixtures are 80 bytes, so they parse as before.
   docs no longer list holder binding via the presentation header; a
   presentation header binds a proof to a verifier's context, not to a holder.
 
-## 0.4.1 — proof verification rejects identity points and zero scalars
+## [0.4.1] - 2026-11-12
+
+proof verification rejects identity points and zero scalars
 
 Proof verification now rejects a proof whose `Abar`, `Bbar` or `D` is the G1
 identity point, returning `BbsError::InvalidProof`. draft-irtf-cfrg-bbs-signatures-10
@@ -61,7 +67,9 @@ Only proofs that are INVALID under the draft are affected; proofs from a
 conforming prover never contain an identity point, and contain a zero scalar
 only with negligible probability, so no compatible caller sees a change.
 
-## Unreleased (0.4.0) — `bls12_381_plus` 0.9, `rand` 0.10
+## [0.4.0] - 2026-10-01
+
+`bls12_381_plus` 0.9, `rand` 0.10
 
 **Breaking:** `bls12_381_plus` 0.9 moves its primary curve stack to the
 RustCrypto 0.14 generation (`elliptic-curve` / `ff` / `group` 0.14), so the
@@ -77,7 +85,9 @@ IETF BBS test vectors pass.
 `rand` 0.10: the per-proof and commitment RNGs seed `StdRng` from `SysRng`
 (the renamed `OsRng`); scalars are drawn through `RngExt`.
 
-## Unreleased (0.3.3) — take the curve stack from `bls12_381_plus`'s re-exports
+## [0.3.3] - 2026-09-07
+
+take the curve stack from `bls12_381_plus`'s re-exports
 
 No behaviour change. `elliptic-curve`, `ff` and `group` are no longer declared
 here; the types come from `bls12_381_plus::{elliptic_curve, ff, group}` instead.
@@ -99,9 +109,9 @@ structural rather than coincidental, and removes three declarations that
 
 ## Changelog history
 
-## 13th June 2026
+## [0.3.1] - 2026-06-13
 
-### 0.3.1 — DoS-bound generator creation + explicit CSPRNG (W4)
+DoS-bound generator creation + explicit CSPRNG (W4)
 
 - **Bounded generator creation.** On the verify path the generator/message
   count is derived from the *untrusted* proof length; an oversized bogus proof

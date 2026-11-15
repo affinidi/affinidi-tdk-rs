@@ -1,6 +1,8 @@
 # Affinidi DID Resolver Cache Server
 
-## Unreleased (0.11.0) — concurrent WebSocket requests; strict config values; HTTP statuses
+## [0.11.0] - 2026-11-15
+
+concurrent WebSocket requests; strict config values; HTTP statuses
 
 Breaking: unused public modules removed, response codes and config parsing
 changed (R3.6).
@@ -44,7 +46,9 @@ changed (R3.6).
   shipped value, and the comments say an unparseable value fails startup.
   README documents the HTTP statuses and the WebSocket concurrency.
 
-## Unreleased (0.10.0) — config keys read where written; WebSocket limits
+## [0.10.0] - 2026-11-12
+
+config keys read where written; WebSocket limits
 
 Breaking (R3.6): the config file is checked strictly, and `SharedData` and
 `Config` have new public fields.
@@ -91,7 +95,9 @@ Breaking (R3.6): the config file is checked strictly, and `SharedData` and
   `Config::client_ip_extractor()`. New `limits` module (`WsLimits`,
   `ConnectionSlot`, `ConnectionRefused`) and `config::parse_config_str`.
 
-## Unreleased (0.9.16) — did:webs
+## [0.9.16] - 2026-11-09
+
+did:webs
 
 Resolves `did:webs`: the SDK's `did-webs` feature is on, and the SDK floor is
 0.8.47. A did:webs resolves only when its KERI key event log verifies and the
@@ -99,12 +105,16 @@ published `did.json` matches the verified key state. Like did:web, did:webvh
 and did:scid, it fetches only from public hosts under the default
 `HostPolicy::PublicOnly`, follows no redirect and uses no proxy.
 
-## Unreleased (0.9.15) — didwebvh-rs 0.8
+## [0.9.15] - 2026-10-01
+
+didwebvh-rs 0.8
 
 Moves to `didwebvh-rs` 0.8 (on `affinidi-data-integrity` 0.8), and picks up
 `affinidi-did-resolver-cache-sdk` 0.8.41. No behaviour change.
 
-## Unreleased (0.9.14) — raw did:webvh log cache
+## [0.9.14] - 2026-09-16
+
+raw did:webvh log cache
 
 - Adds an optional TTL cache for the raw `did:webvh` logs (`did.jsonl` and
   `did-witness.json`) that this server attaches to every WebVH resolution.
@@ -136,7 +146,9 @@ Moves to `didwebvh-rs` 0.8 (on `affinidi-data-integrity` 0.8), and picks up
   already refreshes the log, so a larger value buys nothing; keep it
   `<= cache.expire`.
 
-## Unreleased (0.9.13) — did:webvh host policy
+## [0.9.13] - 2026-09-12
+
+did:webvh host policy
 
 - Bumps `didwebvh-rs` 0.6 → 0.7 and requires `affinidi-did-resolver-cache-sdk`
   0.8.37. did:webvh resolution through this server now refuses non-public
@@ -153,14 +165,18 @@ Moves to `didwebvh-rs` 0.8 (on `affinidi-data-integrity` 0.8), and picks up
 - **Behaviour:** a deployment that can reach did:webvh hosts only through
   `HTTP(S)_PROXY` can no longer resolve did:webvh DIDs or attach their logs.
 
-## Unreleased (0.9.12) — dependency refresh
+## [0.9.12] - 2026-08-23
+
+dependency refresh
 
 - Bumps `tower-http` 0.6 → 0.7.
 - No source or API change; the bumps are declaration-only and the crate
   compiles unmodified against them. Bumped workspace-wide in the same
   change so no two versions of these crates are compiled side by side.
 
-## Unreleased (0.9.11) — `did:jwk` is actually served
+## [0.9.11] - 2026-08-22
+
+`did:jwk` is actually served
 
 - **Enables the SDK's `did-jwk` feature.** The README has listed `did:jwk`
   among the methods this server resolves, and the dependency comment claimed
@@ -176,7 +192,7 @@ Moves to `didwebvh-rs` 0.8 (on `affinidi-data-integrity` 0.8), and picks up
   and `did:pkh` identifiers are now rejected rather than resolved into a
   document naming an account that cannot exist.
 
-## 2nd August 2026 (0.9.10)
+## [0.9.10] - 2026-08-02
 
 Opts back in to `did:ethr` and `did:pkh`, which became optional in
 `affinidi-did-resolver-cache-sdk` 0.8.22.
@@ -189,9 +205,9 @@ that cost. **No change in what this server resolves.**
 
 ## Changelog history
 
-## 20th July 2026
+## [0.9.9] - 2026-07-20
 
-### 0.9.9 — agent name resolution over WebSocket
+agent name resolution over WebSocket
 
 A `WSRequest` carrying `agent_name` is now resolved name → DID → document in one
 exchange, matching `GET /did/v1/resolve-name/{*name}` but on the connection the
@@ -201,7 +217,7 @@ Gated by the same `enable_agent_names` flag and subject to the same
 `agent_name_concurrency` ceiling as the HTTP endpoint, including shedding rather
 than queueing when saturated.
 
-#### The correlation rule
+### The correlation rule
 
 The response's `hash` is the hash of the **name as sent**, not of the resolved
 DID. Clients register their waiter under the hash of what they sent and
@@ -209,28 +225,28 @@ DID. Clients register their waiter under the hash of what they sent and
 would leave every caller waiting out its full timeout with no error. `did`
 carries the resolved DID and `agent_name` echoes the name.
 
-#### Still a cache, not a trust anchor
+### Still a cache, not a trust anchor
 
 No `alsoKnownAs` verification is performed or claimed here. The client re-verifies
 against the document it received, exactly as it re-verifies `did:webvh` logs.
-## 20th July 2026
+## [0.9.8] - 2026-07-20
 
-### 0.9.8 — build WebSocket responses via constructors
+build WebSocket responses via constructors
 
 Follows `affinidi-did-resolver-cache-sdk 0.8.18`, which sealed the WebSocket wire
 types. `build_response` and the two error paths now use `WSResponse::new` /
 `with_logs` and `WSResponseError::new` instead of struct literals.
 
 No behaviour change; the emitted frames are byte-identical.
-## 20th July 2026
+## [0.9.7] - 2026-07-20
 
-### 0.9.7 — per-IP rate limiting
+per-IP rate limiting
 
 The server previously had **no rate limiting of any kind**. It now applies a
 per-IP token bucket, via the shared `affinidi-rate-limit` crate extracted from
 the mediator.
 
-#### ⚠ On by default — check this before upgrading
+### ⚠ On by default — check this before upgrading
 
 `rate_limit_per_ip` defaults to **100 req/s per IP, burst 50**, matching the
 mediator. That is generous for a resolver cache, whose whole purpose is that most
@@ -244,7 +260,7 @@ legitimate traffic gets 429s. Set `rate_limit_per_ip = "0"` to disable.
 An unparseable value falls back to the default rather than to 0, so a config typo
 cannot silently remove limiting. An explicit `"0"` still disables.
 
-#### Behaviour
+### Behaviour
 
 - Over-quota requests get `429` with an accurate `Retry-After`, taken from
   `governor`'s estimate of when the next token arrives, floored at 1 second.
@@ -261,9 +277,9 @@ cannot silently remove limiting. An explicit `"0"` still disables.
 This complements, rather than replaces, `agent_name_concurrency` (0.9.6). Rate
 limiting bounds what any one client can ask for; the concurrency cap bounds total
 outbound fan-out however many clients ask.
-## 20th July 2026
+## [0.9.6] - 2026-07-20
 
-### 0.9.6 — bound the agent name endpoint's outbound fetches
+bound the agent name endpoint's outbound fetches
 
 Adds `agent_name_concurrency` (default **16**): a ceiling on how many agent name
 lookups may be fetching upstream at once.
@@ -286,16 +302,16 @@ limit", so a config typo cannot silently remove the ceiling.
 Note this is **not** general rate limiting — the server still has none, and that
 remains worth adding. This bounds the *outbound* amplification specifically,
 which is the harm this endpoint can do to third parties rather than to itself.
-## 19th July 2026
+## [0.9.5] - 2026-07-19
 
-### 0.9.5 — agent name lookup endpoint
+agent name lookup endpoint
 
 Adds `GET /did/v1/resolve-name/{*name}`, mapping an agent name
 (`example.com/@alice`) to a DID.
 
 **Off by default.** Set `enable_agent_names = "true"` to enable it.
 
-#### Scope: it returns a DID, not a document
+### Scope: it returns a DID, not a document
 
 Following the redirect is the network-facing, cacheable half of agent name
 resolution and is worth centralising; turning the resulting DID into a document
@@ -309,7 +325,7 @@ agree" would be asking to be trusted as an authority. It is a cache, never a
 trust anchor, matching how clients re-verify `did:webvh` logs rather than
 believing the server.
 
-#### Why it is off by default
+### Why it is off by default
 
 The name is entirely caller-supplied, so this endpoint makes the server issue an
 HTTP request to a host of the caller's choosing. Mitigations:
@@ -324,7 +340,7 @@ so DNS rebinding remains possible. Note also that this server still has **no
 rate limiting**, so an enabled endpoint is an unmetered outbound fetch primitive.
 Enable it only if you accept that.
 
-#### Also
+### Also
 
 - Statistics gain `agent_name_success` / `agent_name_error`, reported in the
   periodic log line.
@@ -334,9 +350,9 @@ Enable it only if you accept that.
   failure, including a blocked address) and `504` (timeout).
 - The route uses a wildcard capture because an agent name contains slashes,
   which a single path segment cannot match. `/resolve/{did}` is untouched.
-## 19th July 2026
+## [0.9.4] - 2026-07-19
 
-### 0.9.4 — didwebvh-rs 0.6
+didwebvh-rs 0.6
 
 - Bumped the `didwebvh-rs` requirement from `"0.5"` to `"0.6"`.
 
@@ -352,25 +368,25 @@ Enable it only if you accept that.
   needed here: the only use is a `#[from] DIDWebVHError` conversion in
   `did-scid`'s error type, not an exhaustive `match`.
 
-## 19th July 2026
+## [0.9.3] - 2026-07-19
 
-### 0.9.3 — affinidi-did-common 0.4
+affinidi-did-common 0.4
 
 - Bumped the `affinidi-did-common` requirement from `"0.3"` to `"0.4"`.
   No functional change to this crate: `Document` gained a typed
   `also_known_as` field, which is additive.
 
-## 14th June 2026
+## [0.9.2] - 2026-06-14
 
-### 0.9.2 — non_exhaustive error enums (W7 sweep)
+non_exhaustive error enums (W7 sweep)
 
 - `CacheError` and `SessionError` are now `#[non_exhaustive]` (ADR-0003) so new
   variants land additively. Patch bump keeps the `0.9` pin valid; consumers that
   `match` them must add a `_` arm. No behaviour change.
 
-## 13th June 2026
+## [0.9.1] - 2026-06-13
 
-### 0.9.1 — statistics task on the shared supervisor (W15)
+statistics task on the shared supervisor (W15)
 
 - The statistics task is now supervised by the shared `affinidi-task-utils`
   `TaskSupervisor` instead of a bare `tokio::spawn`. A panic or error restarts
@@ -379,7 +395,9 @@ Enable it only if you accept that.
   non-load-bearing — a wedged stats loop never takes the resolver down. The W2
   manual cancel/join wiring is replaced; behaviour on shutdown is unchanged.
 
-### 0.9.0 — request limits, CORS tightening, task supervision, client reuse (W2)
+## [0.9.0] - 2026-06-13
+
+request limits, CORS tightening, task supervision, client reuse (W2)
 
 - **DID size limit.** New `max_did_size` setting (default 1024 bytes,
   `MAX_DID_SIZE`). Oversized DIDs are rejected before resolution — HTTP `400`
@@ -399,7 +417,9 @@ Enable it only if you accept that.
 - New `pub` fields `SharedData.max_did_size` / `SharedData.webvh_client`
   (minor-version bump).
 
-### 0.8.0 — remove request/startup panics, bound upstream resolution (W1)
+## [0.8.0] - 2026-06-13
+
+remove request/startup panics, bound upstream resolution (W1)
 
 - **No more panics on the request path.** The four
   `serde_json::to_string(..).unwrap()` calls in the WebSocket handler — a

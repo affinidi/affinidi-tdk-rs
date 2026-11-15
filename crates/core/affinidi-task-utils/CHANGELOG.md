@@ -2,9 +2,9 @@
 
 ## Changelog history
 
-## 13th June 2026
+## [0.1.0] - 2026-06-13
 
-### 0.1.0 — initial release (W15)
+initial release (W15)
 
 - `TaskSupervisor`: spawn long-lived `tokio` tasks with restart-on-failure
   (capped exponential backoff, 1s → 60s), an observable `HealthRegistry`

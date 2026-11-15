@@ -1,6 +1,8 @@
 # Changelog — `affinidi-tdk-common`
 
-## 0.7.2 — `AuthenticationCache` authenticates concurrently
+## [0.7.2] - 2026-11-15
+
+`AuthenticationCache` authenticates concurrently
 
 Requires `affinidi-did-authentication` 0.3.17.
 
@@ -26,7 +28,9 @@ Requires `affinidi-did-authentication` 0.3.17.
   match the new variants. `terminate()` cancels authentications in progress;
   their callers get `TaskUnavailable`.
 
-## 0.7.1 — environment file written safely; HTTP timeouts; DID-document endpoints checked before credentials are sent
+## [0.7.1] - 2026-11-13
+
+environment file written safely; HTTP timeouts; DID-document endpoints checked before credentials are sent
 
 ### Environment file
 
@@ -79,11 +83,15 @@ Requires `affinidi-did-authentication` 0.3.17.
 
 Additive API only, so a patch release. No new dependencies.
 
-## Unreleased (0.7.0) — `affinidi-data-integrity` 0.8
+## [0.7.0] - 2026-10-01
+
+`affinidi-data-integrity` 0.8
 
 Moves to `affinidi-data-integrity` 0.8 (the correctly versioned re-release of 0.7.14, on `affinidi-bbs` 0.4). It is a public dependency here (`TDKError::DataIntegrity` wraps its `DataIntegrityError`), so this crate moves a minor. No source change.
 
-## Unreleased (0.6.11) — guarded HTTP client
+## [0.6.11] - 2026-09-11
+
+guarded HTTP client
 
 - Adds `create_guarded_http_client(extra_roots, &EgressPolicy)` next to
   `create_http_client`. It returns an `affinidi_net_guard::GuardedClient` built
@@ -94,14 +102,18 @@ Moves to `affinidi-data-integrity` 0.8 (the correctly versioned re-release of 0.
 - `create_http_client` is unchanged; its TLS setup moved into a private helper
   that both constructors share. Additive, hence a patch.
 
-## Unreleased (0.6.10) — dependency refresh
+## [0.6.10] - 2026-08-23
+
+dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
 - No source or API change; the bumps are declaration-only and the crate
   compiles unmodified against them. Bumped workspace-wide in the same
   change so no two versions of these crates are compiled side by side.
 
-## Unreleased (0.6.9) — drop the unmaintained `rustls-pemfile`
+## [0.6.9] - 2026-08-23
+
+drop the unmaintained `rustls-pemfile`
 
 - `TDKProfile::load_ssl_certificates` now parses PEM with
   `CertificateDer::pem_reader_iter` from `rustls-pki-types`, which `rustls`
@@ -111,7 +123,7 @@ Moves to `affinidi-data-integrity` 0.8 (the correctly versioned re-release of 0.
 - No new dependency and no behaviour change: the same certificates parse into
   the same `CertificateDer` values.
 
-## 0.6.8 — 2026-08-18
+## [0.6.8] - 2026-08-18
 
 ### Fixed
 
@@ -132,7 +144,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk-common`.
 
-## 0.6.7 — 2026-07-23
+## [0.6.7] - 2026-07-23
 
 ### Fixed
 
@@ -152,7 +164,7 @@ For the full code history see `git log` on `crates/tdk/affinidi-tdk-common`.
   Erring short costs one extra TLS handshake; erring long costs a dropped
   request.
 
-## 0.6.6 — 2026-07-19
+## [0.6.6] - 2026-07-19
 
 ### Changed
 
@@ -160,7 +172,7 @@ For the full code history see `git log` on `crates/tdk/affinidi-tdk-common`.
   No functional change to this crate: `Document` gained a typed
   `also_known_as` field, which is additive.
 
-## 0.6.5 — 2026-06-16
+## [0.6.5] - 2026-06-16
 
 ### Fixed
 
@@ -176,7 +188,7 @@ For the full code history see `git log` on `crates/tdk/affinidi-tdk-common`.
   error at runtime rather than silently dropping the requested roots. No change
   in behaviour on non-Android platforms. (#483)
 
-## 0.6.4 — 2026-06-13
+## [0.6.4] - 2026-06-13
 
 ### Added
 
@@ -190,7 +202,7 @@ For the full code history see `git log` on `crates/tdk/affinidi-tdk-common`.
   (affinidi-messaging-sdk W16). Existing `authenticate()` behaviour is
   unchanged.
 
-## 0.6.3 — 2026-06-07
+## [0.6.3] - 2026-06-07
 
 ### Fixed
 
@@ -202,7 +214,7 @@ For the full code history see `git log` on `crates/tdk/affinidi-tdk-common`.
   `affinidi-tdk` from publishing with `expected DataIntegrityError, found a
   different DataIntegrityError`. No code or API change in this crate.
 
-## 0.6.2 — 2026-05-28
+## [0.6.2] - 2026-05-28
 
 ### Security
 
@@ -215,7 +227,7 @@ For the full code history see `git log` on `crates/tdk/affinidi-tdk-common`.
   paths fall back to `File::create()` as before; ACL behaviour there is
   governed by the parent directory.
 
-## 0.6.1 — 2026-05-02
+## [0.6.1] - 2026-05-02
 
 Ergonomic additions to soften the 0.6 migration. No breaking changes.
 
@@ -233,7 +245,7 @@ Ergonomic additions to soften the 0.6 migration. No breaking changes.
   `Zeroize`-on-drop fires promptly when those copies are dropped.
 - Doc cross-link from `add_profile` pointing to `add_profile_drained`.
 
-## 0.6.0 — 2026-05-02
+## [0.6.0] - 2026-05-02
 
 Major hardening + API tightening release. Multiple breaking changes; see
 **Migration** below.
@@ -495,7 +507,7 @@ let path = config.environment_path().to_string();
 let limit = config.authentication_cache_limit();
 ```
 
-## 0.5.3 — 2026-05-02
+## [0.5.3] - 2026-05-02
 
 ### Changed
 
@@ -516,6 +528,8 @@ let limit = config.authentication_cache_limit();
   `dep:affinidi-messaging-sdk` linkage). `use_atm` is now unconditionally
   present, matching `affinidi-tdk`'s already-unconditional read of it.
 
-## 0.5.2 and earlier
+## [0.5.2] - 2026-04-18
+
+and earlier
 
 See workspace `git log` (versions before per-crate changelog).

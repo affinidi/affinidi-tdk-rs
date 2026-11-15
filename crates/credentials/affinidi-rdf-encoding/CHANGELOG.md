@@ -1,6 +1,8 @@
 # Affinidi RDF Encoding Changelog
 
-## 0.1.10 — processed JSON-LD contexts are cached
+## [0.1.10] - 2026-11-15
+
+processed JSON-LD contexts are cached
 
 Performance only; expansion and canonicalization output are unchanged (#1055).
 
@@ -25,13 +27,17 @@ Performance only; expansion and canonicalization output are unchanged (#1055).
   - `jsonld_expand_and_to_rdf_vc`: 64.6 µs → 5.4 µs
   - `full_pipeline_expand_canonicalize`: 80.1 µs → 9.0 µs
 
-## 0.1.9 — no expanded documents in debug logs
+## [0.1.9] - 2026-11-13
+
+no expanded documents in debug logs
 
 `expand_and_to_rdf` and `expand_and_to_rdf_safe` no longer log the full
 expanded JSON-LD document at `debug`, so credential claims do not reach logs
 when debug logging is on. No other change.
 
-## 0.1.8 — safe mode refuses what it cannot convert; RDFC-1.0 work limit per canonicalization; fresh blank node labels
+## [0.1.8] - 2026-11-12
+
+safe mode refuses what it cannot convert; RDFC-1.0 work limit per canonicalization; fresh blank node labels
 
 **Safe-mode expansion** (`expand_document_safe`, `expand_and_to_rdf_safe`)
 used to skip several inputs without an error, so the JSON and the RDF dataset
@@ -101,7 +107,9 @@ API: `rdfc1::CanonicalizeOptions`, `rdfc1::canonicalize_with_options` and
 `rdfc1::hash_ndegree::DEFAULT_MAX_NDEGREE_WORK` are added. Nothing is
 removed or changed in signature. No new dependencies.
 
-## Unreleased (0.1.7) — `sha2` 0.11
+## [0.1.7] - 2026-09-07
+
+`sha2` 0.11
 
 No behaviour change and no public API change: these are private dependencies
 here, which is what lets each crate move on its own schedule. Verified by
@@ -110,13 +118,13 @@ in the workspace.
 
 Version bump only; no source change. 63 tests green.
 
-## 14th June 2026 Release 0.1.6
+## [0.1.6] - 2026-06-14
 
 - `RdfError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
   additively. Patch bump keeps the `0.1` pin valid; consumers that `match` it
   must add a `_` wildcard arm. No behaviour change. (W7 sweep)
 
-## 8th June 2026 Release 0.1.5
+## [0.1.5] - 2026-06-08
 
 ### Added
 
@@ -137,7 +145,7 @@ Version bump only; no source change. 63 tests green.
   release is backward-compatible. Supports the soundness fix in
   `affinidi-data-integrity` 0.7.5 (issue #381).
 
-## 7th June 2026 Release 0.1.4
+## [0.1.4] - 2026-06-07
 
 Full **63/63** W3C `rdf-canon` (RDFC-1.0) conformance — the last 4 skipped
 cases now pass byte-for-byte, so the suite has no quarantined cases.
@@ -156,7 +164,7 @@ cases now pass byte-for-byte, so the suite has no quarantined cases.
   are not symmetric), and all vc-di-bbs / data-integrity KAT vectors are
   unchanged.
 
-## 7th June 2026 Release 0.1.3
+## [0.1.3] - 2026-06-07
 
 JSON-LD 1.1 expansion conformance for the W3C VC Data Model 1.0
 (`credentials/v1`) credential family (needed by the vc-di-bbs pseudonym AAMVA
@@ -179,7 +187,7 @@ driver's-license test credential).
 - **Numeric type coercion**: numbers honour their term's `@type` (e.g.
   `xsd:unsignedInt`) instead of always defaulting to `xsd:integer`.
 
-## 6th June 2026 Release 0.1.2
+## [0.1.2] - 2026-06-06
 
 W3C-conformance fixes for RDFC-1.0 and JSON-LD, locked with the official
 `w3c/rdf-canon` test suite (59/63 cases; the 4 skipped are documented
@@ -203,7 +211,7 @@ poison/automorphism graphs) and the vc-di-bbs canonicalization vector.
 - `rdfc1::canonicalize_with_label_map` and `IdentifierIssuer::issued_map()` —
   expose the input→`c14n` label map needed by selective-disclosure schemes.
 
-## 2nd March 2026 Release 0.1.1
+## [0.1.1] - 2026-03-02
 
 - **PERFORMANCE:** ~40% faster RDFC canonicalization pipeline
   - Lookup-table hex encoding instead of per-byte `format!()` allocations
@@ -214,7 +222,7 @@ poison/automorphism graphs) and the vc-di-bbs canonicalization vector.
     every object expansion
   - Return borrowed `&str` from `quad_blank_node_ids` instead of cloned `String`s
 
-## 2nd March 2026 Release 0.1.0
+## [0.1.0] - 2026-03-02
 
 - **FEATURE:** Added new `affinidi-rdf-encoding` crate to the workspace
   - Provides RDF Dataset Canonicalization (RDFC-1.0) and JSON-LD expansion

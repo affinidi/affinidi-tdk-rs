@@ -1,6 +1,8 @@
 # Affinidi Data Integrity Changelog
 
-## Unreleased (0.8.9) — `verify_multi` hashes the document once
+## [0.8.9] - 2026-11-15
+
+`verify_multi` hashes the document once
 
 Performance only; results and errors are unchanged (#1055).
 
@@ -13,7 +15,9 @@ Performance only; results and errors are unchanged (#1055).
 - Picks up `affinidi-rdf-encoding` 0.1.10's context caching (RDFC sign and
   verify are faster; `verify/eddsa-rdfc-2022` ~213 → ~182 µs on the bench).
 
-## Unreleased (0.8.8) — did:key decoding goes through affinidi-encoding
+## [0.8.8] - 2026-11-15
+
+did:key decoding goes through affinidi-encoding
 
 - **Changed (#1056):** `resolve_did_key` / `DidKeyResolver` decode with
   `affinidi_encoding::did_key::decode` instead of their own codec/length
@@ -25,14 +29,18 @@ Performance only; results and errors are unchanged (#1055).
 - **Dependencies:** adds `affinidi-encoding` 0.1.7.
 
 
-## Unreleased (0.8.7) — affinidi-crypto 0.3
+## [0.8.7] - 2026-11-13
+
+affinidi-crypto 0.3
 
 - **Changed:** requires `affinidi-crypto` 0.3. No code change. `KeyType`
   (in `ResolvedKey` and the errors) now refers to `affinidi-crypto` 0.3; a
   caller that builds a `ResolvedKey` from its own `affinidi-crypto` needs 0.3.
   Released as a patch, per ADR 0003, because `didwebvh-rs` and
   `trust-tasks-proof` pin this crate at `0.8`.
-## 0.8.6 — errors name the right suite and key; no document contents in debug logs
+## [0.8.6] - 2026-11-13
+
+errors name the right suite and key; no document contents in debug logs
 
 **Behaviour change (R3.6)** in error values only; what signs and verifies is
 unchanged:
@@ -55,7 +63,9 @@ Docs:
 - The install snippet shows `0.8`, the crate docs no longer promise sibling
   `-jose` / `-cose` crates, and `Canonicalization::Rdfc` is called RDFC-1.0.
 
-## 0.8.5 — `bbs-2023` verifiers take options: presentation header and proof shape checked
+## [0.8.5] - 2026-11-13
+
+`bbs-2023` verifiers take options: presentation header and proof shape checked
 
 The `bbs-2023` derived-proof verifiers had no way to be told which
 presentation header the verifier expects, and it could not be read back
@@ -92,7 +102,9 @@ wrong `type` / `cryptosuite`, or with no `verificationMethod` or
 and the W3C vc-di-bbs vectors carry all four members and are not affected.
 No in-workspace crate calls these verifiers.
 
-## 0.8.3 — `expires`, `domain`, `challenge`, `id` and `previousProof` proof members
+## [0.8.3] - 2026-11-12
+
+`expires`, `domain`, `challenge`, `id` and `previousProof` proof members
 
 **Behaviour change (R3.6).** `DataIntegrityProof` had no field for the
 optional proof members VC Data Integrity 1.0 §2.1 defines besides `nonce`,
@@ -159,7 +171,9 @@ fields and error variant are additive. What changes for callers:
 - The `bbs-2023` derived-proof verifiers now also refuse a `created` more
   than 60s in the future.
 
-## 0.8.2 — RDFC suites expand JSON-LD in safe mode
+## [0.8.2] - 2026-11-12
+
+RDFC suites expand JSON-LD in safe mode
 
 **Behaviour change (R3.6).** The RDFC cryptosuites (`eddsa-rdfc-2022`,
 `mldsa44-rdfc-2024`, `slhdsa128-rdfc-2024`) now expand both the document and
@@ -194,7 +208,9 @@ rejected; the dropped content was never covered by their signature. Documents
 whose terms are all defined hash to the same bytes as before, so their
 existing proofs still verify (the W3C vc-di-eddsa B.1 vector is unchanged).
 
-## 0.8.1 — `RequireThreshold` counts distinct signers (security)
+## [0.8.1] - 2026-11-09
+
+`RequireThreshold` counts distinct signers (security
 
 **Security fix; behaviour change.** `verify_multi` with
 `VerifyPolicy::RequireThreshold(t)` counted valid proof *entries*, not
@@ -225,7 +241,9 @@ relied on the old counting should check their inputs.
 count the distinct signing keys among `MultiVerifyResult::passed` and
 compare that count with the threshold.
 
-## 0.8.0 — `affinidi-bbs` 0.4, versioned correctly
+## [0.8.0] - 2026-10-01
+
+`affinidi-bbs` 0.4, versioned correctly
 
 **Breaking.** The same code as 0.7.14, released under the version it needed.
 `affinidi-bbs` is a public dependency here. `bbs_2023_transform::{
@@ -237,7 +255,9 @@ verify_proof, sign_vc_base, derive_vc, verify_vc_derived}` take or return
 `affinidi-bbs` from 0.3 to 0.4 changes their types. Callers move to
 `affinidi-bbs` 0.4 alongside this release. No behaviour change.
 
-## 0.7.14 — `affinidi-bbs` 0.4 (**mis-versioned: breaking, use 0.8.0**)
+## [0.7.14] - 2026-10-01
+
+`affinidi-bbs` 0.4 (**mis-versioned: breaking, use 0.8.0**
 
 Moved to `affinidi-bbs` 0.4 (`bls12_381_plus` 0.9). Released as a patch on
 the claim that no BBS type is in this crate's public API, and that claim was
@@ -247,7 +267,9 @@ affinidi_bbs::types::PublicKey, found affinidi_bbs::PublicKey`). Pin
 `=0.7.13` to stay on `affinidi-bbs` 0.3, or move to 0.8.0 and
 `affinidi-bbs` 0.4.
 
-## Unreleased (0.7.13) — the post-quantum tests never ran
+## [0.7.13] - 2026-09-18
+
+the post-quantum tests never ran
 
 `cargo test -p affinidi-data-integrity` did not compile the ML-DSA tests, and
 had not since they were written. `default = []`, so `ml-dsa` is off and
@@ -276,9 +298,9 @@ is byte-identical to 0.7.12.
 is not enough alone: CI runs the default feature set, so the test would *skip*,
 turning a visible failure into a test nobody executes.
 
-## Unreleased
+## [0.7.12] - 2026-09-17
 
-### A key with no cryptosuite is refused by name
+a key with no cryptosuite is refused by name
 
 **Fixes a refusal that named an algorithm the caller never chose.**
 
@@ -350,7 +372,9 @@ into acceptance: an expired proof would verify, and a proof bound to one
 challenge or domain would verify against any. They need their semantics
 implemented alongside, not before.
 
-## Unreleased (0.7.11) — `sha2` 0.11, `hmac` 0.13
+## [0.7.11] - 2026-09-07
+
+`sha2` 0.11, `hmac` 0.13
 
 No behaviour change and no public API change: these are private dependencies
 here, which is what lets each crate move on its own schedule. Verified by
@@ -360,7 +384,7 @@ in the workspace.
 One-line change: `new_from_slice` moved from the `Mac` trait to `KeyInit`.
 92 tests green.
 
-## 16th August 2026 (0.7.10)
+## [0.7.10] - 2026-08-16
 
 Adds the **`ecdsa-jcs-2019`** cryptosuite — ES256 (P-256) signatures over
 JCS-canonicalized documents, per [W3C vc-di-ecdsa](https://www.w3.org/TR/vc-di-ecdsa/).
@@ -401,7 +425,7 @@ point 3 — additive (a new enum variant on a `#[non_exhaustive]` enum, a new ZS
 impl, one signer arm), and a minor bump would break the `[patch.crates-io]`
 redirects.
 
-## 31st July 2026 (0.7.9)
+## [0.7.9] - 2026-07-31
 
 The Ed25519 signing path takes the signature through the inherent
 `Signature::to_bytes()` rather than the `SignatureEncoding` trait, which needs
@@ -416,7 +440,7 @@ Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) p
 `[patch.crates-io]`, and a minor bump would break the redirect and pull a second
 copy from crates.io.
 
-## 27th July 2026 Release 0.7.8
+## [0.7.8] - 2026-07-27
 
 ### Fixed
 
@@ -447,7 +471,7 @@ impl carrying the non-zero default. Behaviour of `VerifyOptions::new()` /
 `::default()` is otherwise unchanged, and the struct remains
 `#[non_exhaustive]`, so the added field is not a breaking change.
 
-## 19th July 2026 Release 0.7.7
+## [0.7.7] - 2026-07-19
 
 ### Changed
 
@@ -455,7 +479,7 @@ impl carrying the non-zero default. Behaviour of `VerifyOptions::new()` /
   No functional change to this crate: `Document` gained a typed
   `also_known_as` field, which is additive.
 
-## 13th June 2026 Release 0.7.6
+## [0.7.6] - 2026-06-13
 
 Semver wave (W10 — release W11). `DataIntegrityProof` is now `#[non_exhaustive]`
 with a `DataIntegrityProof::new(..)` constructor for assembling a proof from
@@ -463,7 +487,7 @@ parts (`sign()` remains the primary path; fields stay public for reads). Patch
 bump preserves the `didwebvh-rs` `[patch.crates-io]` coupling — see ADR 0003 and
 the migration guide.
 
-## 8th June 2026 Release 0.7.5
+## [0.7.5] - 2026-06-08
 
 ### Fixed
 
@@ -493,7 +517,7 @@ the migration guide.
 
 - Bump `affinidi-rdf-encoding` to `0.1.5` (adds safe-mode expansion).
 
-## 7th June 2026 Release 0.7.4
+## [0.7.4] - 2026-06-07
 
 ### Changed
 
@@ -502,7 +526,7 @@ the migration guide.
   the unimplemented SHAKE-256 ciphersuite is selected). No API change here; the
   `bbs-2023` cryptosuite output is unchanged (all KAT vectors still pass).
 
-## 7th June 2026 Release 0.7.3
+## [0.7.3] - 2026-06-07
 
 ### Deprecated
 
@@ -516,7 +540,7 @@ the migration guide.
   production. The module is retained this release for migration and will be
   removed in a future release.
 
-## 7th June 2026 Release 0.7.2
+## [0.7.2] - 2026-06-07
 
 W3C vc-di-bbs **per-verifier pseudonym / holder binding** (`featureOption:
 pseudonym`) — the document layer on top of the blind-BBS + pseudonym crypto in
@@ -537,7 +561,7 @@ Pseudonyms are stable per verifier (recognise repeat presentations) and
 unlinkable across verifiers. Proof-bearing crypto over BLS12-381 — pending the
 BBS security audit (#363) before backing real credentials.
 
-## 7th June 2026 Release 0.7.1
+## [0.7.1] - 2026-06-07
 
 ### Fixed
 
@@ -548,7 +572,7 @@ BBS security audit (#363) before backing real credentials.
   two `affinidi-crypto` copies (0.1.x + 0.2.0) and failed to build. Patch
   bump to republish with the correct requirement. No code/API change.
 
-## 6th June 2026 Release 0.7.0
+## [0.7.0] - 2026-06-06
 
 Standards-interoperable **W3C vc-di-bbs `bbs-2023`** selective disclosure
 (behind the `bbs-2023` feature). The new `bbs_2023_transform` module
@@ -583,7 +607,7 @@ ADR 0002.
   before backing real credentials. Per-verifier pseudonym / holder binding is
   in progress (the BBS pseudonym proof primitive lands in `affinidi-bbs 0.2`).
 
-## 18th April 2026 Release 0.6.0
+## [0.6.0] - 2026-04-18
 
 Follow-up release to 0.5.4 that removes the deprecated 0.5.x migration
 surface now that didwebvh-rs 0.5.0 and affinidi-tdk 0.6.x have migrated
@@ -615,7 +639,7 @@ changes — existing proofs still verify.
   for proof-verify failures, clearing the 0.5.4 self-deprecation
   warnings.
 
-## 18th April 2026 Release 0.5.4
+## [0.5.4] - 2026-04-18
 
 Large refactor for production-grade ergonomics. Contains multiple
 **breaking** API changes that are acceptable under pre-1.0 minor-version
@@ -755,7 +779,7 @@ VerificationError, RdfEncodingError}` variants) are kept as
 
 See the README for a 0.5 → 0.6 call-site migration table.
 
-## 12th March 2026 Release 0.5.0
+## [0.5.0] - 2026-03-12
 
 - **BREAKING:** Signing methods (`sign_jcs_data`, `sign_rdfc_data`) are now `async`
   and accept `&dyn Signer` instead of `&Secret`
@@ -768,13 +792,13 @@ See the README for a 0.5 → 0.6 call-site migration table.
   - `key_type()`, `verification_method()`, and `async sign()` methods
 - **DEPENDENCY:** Added `async-trait`
 
-## 2nd March 2026 Release 0.4.1
+## [0.4.1] - 2026-03-02
 
 - **PERFORMANCE:** ~40% faster RDFC sign/verify operations (~330 µs → ~199 µs sign,
   ~343 µs → ~212 µs verify) via optimizations in `affinidi-rdf-encoding`
 - **IMPROVEMENT:** Derive `Copy` on `CryptoSuite` enum, eliminating unnecessary clones
 
-## 2nd March 2026 Release 0.4.0
+## [0.4.0] - 2026-03-02
 
 - **FEATURE:** Added `eddsa-rdfc-2022` cryptosuite support (RDF Dataset Canonicalization)
   - New `sign_rdfc_data()` method for signing JSON-LD documents using RDFC-1.0
@@ -784,11 +808,11 @@ See the README for a 0.5 → 0.6 call-site migration table.
   - Use `CryptoSuite::validate_key_type()` instead
 - **DEPENDENCY:** Added `affinidi-rdf-encoding` for JSON-LD expansion and RDFC-1.0 canonicalization
 
-## 1st February 2026 Release 0.3.5
+## [0.3.5] - 2026-02-01
 
 - **CHORE:** Updated to latest dependencies
 
-## 3rd December 2025 Release 0.3.1
+## [0.3.1] - 2025-12-03
 
 - **FEATURE:** New function add `verify_data_with_public_key()` which allows for
   validating a proof where the public bytes are already known and thus a resolution
@@ -798,7 +822,7 @@ See the README for a 0.5 → 0.6 call-site migration table.
   - Use `verify_data()` when you need to resolve the DID Document to get the
     verificationMethod public key bytes
 
-## 29th November 2025 Release 0.3.0
+## [0.3.0] - 2025-11-29
 
 - **BREAKING FEATURE:** `verify_data()` now requires the following changes:
   1. DID Resolver implementing `DIDResolver` trait to be passed in
@@ -808,45 +832,45 @@ See the README for a 0.5 → 0.6 call-site migration table.
 This change allows for determination of the proof Verification Method from the
 DID Document itself.
 
-## 3rd November 2025 Release 0.2.4
+## [0.2.4] - 2025-11-03
 
 - **MAINTENANCE:** Updated to latest `affinidi-secrets-resolver`
 - **CHORE:** Updated to latest dependencies
 
-## 3rd October 2025 Release 0.2.3
+## [0.2.3] - 2025-10-03
 
 - **MAINTENANCE:** Updated to latest `affinidi-secrets-resolver`
 
-## 30th September 2025 Release 0.2.2
+## [0.2.2] - 2025-09-30
 
 - **MAINTENANCE:** Updating crate dependencies
 
-## 10th September 2025 Release 0.2.1
+## [0.2.1] - 2025-09-10
 
 - **IMPROVEMENT:** Removed SSI crate to lessen upstream dependencies
 - **MAINTENANCE:** Updating crate dependencies
 
-## 8th July 2025 Release 0.2.0
+## [0.2.0] - 2025-07-08
 
 - **BREAKING:** API Changed to use generics that implement Serialize/Deserialize
   - Fixes a problem where the JCS library converts a JSON Number to a Fixed Floating
     point number causing it to be represented as `ff*`
 
-## 5th July 2025 Release 0.1.4
+## [0.1.4] - 2025-07-05
 
 - **FEATURE:** `sign_jcs_data()` you can now specify a signature `created` attribute
 - **TESTING:** Added DataIntegrity Reference Test
 - **MAINTENANCE:** Addressing Rust lint warnings
 - **MAINTENANCE:** Updating crate dependencies
 
-## 17th June 2025 Release 0.1.3
+## [0.1.3] - 2025-06-17
 
 - **FEATURE:** **BREAKING** `GenericDocument` replaced with `SigningDocument` and
   `SignedDocument`
   - `SigningDocument`: Used when signing data
   - `SignedDocument`: Used when verifying data
 
-## 17th June 2025 Release 0.1.2
+## [0.1.2] - 2025-06-17
 
 - **BREAKING:** `sign_data_jcs()` renamed to `sign_jcs_data()`
 - **BREAKING:** `sign_jcs_data()` no longer requires the `vm_id` parameter
@@ -858,7 +882,7 @@ DID Document itself.
   - Optimisation method for witness nodes that only require proof, not the full
     signed document
 
-## 6th June 2025 Release 0.1.1
+## [0.1.1] - 2025-06-06
 
 - **FEATURE:** Can now verify a JSON Document
 - **FEATURE:** Added example Verification tool for loading signed documents and
@@ -866,6 +890,6 @@ DID Document itself.
 - **FIX:** Serialization of input documents was not correctly handling `@context`
   - It now correctly handles `@context` fields and places them in the proof
 
-## 29th May 2025 Release 0.1.0
+## [0.1.0] - 2025-05-29
 
 - Initial release of crate

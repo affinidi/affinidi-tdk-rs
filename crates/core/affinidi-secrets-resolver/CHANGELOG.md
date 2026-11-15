@@ -1,6 +1,8 @@
 # Affinidi Secrets Manager
 
-## Unreleased (0.5.19) — JWK-loaded EC secrets match generated ones; JWK key material is validated
+## [0.5.19] - 2026-11-15
+
+JWK-loaded EC secrets match generated ones; JWK key material is validated
 
 **Behaviour changes (R3.6)** (#1050). Released as a patch: no signature
 change, and the old behaviour was a bug (a JWK-loaded EC secret could not
@@ -25,7 +27,9 @@ produce a multikey).
   Ed25519 private key shorter than 32 bytes.
 
 
-## Unreleased (0.5.18) — affinidi-crypto 0.3
+## [0.5.18] - 2026-11-13
+
+affinidi-crypto 0.3
 
 - **Changed:** requires `affinidi-crypto` 0.3. `Secret::generate_ed25519`,
   `generate_x25519`, `generate_p256`, `generate_p384`, `generate_p521`,
@@ -39,7 +43,9 @@ produce a multikey).
   types to match. Released as a patch, per ADR 0003, because `didwebvh-rs`
   pins this crate at `0.5`.
 
-## Unreleased (0.5.17) — fewer unwiped copies of private keys
+## [0.5.17] - 2026-11-12
+
+fewer unwiped copies of private keys
 
 `Secret` is zeroize-on-drop, but some of the buffers it is built from were
 not wiped:
@@ -67,7 +73,9 @@ not wiped:
 
 No behaviour change and no breaking API change: one function is added.
 
-## Unreleased (0.5.16) — `ThreadedSecretsResolver` waits for room instead of dropping commands
+## [0.5.16] - 2026-11-12
+
+`ThreadedSecretsResolver` waits for room instead of dropping commands
 
 `ThreadedSecretsResolver` sent every command with `try_send` on a 32-slot
 channel and, when the channel was full, logged a warning and carried on:
@@ -111,7 +119,9 @@ Behaviour change (R3.6):
 No caller in this workspace relies on the old timing, and none passes its own
 channel.
 
-## Unreleased (0.5.15) — `Secret::from_str` renamed to say what it takes
+## [0.5.15] - 2026-10-02
+
+`Secret::from_str` renamed to say what it takes
 
 `Secret::from_str(key_id, &Value)` was named and documented as if it parsed a
 JWK string, but it takes a `serde_json::Value` (#893). It is now deprecated in
@@ -127,7 +137,9 @@ breaking change; it only emits a deprecation warning. Both new constructors have
 compiled doctests in place of the old `ignore`d example, which passed a `&str`
 and could never have built.
 
-## Unreleased (0.5.14) — wasm32 builds again
+## [0.5.14] - 2026-10-01
+
+wasm32 builds again
 
 `cargo check --target wasm32-unknown-unknown` failed in `getrandom`. 0.5.13
 replaced the wasm32 `getrandom` 0.3 pin with 0.4, but `ahash` 0.8 (its
@@ -135,13 +147,17 @@ replaced the wasm32 `getrandom` 0.3 pin with 0.4, but `ahash` 0.8 (its
 Both pins are now declared. Earlier releases were also broken on wasm32: from
 `rand` 0.10, `getrandom` 0.4 had no backend there. Native builds are unaffected.
 
-## Unreleased (0.5.13) — `getrandom` 0.4 on wasm
+## [0.5.13] - 2026-10-01
+
+`getrandom` 0.4 on wasm
 
 No behaviour change. The wasm32 `getrandom` pin moves from 0.3 to 0.4
 (`wasm_js`), the version `rand` 0.10 uses; the 0.3 pin was waiting on
 ed25519-dalek, which has since moved.
 
-## Unreleased (0.5.12) — ML-DSA secrets can be written down
+## [0.5.12] - 2026-09-15
+
+ML-DSA secrets can be written down
 
 `Secret::generate_ml_dsa_{44,65,87}` produced a secret whose `secret_material`
 was an empty string, so serialising one wrote `"privateKeyMultibase": ""` and
@@ -162,7 +178,9 @@ and nothing to write that could be read back. `slh_dsa_secret_does_not_survive_a
 pins that, so the resemblance to the ML-DSA defect does not invite someone to
 "fix" it by inventing a code point.
 
-## Unreleased (0.5.11) — `sha2` 0.11
+## [0.5.11] - 2026-09-07
+
+`sha2` 0.11
 
 No behaviour change and no public API change: these are private dependencies
 here, which is what lets each crate move on its own schedule. Verified by
@@ -171,14 +189,16 @@ in the workspace.
 
 Version bump only; no source change. 23 tests green.
 
-## Unreleased (0.5.10) — dependency refresh
+## [0.5.10] - 2026-08-23
+
+dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
 - No source or API change; the bumps are declaration-only and the crate
   compiles unmodified against them. Bumped workspace-wide in the same
   change so no two versions of these crates are compiled side by side.
 
-## 31st July 2026 (0.5.9)
+## [0.5.9] - 2026-07-31
 
 Moves to **curve25519-dalek 5** (`ed25519-dalek` 2 -> 3, `x25519-dalek` 2 -> 3),
 which brings rand_core 0.10 and signature 3 with it. rand 0.10 renamed `OsRng`
@@ -189,13 +209,13 @@ Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) p
 `[patch.crates-io]`, and a minor bump would break the redirect and pull a second
 copy from crates.io.
 
-## 13th June 2026 (0.5.8)
+## [0.5.8] - 2026-06-13
 
 Semver wave (W7 — release W11). `SecretsResolverError` is now `#[non_exhaustive]`
 (match with a wildcard arm). Patch bump preserves the `didwebvh-rs`
 `[patch.crates-io]` coupling — see ADR 0003 and the migration guide.
 
-## 6th June 2026 (0.5.7)
+## [0.5.7] - 2026-06-06
 
 - **Full P-521 secret support (#357).** Added `Secret::generate_p521`
   (load/generate P-521 key-agreement secrets) and wired P-521 into
@@ -205,7 +225,7 @@ Semver wave (W7 — release W11). `SecretsResolverError` is now `#[non_exhaustiv
   supported". This lets a sender/recipient actually use a P-521
   key-agreement key end-to-end. New `p521` feature (on by default).
 
-## 28th May 2026 (0.5.6)
+## [0.5.6] - 2026-05-28
 
 - **SECURITY (HIGH):** Redact private key material in `Debug` output for
   both `Secret` and `SecretMaterial`. `Secret` derived `Debug` while
@@ -219,7 +239,7 @@ Semver wave (W7 — release W11). `SecretsResolverError` is now `#[non_exhaustiv
   the key bytes as `[REDACTED]`. `ZeroizeOnDrop` continues to cover heap
   lifetime; this closes the print-side leak.
 
-## 18th April 2026 (0.5.5)
+## [0.5.5] - 2026-04-18
 
 - **FEATURE:** `post-quantum` Cargo feature (off by default) with
   `ml-dsa` and `slh-dsa` sub-flags. Adds `Secret::generate_ml_dsa_44`,
@@ -237,45 +257,49 @@ Semver wave (W7 — release W11). `SecretsResolverError` is now `#[non_exhaustiv
   multikeys use the exact official multicodec codes (guards against
   drift toward invented codec values).
 
-## 15th April 2026 (0.5.3)
+## [0.5.3] - 2026-04-15
 
 - **CHANGE:** Removed `multihash` crate dependency (yanked `core2` transitive dep)
   - Multihash encoding now uses inline varint encoding via existing `unsigned-varint`
     dependency — output is byte-identical
 
-## 3rd November October 2025 (0.5.2)
+## [0.5.2] - 2026-02-13
+
+3rd November October 2025
 
 - **BREAKING:** Now uses the affinidi-crypto library for all cryptographic operations
 - **FEATURE:** Added ability to deserialize `Secret` from a privateKeyMultiBase
   string
 
-## 3rd November October 2025 (0.4.0)
+## [0.4.0] - 2025-11-03
+
+3rd November October 2025
 
 - **BREAKING:** `Secret::from_multibase()` API changed to just need a private string
 
-## 22nd October 2025 (0.3.5)
+## [0.3.5] - 2025-10-22
 
 - **FIX:** ed25519 --> x25519 bit swap was inverted
 
-## 21st October 2025 (0.3.4)
+## [0.3.4] - 2025-10-21
 
 - **FEATURE:** Ability to convert Ed25519 secret to X25519 secret is now public
   - `ed25519_private_to_x25519_private_key()`
 
-## 12th October 2025 (0.3.3)
+## [0.3.3] - 2025-10-12
 
 - **IMPROVEMENT:** Implemented stronger and more consistent zeroize on drop for
   `Secret`
   - This may cause breaking changes for apps where they were not using references
     to `Secret`
 
-## 9th October 2025 (0.3.2)
+## [0.3.2] - 2025-10-09
 
 - **FIX:** secp256k1 Public point compression was off by a byte causing decrypt
   failures.
   - No loss of security as it hard failed to decrypt
 
-## 8th October 2025 (0.3.1)
+## [0.3.1] - 2025-10-08
 
 - **FIX:** P-256 and P-384 Public point compression was off by a byte causing decrypt
   failures.
@@ -285,7 +309,7 @@ Semver wave (W7 — release W11). `SecretsResolverError` is now `#[non_exhaustiv
   - Changed `P256` to `P-256` and `P384` to `P-384`
 - **CHORE:** Additional Unit Tests added (50.77% Coverage)
 
-## 3rd October 2025 (0.3.0)
+## [0.3.0] - 2025-10-03
 
 - **FEATURE:** `Secret::generate_ed25519()` now allows for creation from optional
   seed
@@ -293,58 +317,60 @@ Semver wave (W7 — release W11). `SecretsResolverError` is now `#[non_exhaustiv
   seed
 - **NOTE:** The above changes causes a breaking API change
 
-## 1st October 2025 (0.2.1, 0.2.2)
+## [0.2.2] - 2025-10-01
+
+Also covers 0.2.1, released the same day.
 
 - **FIX:** Secret struct deserialization was not correct
   - Added a unit test to check deserialization of Secret
   - serde now correctly names the SecretMaterial fields
 - **FIX:** JWK conversions from bytes were not correct for Ecliptic Curves
 
-## 30th September 2025 (0.2.0)
+## [0.2.0] - 2025-09-30
 
 - **IMPROVEMENT:** SSI Crate dependency removed from this library
 - **IMPROVEMENT:** Crypto methods added directly to this library for easier 3rd
   party usage
 
-## 13th September 2025 (0.1.18)
+## [0.1.18] - 2025-09-13
 
 - **IMPROVEMENT:** Crate can now be compiled to a WASM compatible library
 - **FIX:** Incorrect encoding on multikey public_keys for P-256, P384 and secp256k1
 
-## 10th September 2025 (0.1.16)
+## [0.1.16] - 2025-09-10
 
 - **IMPROVEMENT:** Removing SSI crate as a dependency
 - **IMPROVEMENT:** Added ability to create ED25519 keys directly
 
-## 8th September 2025 (0.1.14)
+## [0.1.14] - 2025-09-08
 
 - **FIX:** X25519 Secrets had type set to Ed25519
 
-## 2nd September 2025 (0.1.13)
+## [0.1.13] - 2025-09-02
 
 - **FEATURE:** Ability to convert a ED25519 Secret to a X25519 Secret added
 - **MAINTENANCE:** Dependencies updated
 
-## 9th June 2025 (0.1.12)
+## [0.1.12] - 2025-06-09
 
 - **MAINTENANCE:** Dependencies updated
 - **MAINTENANCE:** Addressing Rust linting warnings
 - **CHANGE:** Hashing of publickeys returns base58 only not multiencode
 
-## 14th June 2025 (0.1.11)
+## [0.1.11] - 2025-06-14
 
 - **MAINTENANCE:** Updated SSI crate from 0.11 to 0.12
 - **FEATURE:** Loading JWK format keys will support public/private byte methods
   - This has been implemented using a Inner Shadow struct for Secret `Deseralization`
 
-## 6th June 2025 (0.1.10)
+## [0.1.10] - 2025-06-06
 
 - **FIX:** Generating a hash of the public key `multibase` was incorrect
 - **FEATURE:** Added `get_hash()` to `Secrets` allowing for easier hashing of keys
   without converting to a secret
 - **TESTS:** Added more unit tests to test functionality of `get_hash()`
 
-## 29th May 2025 (0.1.9)
+## [0.1.9] - 2025-05-29
 
 - **MAINTENANCE:** Crate dependencies updated
 - **FEATURE:** `get_public_bytes()` and `get_private_bytes()` methods added
@@ -354,10 +380,10 @@ Semver wave (W7 — release W11). `SecretsResolverError` is now `#[non_exhaustiv
   - Returns a Base58btc encoded Multihash of the MultiKey Public Key
   - Useful for checks against pre-shared keys without disclosing the key itself
 
-## Release 0.1.7
+## [0.1.7] - 2025-03-27
 
 - Removed drop() trait implementation as was causing the SecretsTask to close early
 
-## Release 0.1.0
+## [0.1.0] - 2025-03-03
 
 - Initial release of crate

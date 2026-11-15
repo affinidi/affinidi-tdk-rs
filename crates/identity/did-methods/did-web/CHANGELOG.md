@@ -1,6 +1,8 @@
 # Affinidi DID Web
 
-## 0.1.9 — relative ids in a fetched document
+## [0.1.9] - 2026-11-15
+
+relative ids in a fetched document
 
 - **Fixed (#1042):** a fetched document whose verification method or service
   ids, controllers or relationship references are relative DID URLs
@@ -19,7 +21,9 @@
 - Compatibility (R3.6): no signature change; documents that failed to parse
   now resolve.
 
-## 0.1.8 — the decoded domain must be a host, each path segment one segment
+## [0.1.8] - 2026-11-12
+
+the decoded domain must be a host, each path segment one segment
 
 Behaviour change (R3.6): some DIDs that resolved before are refused with
 `DidWebError::InvalidDid`. No signature change.
@@ -37,7 +41,9 @@ Behaviour change (R3.6): some DIDs that resolved before are refused with
   and `\` already were, so the fixed `/did.json` suffix cannot be pushed into
   a query or fragment.
 
-## 0.1.7 — the guard holds behind a proxy and for a caller's client
+## [0.1.7] - 2026-11-09
+
+the guard holds behind a proxy and for a caller's client
 
 - **No proxy under `HostPolicy::PublicOnly`.** The default client honoured
   `HTTPS_PROXY` and the other proxy variables. A proxy resolves the hostname
@@ -52,7 +58,9 @@ Behaviour change (R3.6): some DIDs that resolved before are refused with
   names is checked. Use `with_client_builder`.
 - Building a resolver under `HostPolicy::AllowPrivate` logs a warning.
 
-## 0.1.6 — the fetched document must name the requested DID
+## [0.1.6] - 2026-10-01
+
+the fetched document must name the requested DID
 
 - Resolution now refuses a fetched DID document whose `id` is not the DID
   that was requested (new `DocumentIdMismatch` error). Previously a server
@@ -61,9 +69,9 @@ Behaviour change (R3.6): some DIDs that resolved before are refused with
 
 ## Changelog history
 
-## 11th September 2026
+## [0.1.5] - 2026-09-11
 
-### 0.1.5 — the SSRF guard moves to `affinidi-net-guard`
+the SSRF guard moves to `affinidi-net-guard`
 
 - Address classification and the connect-time DNS resolver now come from the
   new shared `affinidi-net-guard` 0.1.0 crate instead of private code here.
@@ -93,9 +101,9 @@ Behaviour change (R3.6): some DIDs that resolved before are refused with
 - The direct `tokio` dependency is dropped; the lookup happens in
   `affinidi-net-guard`.
 
-## 3rd September 2026
+## [0.1.4] - 2026-09-03
 
-### 0.1.4 — SSRF hardening
+SSRF hardening
 
 - **SECURITY (SSRF):** a `did:web` value names the host the resolver fetches
   from, so an attacker-supplied DID could steer the resolver at an internal or
@@ -131,25 +139,21 @@ Behaviour change (R3.6): some DIDs that resolved before are refused with
   latter on a client you pass to `DIDWeb::with_client`, which otherwise gets
   only the literal-address half of the guard.
 
-## 19th July 2026
+## [0.1.3] - 2026-07-19
 
-### 0.1.3 — affinidi-did-common 0.4
+affinidi-did-common 0.4
 
 - Bumped the `affinidi-did-common` requirement from `"0.3"` to `"0.4"`.
   No functional change to this crate: `Document` gained a typed
   `also_known_as` field, which is additive.
 
-## 14th June 2026
-
-### Affinidi DID Web (0.1.2)
+## [0.1.2] - 2026-06-14
 
 - `DidWebError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
   additively. Patch bump keeps the `0.1` pin valid; consumers that `match` it
   must add a `_` arm. No behaviour change.
 
-## 28th May 2026
-
-### Affinidi DID Web (0.1.1)
+## [0.1.1] - 2026-05-28
 
 - **SECURITY (HIGH — SSRF):** The default reqwest client follows up to
   10 redirects. A hostile `did:web` origin could 302 the resolver to
@@ -169,9 +173,9 @@ Behaviour change (R3.6): some DIDs that resolved before are refused with
   `..`, or contain `/` or `\`. New regression test
   `url_rejects_path_traversal_segments`.
 
-## 17th April 2026
+## [0.1.0] - 2026-04-17
 
-### Affinidi DID Web (0.1.0) — initial release
+initial release
 
 - **NEW:** Minimal in-workspace `did:web` resolver per the
   [W3C did:web method specification](https://w3c-ccg.github.io/did-method-web/).

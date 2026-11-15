@@ -17,7 +17,16 @@
 # An undocumented release is a silent breaking change waiting to happen.
 #
 # The rule: if a publishable crate's VERSION changed in this PR, that crate's
-# CHANGELOG.md must MENTION THE NEW VERSION.
+# CHANGELOG.md must carry a heading for the new version in exactly this form:
+#
+#     ## [x.y.z] - YYYY-MM-DD
+#
+# One grammar, so a reader (or a tool extracting "the notes for x.y.z") can
+# find a release and see when it shipped. Five heading shapes used to coexist,
+# and 32 changelogs headed versions that had already been published
+# `## Unreleased (x.y.z)` — merging to main publishes, so nothing in this repo
+# is "unreleased" once merged (#1065). `## Unreleased (x.y.z)` and
+# `## [x.y.z] - Unreleased` are therefore refused outright for the new version.
 #
 # Deliberately not the weaker "the changelog file was touched". A PR that edits
 # a changelog for one reason and bumps a version for another would satisfy that
@@ -80,13 +89,22 @@ while IFS="$(printf '\t')" read -r name dir; do
 
   found=1
   changelog="$dir/CHANGELOG.md"
+  ver_re=$(printf '%s' "$new_version" | sed 's/\./\\./g')
   if [ ! -f "$changelog" ]; then
     echo "  ${RED}MISSING${NC} $name: ${old_version:-<new>} -> $new_version but $changelog does not exist"
     fail=1
-  # Match the version as a whole token: a plain substring search would let
-  # `0.1.30`'s entry satisfy a bump to `0.1.3`.
-  elif grep -qE "(^|[^0-9.])$(printf '%s' "$new_version" | sed 's/\./\\./g')([^0-9.]|\$)" "$changelog"; then
+  # The version is escaped and the heading anchored at both ends, so
+  # `0.1.30`'s entry cannot satisfy a bump to `0.1.3`.
+  elif grep -qE "^##[[:space:]]+Unreleased[[:space:]]*\($ver_re\)|^##[[:space:]]+\[$ver_re\][[:space:]]+-[[:space:]]+Unreleased" "$changelog"; then
+    echo "  ${RED}UNRELEASED${NC} $name: ${old_version:-<new>} -> $new_version is headed \"Unreleased\" in $changelog"
+    echo "         merging publishes it; head it  ## [$new_version] - $(date -u +%Y-%m-%d)"
+    fail=1
+  elif grep -qE "^## \[$ver_re\] - [0-9]{4}-[0-9]{2}-[0-9]{2}\$" "$changelog"; then
     echo "  ${GREEN}ok${NC}   $name: ${old_version:-<new>} -> $new_version (documented)"
+  elif grep -qE "(^|[^0-9.])$ver_re([^0-9.]|\$)" "$changelog"; then
+    echo "  ${RED}HEADING${NC} $name: ${old_version:-<new>} -> $new_version is mentioned in $changelog but has no"
+    echo "         \"## [$new_version] - YYYY-MM-DD\" heading"
+    fail=1
   else
     echo "  ${RED}MISSING${NC} $name: ${old_version:-<new>} -> $new_version, but $new_version does not appear in $changelog"
     fail=1
@@ -105,7 +123,8 @@ if [ "$fail" -ne 0 ]; then
   echo "${RED}A crate is being published with no record of what changed.${NC}"
   echo "Consumers pin these crates loosely, so a behavioural change is breaking for"
   echo "them even when no signature changes — the changelog is where they find out."
-  echo "Add an entry naming the new version to the crate's ${CYAN}CHANGELOG.md${NC}."
+  echo "Add an entry headed ${CYAN}## [x.y.z] - YYYY-MM-DD${NC} for the new version to the"
+  echo "crate's CHANGELOG.md, newest first, with a one-line summary as its first line."
   exit 1
 fi
 

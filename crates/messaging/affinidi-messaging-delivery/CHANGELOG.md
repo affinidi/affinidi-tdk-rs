@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.3.0 — guarded outbox transitions, idempotent sends, backpressure instead of loss, settle-time retention
+## [0.3.0] - 2026-11-15
+
+guarded outbox transitions, idempotent sends, backpressure instead of loss, settle-time retention
 
 Breaking: see **API** and the behaviour notes. Requires the host to re-check
 its handling of `Sent` and of `subscribe()` (R3.6).
@@ -89,7 +91,9 @@ application-driven ack — so that a receipt means "persisted", and receiver-sid
 deduplication on the idempotency key.
 
 
-## 0.2.0 — receipts on request, as `messaging/receipt/0.1`; relayed sends are not polled and settle unconfirmable
+## [0.2.0] - 2026-11-14
+
+receipts on request, as `messaging/receipt/0.1`; relayed sends are not polled and settle unconfirmable
 
 Implements the delivery-receipt and evidence-path requirements of the VTI
 specification (VTI-TRN-042 as amended, VTI-TRN-060 – VTI-TRN-064) and the
@@ -160,7 +164,9 @@ window.
   ask. No released packer existed, so no deployment sent receipts before.
 - Requires `affinidi-messaging-core` 0.1.12.
 
-## 0.1.23 — a listing drain is not a delivery; bounded inbound queue and drain sends
+## [0.1.23] - 2026-11-12
+
+a listing drain is not a delivery; bounded inbound queue and drain sends
 
 **The outbox listing no longer settles `Delivered`.** Without the mediator's
 receipts, `poll_outbox_drain` settled a `Sent` entry `Delivered` when its hop
@@ -224,7 +230,9 @@ the entry at once instead of after its window. `DrainReport` and
 `DrainPollReport` gain fields (both are `#[non_exhaustive]`); `SendFailure`
 and `SEND_TIMEOUT` are new in `drain`. No signatures change.
 
-## 0.1.22 — delivery evidence and replies count only from the addressed peer
+## [0.1.22] - 2026-11-12
+
+delivery evidence and replies count only from the addressed peer
 
 A layer receipt or an in-thread reply settled an outbox entry `Delivered` by
 idempotency key alone. Neither the sender of the evidence nor whether the
@@ -257,7 +265,9 @@ request: the entry settles `Unconfirmed` at its deadline and the request times
 out, with the reply delivered to `subscribe`. Consumers in this stack address
 peers by the DID those peers answer from, so no change is expected for them.
 No wire format changes.
-## 0.1.21 — the receipt poll asks about long-waiting messages less often
+## [0.1.21] - 2026-11-10
+
+the receipt poll asks about long-waiting messages less often
 
 `outbox_drain_loop` asked the mediator for `messaging/message/status` about
 every `Sent` entry on every tick, `ceil(sent / 100)` requests per tick for as
@@ -280,7 +290,9 @@ Pacing is in memory, so a restart asks about every entry once.
 `poll_outbox_drain` is unchanged; `poll_outbox_drain_paced` and `StatusPacer`
 are new.
 
-## 0.1.20 — a slow ack no longer stalls inbound dispatch
+## [0.1.20] - 2026-10-06
+
+a slow ack no longer stalls inbound dispatch
 
 **Behaviour change.** `ack_via_source` and the parked-ack retry pass now bound
 each `MessageTransport::ack` to 10 s (`ACK_TIMEOUT`); a timed-out ack is parked
@@ -299,7 +311,9 @@ them for 30 s (`ACK_SLOW_COOLDOWN`), so acks that keep resolving just under the
 bound cannot throttle dispatch to one message per `ACK_TIMEOUT`; the retry pass
 settles them off the dispatcher.
 
-## 0.1.19 — delivery is settled on the mediator's receipt, not on the outbox draining
+## [0.1.19] - 2026-09-26
+
+delivery is settled on the mediator's receipt, not on the outbox draining
 
 `poll_outbox_drain` inferred pickup from the sender's outbox: a hop-id seen
 queued and later gone settled `Delivered`. That was wrong both ways.
@@ -323,7 +337,9 @@ outbox draining. A transport or mediator without receipts answers `None`, and
 the outbox listing is used exactly as before. `DrainPollReport` gains `lost`.
 See affinidi-tdk-rs#896.
 
-## 0.1.18 — the drain backs off per destination, not per message
+## [0.1.18] - 2026-09-20
+
+the drain backs off per destination, not per message
 
 The drain discarded the send error entirely (`Err(_e)`), so a queue-full
 refusal was handled as an ordinary failure: bump `attempts`, back off
@@ -357,7 +373,9 @@ An ordinary transport failure keeps its previous behaviour exactly, and a
 closed delivery window still outranks a full queue: an entry that can never be
 delivered is `Failed`, not deferred.
 
-## 0.1.17 — an ack that cannot be delivered is no longer dropped
+## [0.1.17] - 2026-09-20
+
+an ack that cannot be delivered is no longer dropped
 
 An ack is a delete at the mediator, and the dispatcher issues it over the
 transport the message arrived on. Two paths ended with no ack and no durable
@@ -398,7 +416,9 @@ produces a steady climb and no other symptom until the recipient's queue fills.
 
 Additive: no API removed, no behaviour change for a transport whose acks land.
 
-## 0.1.16 — the outbox can be emptied
+## [0.1.16] - 2026-09-18
+
+the outbox can be emptied
 
 `OutboxStore` had no way to remove anything. `put` upserted, state moved
 `Queued → Sent → Delivered | Unconfirmed | Failed`, and there it stopped — so an
@@ -439,9 +459,9 @@ disposable.
 than defaulting the cutoff to 0: the cutoff decides which records are destroyed,
 and a silent fallback means that decision gets made on a bad reading with
 nothing to show for it.
-## 16th September 2026
+## [0.1.15] - 2026-09-16
 
-### 0.1.15 — build `Inbound` through its constructor
+build `Inbound` through its constructor
 
 `Inbound` is `#[non_exhaustive]` as of `affinidi-messaging-core` 0.1.8, so the
 conformance harness and the service tests construct it with `Inbound::new`

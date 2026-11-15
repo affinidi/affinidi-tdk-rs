@@ -1,6 +1,8 @@
 # Affinidi SIOPv2 Changelog
 
-## Unreleased (0.2.0) — ID Tokens are signed and verified
+## [0.2.0] - 2026-11-12
+
+ID Tokens are signed and verified
 
 Breaking (R3.6). No in-workspace caller outside `affinidi-tdk`'s re-export.
 
@@ -26,19 +28,23 @@ Breaking (R3.6). No in-workspace caller outside `affinidi-tdk`'s re-export.
 - README and crate docs no longer describe claim checks as complete
   validation.
 
-## Unreleased (0.1.4) — `sha2` 0.11
+## [0.1.4] - 2026-10-01
+
+`sha2` 0.11
 
 No behaviour change and no public API change: this is a private dependencies here.
 Verified by the crate's test suite.
 
-## Unreleased (0.1.3) — dependency refresh
+## [0.1.3] - 2026-08-23
+
+dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
 - No source or API change; the bumps are declaration-only and the crate
   compiles unmodified against them. Bumped workspace-wide in the same
   change so no two versions of these crates are compiled side by side.
 
-## 14th June 2026 Release 0.1.2
+## [0.1.2] - 2026-06-14
 
 - `SiopError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
   additively. Patch bump keeps the `0.1` pin valid; consumers that `match` it

@@ -1,6 +1,8 @@
 # Affinidi DID Authentication
 
-## Unreleased (0.3.17) — only retryable errors are retried
+## [0.3.17] - 2026-11-15
+
+only retryable errors are retried
 
 ### Changed — BEHAVIOUR (R3.6)
 
@@ -25,17 +27,23 @@
   running); the enum is `#[non_exhaustive]`, so these are additive.
 - `DIDAuthError` is `Clone`, so one result can be handed to several waiters.
 
-## Unreleased (0.3.16) — affinidi-crypto 0.3
+## [0.3.16] - 2026-11-13
+
+affinidi-crypto 0.3
 
 - **Changed:** requires `affinidi-crypto` 0.3. No code change and no
   `affinidi-crypto` type in this crate's API.
-## 0.3.15 — challenge request body built with `serde_json`
+## [0.3.15] - 2026-11-13
+
+challenge request body built with `serde_json`
 
 The `/challenge` request body was assembled with `format!`, so the DID was not
 JSON-escaped. It is now built with `serde_json::json!`. For any valid DID the
 bytes on the wire are the same apart from whitespace. No API change.
 
-## Unreleased (0.3.14) — `refresh_check` handles small expiry values
+## [0.3.14] - 2026-11-12
+
+`refresh_check` handles small expiry values
 
 ### Fixed
 
@@ -59,7 +67,9 @@ bytes on the wire are the same apart from whitespace. No API change.
   `Refresh`/`Expired` rather than panicking (debug) or `Ok` (release). No API
   change.
 
-## Unreleased (0.3.13) — an authentication `429` is typed, and survives the retry loop
+## [0.3.13] - 2026-09-16
+
+an authentication `429` is typed, and survives the retry loop
 
 A non-success response from the authentication service (`/challenge`, the
 authenticate POST, `/refresh`) became `DIDAuthError::Authentication(String)`
@@ -100,14 +110,16 @@ Both variants are additive: `DIDAuthError` is `#[non_exhaustive]`.
   whole call 10 s, and a longer wait would turn the `429` into a bare timeout.
 - New dependency: `affinidi-messaging-core` 0.1.7.
 
-## Unreleased (0.3.12) — dependency refresh
+## [0.3.12] - 2026-08-23
+
+dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
 - No source or API change; the bumps are declaration-only and the crate
   compiles unmodified against them. Bumped workspace-wide in the same
   change so no two versions of these crates are compiled side by side.
 
-## 0.3.11 — 2026-08-18
+## [0.3.11] - 2026-08-18
 
 ### Fixed
 
@@ -136,7 +148,7 @@ Both variants are additive: `DIDAuthError` is `#[non_exhaustive]`.
   "still valid": an expired *refresh* token still falls through to a full
   handshake, because there is nothing left to refresh with.
 
-## 0.3.10 — 2026-07-19
+## [0.3.10] - 2026-07-19
 
 ### Changed
 
@@ -144,19 +156,19 @@ Both variants are additive: `DIDAuthError` is `#[non_exhaustive]`.
   No functional change to this crate: `Document` gained a typed
   `also_known_as` field, which is additive.
 
-## 4th July 2026 (0.3.9)
+## [0.3.9] - 2026-07-04
 
 Internal refactor: the local `_key_type_to_curve` helper is replaced by
 `affinidi_crypto::KeyType::key_agreement_curve()`, the shared single source of
 truth for the `KeyType` → key-agreement `Curve` mapping. No public API or
 behaviour change; patch bump — see ADR 0003.
 
-## 13th June 2026 (0.3.8)
+## [0.3.8] - 2026-06-13
 
 Semver wave (W7 — release W11). `DIDAuthError` is now `#[non_exhaustive]` (match
 with a wildcard arm). Patch bump — see ADR 0003 and the migration guide.
 
-## 13th June 2026 (0.3.7)
+## [0.3.7] - 2026-06-13
 
 Auth hygiene (W6):
 
@@ -170,7 +182,7 @@ Auth hygiene (W6):
   ("Challenge received", "Tokens received", request URL + status). A capture
   test asserts no sensitive value appears at `DEBUG`.
 
-## 6th June 2026 (0.3.6)
+## [0.3.6] - 2026-06-06
 
 - Robust sender/recipient key-agreement negotiation (#357). The authcrypt
   pack path now enumerates *all* of the sender's usable key-agreement keys
@@ -185,7 +197,7 @@ Auth hygiene (W6):
   messaging SDK. The sender key-type → curve mapping now also covers the
   newly-supported P-384 and P-521 key-agreement curves (#357).
 
-## 1st June 2026 (0.3.5)
+## [0.3.5] - 2026-06-01
 
 - Release on `affinidi-messaging-didcomm` 0.15 (#327). The authcrypt
   challenge/response now uses the key-agreement types from
@@ -193,7 +205,7 @@ Auth hygiene (W6):
   removed); added a direct `affinidi-crypto` dependency. No behaviour
   change — the ECDH-1PU authcrypt path is byte-identical.
 
-## 31st May 2026 (0.3.4)
+## [0.3.4] - 2026-05-31
 
 - Bump `affinidi-messaging-didcomm` to 0.14. This crate authcrypts the
   DID-authentication challenge/response (ECDH-1PU), so it directly picks
@@ -206,7 +218,7 @@ Auth hygiene (W6):
   JWK/multibase parsing is shared with the messaging SDK rather than
   duplicated here.
 
-## 28th May 2026 (0.3.3)
+## [0.3.3] - 2026-05-28
 
 - **SECURITY (HIGH):** Redact bearer / refresh tokens in `Debug` output for
   three sibling structs. Each derived `Debug` while holding `access_token`
@@ -222,18 +234,18 @@ Auth hygiene (W6):
   render the token values as `[REDACTED]`. `Serialize`/`Deserialize`
   unchanged — wire format and persistence are unaffected.
 
-## 28th March 2026 (0.3.1)
+## [0.3.1] - 2026-03-28
 
 - **FIX:** Republish with `affinidi-messaging-didcomm` 0.13 dependency
   (published 0.3.0 still referenced 0.12 on crates.io)
 
-## 10th March 2026 (0.2.4)
+## [0.2.4] - 2026-03-10
 
 - **MIGRATION:** Migrated to new `affinidi-messaging-didcomm` 0.13.0
   - Pack/unpack functions updated to use bridge helpers
   - Import paths changed from `affinidi_didcomm` to `affinidi_messaging_didcomm`
 
-## 15th December 2025 (0.2.3)
+## [0.2.3] - 2025-12-15
 
 - **FEATURE:** Added support for custom authentication handlers via `CustomAuthHandlers`
   `CustomAuthHandler` trait allows custom authentication logic
@@ -242,19 +254,19 @@ Auth hygiene (W6):
   Authentication and refresh methods now check for custom handlers before
   using default logic
 
-## 3rd November 2025 (0.2.2)
+## [0.2.2] - 2025-11-03
 
 - **MAINTENANCE:** Dependency updates
 
-## 30th May 2025 (0.2.0)
+## [0.2.0] - 2025-05-30
 
 - **BREAKING:** Removed SSI crate dependency
 
-## 29th May 2025 (0.1.10)
+## [0.1.10] - 2025-05-29
 
 - **MAINTENANCE:** Updated crate dependencies (SSI Crate 0.10 --> 0.11)
 
-## 3rd May 2025 (0.1.9)
+## [0.1.9] - 2025-05-03
 
 - **FIX:** building the refresh HTTP request was incorrectly using the DID and
   not the REST API URL
@@ -262,7 +274,7 @@ Auth hygiene (W6):
 - **FIX:** Debug log message could cause a panic in the authentication task due
   to a negative `u64` value
 
-## 2nd May 2025 (0.1.8)
+## [0.1.8] - 2025-05-02
 
 - **FEATURE:** Adding improved debug messaging for troubleshooting of refreshing
   auth credentials
@@ -271,14 +283,14 @@ Auth hygiene (W6):
   has improved handling of refresh logic
 - **FEATURE:** Added unit tests for token expiry
 
-## 22nd April 2025 (0.1.7)
+## [0.1.7] - 2025-04-22
 
 - Improved logging of error when no auth service is found
 
-## 24th March 2025 Release 0.1.6
+## [0.1.6] - 2025-03-24
 
 - Implemented caching expiry for AuthenticationRecords
 
-## Release 0.1.0
+## [0.1.0] - 2025-03-11
 
 - Initial release of crate

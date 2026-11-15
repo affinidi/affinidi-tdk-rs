@@ -2,9 +2,9 @@
 
 ## Changelog history
 
-## Unreleased
+## [0.1.6] - 2026-11-15
 
-### 0.1.6 — variable-size primitives take their lead size from the code
+variable-size primitives take their lead size from the code
 
 **Behaviour change (R3.6)** (#1005). Released as a patch: it brings
 variable-size primitives in line with the CESR spec and keripy, and no caller
@@ -28,9 +28,9 @@ in this workspace or affinidi-keri-rs uses a variable-size code.
   too.
 
 
-## 12th November 2026
+## [0.1.5] - 2026-11-12
 
-### 0.1.5 — fixed-size primitives and indexed signatures refuse non-zero pad bits
+fixed-size primitives and indexed signatures refuse non-zero pad bits
 
 A fixed-size primitive with a one- or two-character code has 2 or 4 pad bits
 between the code and the raw bytes, and CESR requires them to be zero (keripy
@@ -52,9 +52,9 @@ parses to the same value as before. Variable-size primitives are unchanged
 (their lead bytes are tracked separately). `CesrError` is `#[non_exhaustive]`,
 so the new variant is additive. No new dependencies.
 
-## 10th November 2026
+## [0.1.4] - 2026-11-10
 
-### 0.1.4 — indexed signature codes as keripy reads them
+indexed signature codes as keripy reads them
 
 A fix to match keripy and the CESR specification. No signature's bytes change,
 and no public signature changes; what `Indexer::ondex()` reports does, and
@@ -82,9 +82,9 @@ its index. A caller that relied on the swapped reading must change.
 - **Ed448 sizes** follow keripy: `0A`/`0B` are 156 characters, `3A`/`3B` 160.
 - New `Indexer::is_current_only`, `tables::indexer_is_current_only`.
 
-## 16th June 2026
+## [0.1.3] - 2026-06-16
 
-### 0.1.3 — guard qb64 parsers against non-ASCII input
+guard qb64 parsers against non-ASCII input
 
 - `Matter::from_qb64`, `Counter::from_qb64`, and `Indexer::from_qb64` now
   reject non-ASCII input up front (returning `CesrError::InvalidCharacter`)
@@ -94,9 +94,9 @@ its index. A caller that relied on the swapped reading must change.
   boundary". Hardening only — no production caller is affected (the wire path
   uses the binary `from_qb2`). Patch bump; no behaviour change for ASCII input.
 
-## 14th June 2026
+## [0.1.2] - 2026-06-14
 
-### 0.1.2 — non_exhaustive CesrError (W7 sweep)
+non_exhaustive CesrError (W7 sweep)
 
 - `CesrError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
   additively. Patch bump keeps the `0.1` pin valid; consumers that `match` it

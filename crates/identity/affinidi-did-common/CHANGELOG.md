@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased (0.4.8) — did:peer:0 documents under the peer DID, SEC1 EC keys from JWKs, validated `DID`s, relative ids
+## [0.4.8] - 2026-11-15
+
+did:peer:0 documents under the peer DID, SEC1 EC keys from JWKs, validated `DID`s, relative ids
 
 Released as a patch, per ADR 0003 (`didwebvh-rs` and `trust-tasks-proof` pin
 this crate at `0.4`). Several items change behaviour; see Compatibility.
@@ -64,7 +66,9 @@ this crate at `0.4`). Several items change behaviour; see Compatibility.
   --all-targets --all-features`; nothing in this workspace relied on any of
   them.
 
-## Unreleased (0.4.7) — affinidi-crypto 0.3
+## [0.4.7] - 2026-11-13
+
+affinidi-crypto 0.3
 
 - **Changed:** requires `affinidi-crypto` 0.3. `KeyMaterial::generate_ed25519`,
   `generate_x25519`, `generate_p256`, `generate_p384` and
@@ -77,7 +81,9 @@ this crate at `0.4`). Several items change behaviour; see Compatibility.
   Released as a patch, per ADR 0003, because `didwebvh-rs` and
   `trust-tasks-proof` pin this crate at `0.4`.
 
-## Unreleased (0.4.6) — `Debug` leaves private keys out; created did:peer keys zeroize
+## [0.4.6] - 2026-11-12
+
+`Debug` leaves private keys out; created did:peer keys zeroize
 
 - **Changed:** `Debug` for `KeyMaterial` printed `private_bytes` in full, and
   for `KeyMaterialFormat` the `Multibase` and `Base58` private keys, although
@@ -102,7 +108,9 @@ this crate at `0.4`). Several items change behaviour; see Compatibility.
   or affinidi-webvh-service. Code that matches on the `Debug` text of these
   types sees `<redacted>`.
 
-## Unreleased (0.4.5) — builds with its default features off
+## [0.4.5] - 2026-10-26
+
+builds with its default features off
 
 `affinidi-did-common` with `default-features = false` failed to compile:
 `KeyMaterial::generate` named every curve's generator, but each is behind its
@@ -111,7 +119,9 @@ for its identifier helpers alone, and was built on its own (`cargo test -p`),
 could not build. `generate` now returns `UnsupportedKeyType` for a curve whose
 feature is off. With the default features nothing changes.
 
-## Unreleased (0.4.4) — did:scid references match by DID
+## [0.4.4] - 2026-10-21
+
+did:scid references match by DID
 
 - **Added:** the `scid` module: `strip_scid_src`, `scid_src`, `with_scid_src`
   and `same_reference`. A `did:scid` identity is the DID; its `src` query is a
@@ -123,7 +133,9 @@ feature is off. With the default features nothing changes.
   against the bare ids its document lists. Every other id still matches
   exactly.
 
-## Unreleased (0.4.3) — a service endpoint's URI is a URI
+## [0.4.3] - 2026-09-22
+
+a service endpoint's URI is a URI
 
 `Endpoint::get_uri` and `get_uris` return the `uri` member's **value** for the
 map and array forms of `serviceEndpoint`, as they already did for the plain
@@ -137,14 +149,16 @@ at 0.4.2, which was already published, so crates.io kept serving the old
 code. Callers that stripped the quotes themselves are unaffected, because
 trimming an unquoted string changes nothing.
 
-## Unreleased (0.4.2) — dependency refresh
+## [0.4.2] - 2026-08-23
+
+dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
 - No source or API change; the bumps are declaration-only and the crate
   compiles unmodified against them. Bumped workspace-wide in the same
   change so no two versions of these crates are compiled side by side.
 
-## 31st July 2026 (0.4.1)
+## [0.4.1] - 2026-07-31
 
 Moves to **curve25519-dalek 5** (`ed25519-dalek` 2 -> 3, `x25519-dalek` 2 -> 3),
 which brings rand_core 0.10 and signature 3 with it. rand 0.10 renamed `OsRng`
