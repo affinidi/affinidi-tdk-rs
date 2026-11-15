@@ -261,6 +261,9 @@ pub(crate) struct NetworkTask {
     /// Consecutive failed connection attempts, for the backoff.
     failures: u32,
     missed_pings: u32,
+    /// Messages from the server that did not parse, for rate-limiting the
+    /// warning.
+    unparseable_messages: u64,
 }
 
 impl NetworkTask {
@@ -293,6 +296,7 @@ impl NetworkTask {
                 connecting: None,
                 failures: 0,
                 missed_pings: 0,
+                unparseable_messages: 0,
             };
             // A restart after a panic must not report the previous run's
             // connection as still up.
@@ -387,14 +391,7 @@ impl NetworkTask {
         match inbound {
             Inbound::Message(message) => {
                 debug!("Received DID Lookup response ({})", message);
-                if let Err(err) = self.ws_recv(&message) {
-                    // A frame that cannot be parsed cannot be correlated with
-                    // its request: the stream is not one this client
-                    // understands, so start afresh rather than leave every
-                    // caller to wait out its timeout.
-                    warn!("Dropping the connection: {err}");
-                    self.connection_lost(err.to_string());
-                }
+                self.ws_recv(&message);
             }
             Inbound::Ping(data) => {
                 if let Some(connection) = self.connection.as_mut() {
@@ -551,14 +548,20 @@ impl NetworkTask {
 
     /// Processes inbound websocket messages from the remote server.
     ///
-    /// Returns an error for a message that is not a response this client can
-    /// parse: it cannot be routed to its caller.
-    fn ws_recv(&mut self, message: &str) -> Result<(), DIDCacheError> {
-        let response: WSResponseType = serde_json::from_str(message).map_err(|e| {
-            DIDCacheError::TransportError(format!(
-                "unparseable message from the DID cache server: {e}"
-            ))
-        })?;
+    /// A message this client cannot parse is not a connection fault: the
+    /// server and the SDK are deployed independently, and a newer server may
+    /// answer in a shape this client does not know. Dropping the connection
+    /// would fail every other request in flight, and reconnect on every such
+    /// answer. Instead, the one waiter the message names (by its `hash`) gets
+    /// an error, and a message naming none is ignored.
+    fn ws_recv(&mut self, message: &str) {
+        let response: WSResponseType = match serde_json::from_str(message) {
+            Ok(response) => response,
+            Err(e) => {
+                self.unparseable(message, &e);
+                return;
+            }
+        };
         match response {
             WSResponseType::Response(response) => {
                 debug!("Received response: {:?}", response.hash);
@@ -593,9 +596,50 @@ impl NetworkTask {
                 }
             }
         }
-
-        Ok(())
     }
+
+    /// Handle a message that did not parse: fail the waiter it names, if any.
+    fn unparseable(&mut self, message: &str, error: &serde_json::Error) {
+        self.unparseable_messages = self.unparseable_messages.saturating_add(1);
+        let hash = request_hash(message);
+        // Warn for the first few, then every hundredth, so a server that
+        // answers everything in a new shape does not flood the log.
+        let count = self.unparseable_messages;
+        if count <= 3 || count.is_multiple_of(100) {
+            warn!(
+                "Unparseable message from the DID cache server ({count} so far; \
+                 the server may be newer than this client): {error}"
+            );
+        } else {
+            debug!("Unparseable message from the DID cache server: {error}");
+        }
+        let Some(hash) = hash else {
+            return;
+        };
+        if let Some(channels) = self.cache.remove(&hash, None) {
+            for channel in channels {
+                let _ = channel.send(WSCommands::TransportFailed(format!(
+                    "the DID cache server's answer could not be parsed \
+                     (is the server newer than this client?): {error}"
+                )));
+            }
+        }
+    }
+}
+
+/// The request hash an unparseable message carries, if it has one where every
+/// response type keeps it: a `hash` of two integers, at the top level or one
+/// level down (inside the externally tagged variant).
+fn request_hash(message: &str) -> Option<[u64; 2]> {
+    let value: serde_json::Value = serde_json::from_str(message).ok()?;
+    let as_hash = |v: &serde_json::Value| -> Option<[u64; 2]> {
+        let array = v.get("hash")?.as_array()?;
+        match array.as_slice() {
+            [a, b] => Some([a.as_u64()?, b.as_u64()?]),
+            _ => None,
+        }
+    };
+    as_hash(&value).or_else(|| value.as_object()?.values().find_map(as_hash))
 }
 
 /// Wait between connection attempts after `failures` consecutive failures:
@@ -687,6 +731,18 @@ mod tests {
             assemble(&mut partial, DataType::Complete(Text), frame("whole")),
             Ok(Some("whole".to_string()))
         );
+    }
+
+    #[test]
+    fn the_hash_of_an_unknown_answer_is_found() {
+        assert_eq!(
+            request_hash(r#"{"NewVariant":{"did":"did:web:a","hash":[1,2],"x":true}}"#),
+            Some([1, 2])
+        );
+        assert_eq!(request_hash(r#"{"hash":[3,4]}"#), Some([3, 4]));
+        assert_eq!(request_hash(r#"{"NewVariant":{"did":"did:web:a"}}"#), None);
+        assert_eq!(request_hash("not json"), None);
+        assert_eq!(request_hash(r#"{"hash":[1]}"#), None);
     }
 
     #[test]

@@ -20,9 +20,12 @@
   16 MiB). The socket is read by its own task per connection, so a frame is
   never half-read and lost when another event wins the task's `select!`.
 - A failed or stalled write (bounded by `network_timeout`) is treated as a lost
-  connection; a message from the server that cannot be parsed drops the
-  connection too (before, both were ignored and the callers waited out their
-  timeout).
+  connection (before, it was ignored and the caller waited out its timeout).
+- A message from the server that cannot be parsed (e.g. a newer server's
+  answer) is not a connection fault: the request it names by `hash` fails at
+  once with a `TransportError`; one naming no request is ignored. Logged at
+  `warn` for the first three and every hundredth, `debug` otherwise. Before,
+  the waiter was left to time out.
 
 ### Added
 

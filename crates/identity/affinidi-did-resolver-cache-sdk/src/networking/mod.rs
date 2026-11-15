@@ -164,9 +164,9 @@ impl WSResponseError {
 /// `#[non_exhaustive]` here records a Rust-level rule, but the **wire**-level one
 /// is stricter and matters more: this is an externally-tagged enum, so a new
 /// variant serializes as an unrecognised key. An older client fails to
-/// deserialize it, and `ws_recv` in `network.rs` cannot route the frame to its
-/// caller: it drops the connection, failing every request in flight on it with
-/// a transport error that says nothing about the real answer.
+/// deserialize it, and `ws_recv` in `network.rs` can at best fail the request
+/// the frame names (by its `hash`) with a transport error that says nothing
+/// about the real answer, and otherwise ignores the frame.
 ///
 /// That is a far worse failure than a clean error, so protocol growth
 /// belongs in **additive optional fields** on [`WSResponse`] and
@@ -1524,6 +1524,10 @@ mod transport_tests {
         AnswerFragmented,
         /// Answer only once two requests are in, the later one first.
         AnswerReversed,
+        /// Answer `did:web:a.example` in an unknown shape carrying its hash,
+        /// `did:web:b.example` in an unknown shape without a hash first, then
+        /// properly; answer anything else properly.
+        AnswerUnknownShape,
     }
 
     struct Server {
@@ -1631,6 +1635,25 @@ mod transport_tests {
                             for (fin, opcode, data) in [(false, 1, a), (false, 0, b), (true, 0, c)]
                             {
                                 if socket.send_raw(Frame { fin, opcode, data }).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        Mode::AnswerUnknownShape => {
+                            let hash = DIDCacheClient::hash_did(&request.did);
+                            let frames = match request.did.as_str() {
+                                WEB_A => vec![format!(
+                                    r#"{{"NewVariant":{{"did":"{}","hash":[{},{}]}}}}"#,
+                                    request.did, hash[0], hash[1]
+                                )],
+                                WEB_B => vec![
+                                    r#"{"NewVariant":{"note":"no hash"}}"#.to_string(),
+                                    answer(&request),
+                                ],
+                                _ => vec![answer(&request)],
+                            };
+                            for frame in frames {
+                                if socket.send(frame.as_str()).await.is_err() {
                                     return;
                                 }
                             }
@@ -1849,6 +1872,38 @@ mod transport_tests {
 
         let response = client.resolve(WEB_A).await.expect("fragments reassembled");
         assert_eq!(response.doc.id.as_str(), WEB_A);
+    }
+
+    /// An answer this client cannot parse is not a connection fault (the
+    /// server may be newer): the connection stays up, the request it names
+    /// fails, and other requests in flight complete.
+    #[tokio::test]
+    async fn an_unparseable_answer_does_not_drop_the_connection() {
+        let server = Server::start(|_| Mode::AnswerUnknownShape).await;
+        let client = client(&server.address, 5000).await;
+        let mut state = client.connection_state().unwrap();
+        assert_eq!(
+            *state.borrow_and_update(),
+            ConnectionState::Connected { epoch: 1 }
+        );
+
+        let started = Instant::now();
+        let (a, b, c) = tokio::join!(
+            client.resolve(WEB_A),
+            client.resolve(WEB_B),
+            client.resolve(WEB_C)
+        );
+        let error = a.expect_err("an answer in an unknown shape");
+        assert!(
+            matches!(&error, DIDCacheError::TransportError(msg) if msg.contains("could not be parsed")),
+            "{error:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(4), "failed at once");
+        assert_eq!(b.unwrap().doc.id.as_str(), WEB_B);
+        assert_eq!(c.unwrap().doc.id.as_str(), WEB_C);
+
+        assert!(!state.has_changed().unwrap(), "{:?}", *state.borrow());
+        assert_eq!(server.connections(), 1);
     }
 
     /// `stop()` is published.
