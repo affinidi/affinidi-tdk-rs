@@ -1,5 +1,13 @@
 # Runbook — publishing `affinidi-did-common 0.4.0`
 
+> [!NOTE]
+> **Completed and archived.** `affinidi-did-common` 0.4.0 was published from
+> #629 (merged 2026-07-19) and the crate has moved well past it; the mediator crates this
+> runbook mentions now live in
+> [affinidi/affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator).
+> Kept as a worked example of a coordinated minor bump across
+> `[patch.crates-io]`, not as instructions to follow.
+
 Covers affinidi-tdk-rs [#629](https://github.com/affinidi/affinidi-tdk-rs/pull/629)
 and didwebvh-rs [#50](https://github.com/decentralized-identity/didwebvh-rs/pull/50).
 
@@ -9,7 +17,7 @@ manually. This runbook is written around those two constraints.
 ## Why this one needs a runbook
 
 `affinidi-did-common` takes a **minor** bump (0.3.9 → 0.4.0). Per
-[ADR 0003 §3](../adr/0003-public-api-semver-policy.md) that invalidates the
+[ADR 0003 §3](../../adr/0003-public-api-semver-policy.md) that invalidates the
 `[patch.crates-io]` redirect held by any **external** crates.io consumer still
 requiring `"0.3"` — but those consumers cannot build until 0.4.0 is on
 crates.io:

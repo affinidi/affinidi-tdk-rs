@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/did-scid.svg)](https://crates.io/crates/did-scid)
 [![Documentation](https://docs.rs/did-scid/badge.svg)](https://docs.rs/did-scid)
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/did-methods/did-scid)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/did-methods/did-scid)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 Rust implementation of the `did:scid` (Self-Certifying Identifier) DID method.
@@ -60,8 +60,8 @@ did:scid:ke:1:<aid>?src=example.com/dids   ->  did:webs:example.com:dids:<aid>
 
 ## Related Crates
 
-- [`affinidi-did-common`](../../affinidi-did-common/) — DID Document types (dependency)
-- [`affinidi-did-resolver-cache-sdk`](../../affinidi-did-resolver-cache-sdk/) — Resolver SDK (uses this via feature flag)
+- [`affinidi-did-common`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-common/) — DID Document types (dependency)
+- [`affinidi-did-resolver-cache-sdk`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-resolver-cache-sdk/) — Resolver SDK (uses this via feature flag)
 
 ## Contributing
 

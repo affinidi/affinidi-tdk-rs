@@ -39,7 +39,7 @@ unchanged.
 **Cargo features** — enable `tsp` on the SDK (and the mediator, if you run one):
 
 ```toml
-affinidi-messaging-sdk = { version = "0.19", features = ["tsp"] }
+affinidi-messaging-sdk = { version = "0.49", features = ["tsp"] }
 # Mediator deployments: run TSP alongside DIDComm (dual-protocol).
 affinidi-messaging-mediator = { version = "0.42", features = ["didcomm", "tsp"] }
 ```

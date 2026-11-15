@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.49.0 — truthful receive and request paths, bounded websocket writes, a lossless inbound channel, real connect errors
+## [0.49.0] - 2026-11-15
+
+truthful receive and request paths, bounded websocket writes, a lossless inbound channel, real connect errors
 
 Fixes from the 2026-11 review (#1008, #1009, #1010, #1011, #1012, #1013,
 #1014, #1016, #1017, #1018, #1019). Breaking: send/receive semantics change
@@ -124,7 +126,9 @@ notes.
   (`TDKSharedState::new`). The commented-out old `send_messages_received` body
   and the dead `live_stream_get_packed` stub are removed.
 
-## 0.48.0 — affinidi-tsp 0.4 and affinidi-messaging-delivery 0.3
+## [0.48.0] - 2026-11-15
+
+affinidi-tsp 0.4 and affinidi-messaging-delivery 0.3
 
 - **Changed (breaking):** requires `affinidi-tsp` 0.4, whose types it
   re-exports (`RelationshipState`, `ControlMessage`), and
@@ -137,7 +141,9 @@ notes.
   crates' changelogs.
 
 
-## 0.47.2 — `queue/purge` confirms a dry run by when it was taken (`storedBefore`, `selectedAt`)
+## [0.47.2] - 2026-11-15
+
+`queue/purge` confirms a dry run by when it was taken (`storedBefore`, `selectedAt`
 
 - The vendored `messaging/queue/purge` 0.1 bundle is refreshed to the
   registry's in-place draft revision (`sha256:13faf739…`, was
@@ -159,7 +165,9 @@ notes.
 Additive. A mediator that predates `storedBefore` refuses a request
 carrying it; `queue_purge` never sends it.
 
-## 0.47.1 — delivery receipts, delivery scope, and `messaging/wake/set` / `messaging/wake/request`
+## [0.47.1] - 2026-11-14
+
+delivery receipts, delivery scope, and `messaging/wake/set` / `messaging/wake/request`
 
 - **Wake through the recipient's mediator.** Pins `messaging/wake/set/0.1`,
   `messaging/wake/request/0.1` and `messaging/receipt/0.1` (generated into
@@ -193,7 +201,9 @@ carrying it; `queue_purge` never sends it.
 - Depends on `affinidi-messaging-delivery` 0.2 and `affinidi-messaging-core`
   0.1.12. No breaking change.
 
-## Unreleased (0.47.0) — affinidi-crypto 0.3 and trust-tasks 0.39
+## [0.47.0] - 2026-11-14
+
+affinidi-crypto 0.3 and trust-tasks 0.39
 
 - **Changed:** requires `affinidi-crypto` 0.3. No code change. `Curve` in the
   curve-preference config now refers to `affinidi-crypto` 0.3.
@@ -201,7 +211,9 @@ carrying it; `queue_purge` never sends it.
   releases built on `affinidi-crypto` 0.3. The workspace no longer builds them
   from a git revision. The SDK re-exports `trust-tasks-rs` types, so this is a
   minor bump. 0.46.4 was never published.
-## 0.46.3 — a reply to a message sent over REST is fetched by the id the mediator stored it under
+## [0.46.3] - 2026-11-13
+
+a reply to a message sent over REST is fetched by the id the mediator stored it under
 
 - `send_message` with `wait_for_response` over REST (a profile without a
   websocket) asked the mediator for a message whose id was the digest of the
@@ -218,7 +230,9 @@ carrying it; `queue_purge` never sends it.
 Behaviour change (R3.6): Trust Tasks over REST now succeed where they always
 failed, and with `auto_delete` the reply is deleted once read. No API change.
 
-## 0.46.2 — Trust Task refusals as `trust-task-error` documents (`ATMError::TrustTaskError`)
+## [0.46.2] - 2026-11-13
+
+Trust Task refusals as `trust-task-error` documents (`ATMError::TrustTaskError`
 
 - Every Trust Task the SDK sends to the mediator now carries the top-level
   member `"x-errorFormat": "trust-task-error"` (`ERROR_FORMAT_MEMBER`),
@@ -274,7 +288,9 @@ on a Trust Task call should move to `refusal_code()` or `mediator_code()`,
 which give the same answer for both. Against current mediators nothing
 changes. No API is removed; `ATMError` is `#[non_exhaustive]`.
 
-## 0.46.1 — websocket proxy URLs: credentials stay out of errors; http:// proxies only
+## [0.46.1] - 2026-11-13
+
+websocket proxy URLs: credentials stay out of errors; http:// proxies only
 
 - Errors about a malformed `HTTPS_PROXY` / `ALL_PROXY` URL no longer
   include the URL's `user:password@`; it is shown as `***@`.
@@ -294,7 +310,9 @@ proxy password containing percent-escapes is sent decoded. `http://` and
 scheme-less proxy URLs without escapes behave as before. No API change; no
 new dependencies.
 
-## Unreleased (0.46.0) — trust-tasks-rs 0.38
+## [0.46.0] - 2026-11-13
+
+trust-tasks-rs 0.38
 
 - **Changed (breaking):** `trust-tasks-rs` and `trust-tasks-proof` 0.37 → 0.38.
   The Trust Task types cross this crate's public API, so it moves a minor.
@@ -308,7 +326,9 @@ new dependencies.
   `CachedDidResolver`) keep their signatures, so there is no source change.
 - `trust-tasks-proof` 0.38 is the version that will move to `affinidi-crypto`
   0.3 together with the workspace.
-## 0.45.17 — mux: administrators list and revoke stored grants; monitor membership events
+## [0.45.17] - 2026-11-13
+
+mux: administrators list and revoke stored grants; monitor membership events
 
 - New `TrustTasksOps` methods for the administrator mux tasks
   (`messaging/mux/admin-list`, `admin-revoke`, `admin-revoke-all` 0.1;
@@ -351,7 +371,9 @@ new dependencies.
   `monitor::subscribe::v0_1::{Payload, Response}` now gets a deprecation
   warning. Nothing else changes for existing callers.
 
-## 0.45.16 — TSP login signs a statement naming the mediator, the session and an expiry
+## [0.45.16] - 2026-11-13
+
+TSP login signs a statement naming the mediator, the session and an expiry
 
 - **Behaviour change (R3.6):** `TspAuthHandler` no longer signs the
   mediator's challenge string alone. It signs a statement: the RFC 8785
@@ -370,7 +392,9 @@ new dependencies.
   `signing_bytes()`, and `protocols::tsp_auth::TSP_AUTH_TYP`, so other
   clients can build the same bytes.
 
-## 0.45.15 — mux: keep stored grants renewed and recreated (opt-in); mux groups
+## [0.45.15] - 2026-11-13
+
+mux: keep stored grants renewed and recreated (opt-in); mux groups
 
 - New `protocols::mux_grant_keep`: `MuxGrantKeeper` keeps stored grants to
   the principal alive for members whose keys this `ATM` holds. Each member
@@ -412,7 +436,9 @@ new dependencies.
   order), `moves` (what a change of groups moves) and `MuxGroupRouter`
   (a route per group). The mediator needs nothing for it.
 - Nothing changes for an app that uses neither.
-## 0.45.14 — mux: keep session attaches across reconnects (opt-in)
+## [0.45.14] - 2026-11-13
+
+mux: keep session attaches across reconnects (opt-in
 
 - New `protocols::mux_keep`: `MuxKeepAttached` keeps a set of member DIDs
   (`MuxKeepAttach { member_did, scope, lifetime_secs }`) attached to a mux
@@ -433,7 +459,9 @@ new dependencies.
   on every connect, as before.
 - New `TspMuxSender::ready()`: the current connection's `ready` as a watch,
   `None` while the socket is down.
-## 0.45.13 — didcomm-mux acks go on the socket; typed tsp-mux task helpers
+## [0.45.13] - 2026-11-13
+
+didcomm-mux acks go on the socket; typed tsp-mux task helpers
 
 - New `TrustTasksOps::mux_ack(profile, message_ids)`: `messaging/mux/ack` on
   the profile's `didcomm-mux` connection, the DIDComm counterpart of the
@@ -458,7 +486,9 @@ new dependencies.
   through the untyped `request`. The payloads come from one builder per
   task, shared by both wires.
 
-## 0.45.12 — tsp-mux: a socket that reconnects by itself
+## [0.45.12] - 2026-11-12
+
+tsp-mux: a socket that reconnects by itself
 
 - New `TspOps::connect_websocket_mux_managed(profile, TspMuxReconnect)`: a
   `tsp-mux` socket that connects again by itself when it drops, with backoff
@@ -490,7 +520,9 @@ new dependencies.
   member whose mail the connection reads).
 - Additive: `TspMuxState` and `TspMuxFrame` are `#[non_exhaustive]`.
 
-## 0.45.11 — the WebSocket refresh deadline handles any token lifetime
+## [0.45.11] - 2026-11-12
+
+the WebSocket refresh deadline handles any token lifetime
 
 - The proactive token refresh computed `ttl * 4 / 5` in `u64` from the access
   token's remaining lifetime, which comes from the authentication service. A
@@ -502,7 +534,9 @@ new dependencies.
 - No API change. Only a token living longer than 30 days is refreshed
   earlier than before.
 
-## 0.45.10 — tsp-mux: Trust Tasks, acks and notices on the socket
+## [0.45.10] - 2026-11-12
+
+tsp-mux: Trust Tasks, acks and notices on the socket
 
 The `tsp-mux` client (`TspOps::connect_websocket_mux`) now does everything a
 DID-multiplexing connection needs on the socket itself, as the
@@ -547,7 +581,9 @@ Against a mediator without it, acks fail rather than going over REST.
 Notices that used to arrive as `TspMuxFrame::Data` now arrive as
 `TspMuxFrame::Notice`; the enum is `#[non_exhaustive]`, so matches keep
 compiling.
-## 0.45.9 — REST responses parsed without panicking; every REST call bounded
+## [0.45.9] - 2026-11-12
+
+REST responses parsed without panicking; every REST call bounded
 
 - `fetch_messages`, `oob_discovery().create_invite` and
   `oob_discovery().delete_invite` returned a panic, not an error, when a
@@ -587,7 +623,9 @@ fails with `TransportError`; raise it with
 batches. A failed message-status call is now an `Err` from `outbox_status`
 rather than `Ok(None)`, except where the mediator does not serve the task.
 No public signatures change.
-## 0.45.8 — a repeated TSP invite does not reopen a relationship
+## [0.45.8] - 2026-11-12
+
+a repeated TSP invite does not reopen a relationship
 
 `TspOps::record_incoming_control` applied every verified invite to the
 relationship state machine. A signed invite verifies for as long as the
@@ -626,7 +664,9 @@ relationship reopened; it is refused. A peer still waiting on a lost accept
 recovers by sending a new invite. The SDK's own re-establishing paths always
 send a new invite. No wire format changes. Complements the same change in
 `affinidi-tsp`.
-## 0.45.7 — the WebSocket message cache counts each message once
+## [0.45.7] - 2026-11-12
+
+the WebSocket message cache counts each message once
 
 A message arriving with a DIDComm `id` that was already in the WebSocket
 inbound cache was counted twice but stored once. The mediator re-pushes the
@@ -655,7 +695,9 @@ Behaviour change (R3.6), limited to repeated ids: a redelivered message
 still held in the cache is ignored, and the first copy and its metadata are
 kept. A message the application has already taken is not in the cache, so
 a later re-push of it is delivered again, as before. No API change.
-## 0.45.6 — `messaging/mux/connections`
+## [0.45.6] - 2026-11-11
+
+`messaging/mux/connections`
 
 - `TrustTasksOps::mux_connections(profile, &MuxConnectionsQuery)`: an
   administrator's view of a mediator's live mux connections
@@ -668,7 +710,9 @@ a later re-push of it is delivered again, as before. No API change.
   (0 lists connections without members), `limit` and `cursor`.
 - New API only; nothing changes for existing callers.
 
-## 0.45.5 — mux events checked on DIDComm sockets; member sets
+## [0.45.5] - 2026-11-11
+
+mux events checked on DIDComm sockets; member sets
 
 **Security fix (DIDComm mux connections).** A `messaging/mux/event` arriving
 on a `didcomm-mux` connection was acted on whoever sent it: the transport
@@ -708,7 +752,9 @@ are ignored, and every new connection starts empty.
 Also new: `protocols::mux::verify_mux_event`, the same checks for an event
 document obtained elsewhere.
 
-## 0.45.4 — `tsp-mux` client; `connectionFull` events
+## [0.45.4] - 2026-11-10
+
+`tsp-mux` client; `connectionFull` events
 
 DID multiplexing on a raw-TSP socket (`messaging/mux/event/0.1`, "Raw-TSP
 sockets"). Mediator side: affinidi-messaging-mediator #80. Nothing changes
@@ -743,7 +789,9 @@ for existing callers; everything here is new API.
   socket). `MemberChangeReason`, `MuxMemberChange` and `MuxEventKind` are
   re-exported from `protocols::mux`.
 
-## 0.45.3 — `didcomm-mux` subprotocol
+## [0.45.3] - 2026-11-10
+
+`didcomm-mux` subprotocol
 
 `ATM::profile_enable_mux_websocket` now offers the `didcomm-mux` WebSocket
 subprotocol, the name `messaging/mux/event/0.1` defines for a DIDComm mux
@@ -756,7 +804,9 @@ A mux connection counts as confirmed only once `mux_ready()` reports its
 `ready` event, as the spec requires: a mediator that predates mux may echo the
 subprotocol back without implementing it.
 
-## 0.45.2 — DID multiplexing notices
+## [0.45.2] - 2026-11-09
+
+DID multiplexing notices
 
 Durable `messaging/mux/notice/0.1` documents (grants suspended, revoked,
 expiring, or present on a DID) on the client side. Mediator side:
@@ -779,7 +829,9 @@ affinidi-messaging-mediator with mux notices (0.52).
 Nothing changes unless the application subscribes: no notice is deleted,
 and nothing grants, renews or recreates anything on its own.
 
-## 0.45.1 — DID multiplexing client (`messaging/mux/*/0.1`)
+## [0.45.1] - 2026-11-09
+
+DID multiplexing client (`messaging/mux/*/0.1`
 
 One mediator WebSocket can now carry many DIDs. The profile that opens it is
 the *principal*; each *member* DID lets it carry its traffic with a signed
@@ -814,11 +866,15 @@ take effect without reconnecting needs affinidi/affinidi-messaging-mediator#69.
 
 Additive: no existing signature or behaviour changes for non-mux profiles.
 
-## Unreleased (0.45.0) — trust-tasks 0.37
+## [0.45.0] - 2026-11-04
+
+trust-tasks 0.37
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.37. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.37 (trustoverip/dtgwg-trust-tasks-tf #1021) changes how `validate_freshness` treats a document that states an `expiresAt`: the maximum age no longer applies to it, and an expiry beyond the policy's new `expiry_horizon` is clamped to the horizon. `FreshnessPolicy` gains `expiry_horizon` and is now `#[non_exhaustive]`. This SDK does not apply a freshness policy, so its behaviour does not change. No source change.
 
-## Unreleased (0.44.0) — trust-tasks 0.36, monitor/event 0.2
+## [0.44.0] - 2026-10-28
+
+trust-tasks 0.36, monitor/event 0.2
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.36. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.36 (trustoverip/dtgwg-trust-tasks-tf) adopts `trust-task-error/0.6` (two new standard codes, `unsupportedExtension` and `indeterminate`, behind the already `#[non_exhaustive]` `StandardCode`) and adds new spec versions; none of it touches the tasks this SDK speaks.
 
@@ -828,7 +884,9 @@ Every pinned task is now at its latest live version, and the SDK no longer allow
 
 **Breaking:** `decode_monitor_event`'s return type moves from `v0_1` to `v0_2`, and `MonitorEvent::at` is now `occurred_at`.
 
-## Unreleased (0.43.0) — the messaging tasks at 0.2
+## [0.43.0] - 2026-10-27
+
+the messaging tasks at 0.2
 
 `ping`, `account/get`, `account/list`, `account/add`, `account/update`,
 `audit/list` and `message/status` are spoken at 0.2, and their methods return
@@ -853,7 +911,9 @@ What each mediator speaks is remembered per mediator DID for the life of the
 **Breaking:** the seven methods' parameter and return types move from the
 `v0_1` modules to `v0_2`, and `audit_list`'s `page_size` is now `limit`.
 
-## Unreleased (0.42.0) — Trust Task types generated at build time
+## [0.42.0] - 2026-10-27
+
+Trust Task types generated at build time
 
 The Trust Task types this SDK speaks are now generated at build time from the
 24 versions pinned in `trust-tasks.lock` (vendored under `trust-tasks/`,
@@ -872,17 +932,23 @@ trustoverip/dtgwg-trust-tasks-tf#939).
 `trust-tasks` CLI (`trust-tasks update`), never by hand. The wire is
 unchanged: every pin is the version spoken before.
 
-## Unreleased (0.41.0) — trust-tasks 0.35
+## [0.41.0] - 2026-10-27
+
+trust-tasks 0.35
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.35. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.35 (trustoverip/dtgwg-trust-tasks-tf#910, #912, #917) adds `rooms/keys/act` 0.8 and `vtc/storage/configs/retire` 0.2, and generates an `anyOf` of required members as a struct of optional fields rather than an untagged enum. None of it touches the wire here.
 
 0.35 also marks the 0.1 types of `messaging/*` and `audit/list` deprecated in favour of their 0.2 versions (dtgwg-trust-tasks-tf#901, #911). Mediators serve 0.1 only, so the SDK keeps sending 0.1 and allows the deprecation in `protocols::trust_tasks`; it moves to 0.2 once mediators serve both. Code that names those types through this crate (`account_list`'s `Response`, for example) sees the same deprecation warnings.
 
-## Unreleased (0.40.0) — trust-tasks 0.34
+## [0.40.0] - 2026-10-24
+
+trust-tasks 0.34
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.34. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.34 (trustoverip/dtgwg-trust-tasks-tf#884, #901) narrows `vault/credentials/query` by `subjectDid` and adds new spec versions that spell instants, pagination, `since` and `created` one way. None of it touches anything here. No source change.
 
-## Unreleased (0.39.0) — TSP 1.0
+## [0.39.0] - 2026-10-22
+
+TSP 1.0
 
 **Breaking on the wire (feature `tsp`).** Requires `affinidi-tsp` 0.3, which
 speaks TSP 1.0 (`YTSP-BAA`) — see that crate's changelog. No source change
@@ -901,7 +967,9 @@ here, but every TSP message this SDK packs or unpacks follows it:
 
 `affinidi-tsp` is a public dependency under `tsp`, so this moves a minor.
 
-## Unreleased (0.38.1) — a did:scid identity sends and receives as itself
+## [0.38.1] - 2026-10-21
+
+a did:scid identity sends and receives as itself
 
 - **Behaviour:** packing authcrypt `from` a did:scid DID URL
   (`did:scid:vh:1:<scid>?src=…`) gives the JWE `skid` the same `src`. The
@@ -918,15 +986,21 @@ here, but every TSP message this SDK packs or unpacks follows it:
 - A did:scid identity's secrets are registered under its document's key ids
   (`did:scid:vh:1:<scid>#key-1`).
 
-## Unreleased (0.38.0) — trust-tasks 0.33
+## [0.38.0] - 2026-10-21
+
+trust-tasks 0.33
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.33. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.33 (trustoverip/dtgwg-trust-tasks-tf#858) adds a linking form to `persona/contact/put/1.1` and makes `subjectDid` optional in the `get`/`list` 1.1 responses. None of it touches anything here. No source change.
 
-## Unreleased (0.37.0) — trust-tasks 0.32
+## [0.37.0] - 2026-10-18
+
+trust-tasks 0.32
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.32. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.32 adds a `version` to `SealedRecord` (trustoverip/dtgwg-trust-tasks-tf#816) and `sign-document` to the device `Capability` (#819), and adds rooms `register` 0.2 and `group/remove` 0.3 (released in #818). None of it touches anything here. No source change.
 
-## Unreleased (0.36.3) — a token-refresh reconnect no longer drops reply waiters
+## [0.36.3] - 2026-10-17
+
+a token-refresh reconnect no longer drops reply waiters
 
 ### Fixed
 
@@ -943,7 +1017,9 @@ Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.32. The generated Trust Task t
   and a reconnect that then fails fails them as before.
 - No API change.
 
-## Unreleased (0.36.2) — a frame arriving as a live-stream wait times out is no longer lost
+## [0.36.2] - 2026-10-15
+
+a frame arriving as a live-stream wait times out is no longer lost
 
 ### Fixed
 
@@ -964,7 +1040,9 @@ Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.32. The generated Trust Task t
 - No API change. A caller polling with a `wait` may now receive, at the end
   of a wait, a frame it would previously have lost (R3.6).
 
-## Unreleased (0.36.1) — protocol types from `affinidi-messaging-mediator-types`
+## [0.36.1] - 2026-10-13
+
+protocol types from `affinidi-messaging-mediator-types`
 
 The mediator protocol types (ACLs, accounts, message pickup, problem reports,
 `Clock`) now come from the new `affinidi-messaging-mediator-types` crate rather
@@ -976,15 +1054,21 @@ If you also use `affinidi-messaging-mediator-common` and pass these types
 between it and the SDK, use mediator-common 0.17.7 or later: it re-exports the
 same crate. With 0.17.6 the two would be distinct types.
 
-## Unreleased (0.36.0) — trust-tasks 0.31
+## [0.36.0] - 2026-10-13
+
+trust-tasks 0.31
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.31. The generated Trust Task types are in this crate's public API, so it moves a minor. 0.31 makes a `vta-account` storage config name its account's context (trustoverip/dtgwg-trust-tasks-tf#758), which touches nothing here. No source change.
 
-## Unreleased (0.35.0) — trust-tasks 0.30
+## [0.35.0] - 2026-10-11
+
+trust-tasks 0.30
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.30. The generated Trust Task types are in this crate's public API (the `TrustTasks` methods return `trust_tasks_rs::specs::messaging` responses, and `decode_monitor_event` returns a `TrustTask`), so it moves a minor. 0.29 adds `keys/sign-jws` and `keys/sign-csr`; 0.30's one break makes `rooms/info` and `rooms/usage` require a proof. Neither touches anything here. No source change.
 
-## 0.34.1 — a reconnected socket is no longer closed by heartbeats it missed while disconnected
+## [0.34.1] - 2026-10-11
+
+a reconnected socket is no longer closed by heartbeats it missed while disconnected
 
 ### Behaviour change
 
@@ -1007,11 +1091,15 @@ Reconnect semantics change without a signature change.
   one success site for the first connect and every reconnect, beside the
   existing per-socket resets.
 
-## Unreleased (0.34.0) — trust-tasks 0.28
+## [0.34.0] - 2026-10-11
+
+trust-tasks 0.28
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.28. The generated Trust Task types are in this crate's public API (the `TrustTasks` methods return `trust_tasks_rs::specs::messaging` responses, and `decode_monitor_event` returns a `TrustTask`), so it moves a minor. 0.28's one breaking change (the rooms 0.1 specs' `NOT_AUTHORIZED` error-code constants are withdrawn for the standard `permissionDenied`) touches nothing here. No source change.
 
-## 0.33.2 — a recipient that stops collecting is noticed, and poison frames stop filling senders' queues
+## [0.33.2] - 2026-10-06
+
+a recipient that stops collecting is noticed, and poison frames stop filling senders' queues
 
 A mediator keeps a message until its recipient deletes it, and counts it
 against the **sender's** per-recipient queue (`limits.queue.peer`, default 50)
@@ -1101,7 +1189,9 @@ before upgrading a service.
   the DIDComm live stream, so both halves of one socket agree. An HTTP-status
   failure underneath an unpack now counts as transient.
 
-## 0.33.1 — the websocket transport recovers from sleep and dead networks
+## [0.33.1] - 2026-10-03
+
+the websocket transport recovers from sleep and dead networks
 
 ### Fixed
 
@@ -1123,11 +1213,15 @@ before upgrading a service.
 - Closing a socket that is being abandoned, and writing a ping, are each bounded
   to 5 s, so the task does not park flushing frames to a peer that is gone.
 
-## Unreleased (0.33.0) — trust-tasks 0.27
+## [0.33.0] - 2026-10-03
+
+trust-tasks 0.27
 
 Moves to `trust-tasks-rs` / `trust-tasks-proof` 0.27. The generated Trust Task types are in this crate's public API (the `TrustTasks` methods return `trust_tasks_rs::specs::messaging` responses, and `decode_monitor_event` returns a `TrustTask`), so it moves a minor. 0.27's one breaking change (git-ns `ActivityItem.source` becomes a typed enum) touches nothing here.
 
-## Unreleased (0.32.3) — a repeated TSP accept is ignored, not refused
+## [0.32.3] - 2026-10-02
+
+a repeated TSP accept is ignored, not refused
 
 `TspOps::record_incoming_control` now treats a second accept for a relationship
 already `Bidirectional` as a no-op: it returns the state unchanged, keeps the
@@ -1139,13 +1233,17 @@ retesting). It applies only to an accept that belongs to the relationship
 held: one that echoes the invite we recorded, or is the accept we recorded.
 Any other accept is still refused.
 
-## Unreleased (0.32.2) — no behaviour change
+## [0.32.2] - 2026-10-02
+
+no behaviour change
 
 No behaviour change and no public API change. The `dart_interop_unpack_all`
 test imports its JWK with `Secret::from_jwk_value`, as
 `affinidi-secrets-resolver` 0.5.15 deprecates `Secret::from_str` (#893).
 
-## Unreleased (0.32.1) — live-stream messages no longer lost to a timed-out waiter
+## [0.32.1] - 2026-10-02
+
+live-stream messages no longer lost to a timed-out waiter
 
 ### Fixed
 
@@ -1175,11 +1273,15 @@ difference is that messages which used to vanish now arrive: on the next
 de-duplicates by message id is unaffected. Code that had compensated for the
 losses with blind resends may now see the original as well.
 
-## Unreleased (0.32.0) — tdk-common 0.7, trust-tasks 0.26
+## [0.32.0] - 2026-10-01
+
+tdk-common 0.7, trust-tasks 0.26
 
 Moves to `affinidi-tdk-common` 0.7 and `trust-tasks-*` 0.26 (on data-integrity 0.8). Both are public dependencies here (`TDKSharedState`, `TDKProfile`, and the trust-tasks proof types), so this crate moves a minor. No source change.
 
-## Unreleased (0.31.1) — a TSP relationship can be started with a peer on another mediator; a reply to a request collected by pickup threads to the sender's id
+## [0.31.1] - 2026-10-01
+
+a TSP relationship can be started with a peer on another mediator; a reply to a request collected by pickup threads to the sender's id
 
 **A cold invite to a peer on another mediator.** `send_control` (invite,
 accept, cancel) routes across mediators only when it knows the peer's
@@ -1212,11 +1314,15 @@ message now keeps its own id. `send_delivery_request`, which returns no id
 beside the message, still sets `id` to the mediator's id, because its callers
 delete by it.
 
-## Unreleased (0.31.0) — trust-tasks-rs 0.25
+## [0.31.0] - 2026-09-30
+
+trust-tasks-rs 0.25
 
 Moves to `trust-tasks-rs` 0.25, with the rest of the `trust-tasks-*` family at 0.25. That release conforms the Trust Task vetting, member and endorsement specs to the DTG Credentials v1 statement and authority credentials (trustoverip/dtgwg-trust-tasks-tf#691). A public dependency moving a minor is breaking, so this crate moves a minor. No source change.
 
-## Unreleased (0.30.1) — an already-gone delete from a Fjall or in-memory mediator is no longer a warning
+## [0.30.1] - 2026-09-28
+
+an already-gone delete from a Fjall or in-memory mediator is no longer a warning
 
 The deletion handler treats a `not_found` refusal as "already deleted": it logs
 it at debug and remembers the id so a redelivered copy is not deleted again. It
@@ -1233,11 +1339,15 @@ and was never recorded as deleted. Both forms are now recognised. Mediator
 0.33.1 answers with the descriptor on every backend; this is for the mediators
 already deployed.
 
-## Unreleased (0.30.0) — trust-tasks-rs 0.24
+## [0.30.0] - 2026-09-27
+
+trust-tasks-rs 0.24
 
 trust-tasks-rs and trust-tasks-proof 0.23 -> 0.24. A minor rather than a patch, as for 0.21, 0.22 and 0.23: the public API carries generated Trust Task types, so a consumer must move in the same change. 0.24 changes how a `oneOf` branch that uses a compound `not` is generated (trust-tasks-rs #665: `auth/passkey/enroll/invite/update/0.1` and `auth/revoke-session/0.2` become structs with optional members instead of uninhabited enums); this crate uses neither, and trust-tasks-proof is unchanged. No source change.
 
-## Unreleased (0.29.0) — the legacy mediator admin senders are removed
+## [0.29.0] - 2026-09-27
+
+the legacy mediator admin senders are removed
 
 Removed, with what replaces each (all on `atm.trust_tasks()`):
 
@@ -1258,7 +1368,9 @@ Removed, with what replaces each (all on `atm.trust_tasks()`):
 
 Takes mediator-common 0.17.
 
-## Unreleased (0.28.1) — delivery can be settled on the mediator's receipt
+## [0.28.1] - 2026-09-26
+
+delivery can be settled on the mediator's receipt
 
 - `atm.trust_tasks().message_status(profile, msg_ids)` sends a
   `messaging/message/status/0.1` Trust Task and returns where each message the
@@ -1274,13 +1386,15 @@ Takes mediator-common 0.17.
 
 Requires `affinidi-messaging-core` 0.1.11. See affinidi-tdk-rs#896.
 
-## Unreleased (0.28.0) — trust-tasks-rs 0.23
+## [0.28.0] - 2026-09-26
+
+trust-tasks-rs 0.23
 
 trust-tasks-rs and trust-tasks-proof 0.22 -> 0.23. A minor rather than a patch, as for 0.21 and 0.22: the public API carries generated Trust Task types, so a consumer must move in the same change. 0.23 also resolves a proof's key only when the issuer lists it under the relationship the proof declares (proofPurpose, VTI-KEY-022), so a Trust Task signed with a key its DID document does not list for that purpose is now refused.
 
-## Unreleased
+## [0.27.2] - 2026-09-25
 
-### 0.27.2 — the authcrypt sender is the key that decrypted the message
+the authcrypt sender is the key that decrypted the message
 
 No public API change.
 
@@ -1301,7 +1415,9 @@ check, is the same `skid`. Messages refused as a result:
 `transport_adapter`: an `encrypted_from_kid` without a `#fragment` yields no
 authenticated sender.
 
-### 0.27.1 — a mutual TSP cancellation is answered
+## [0.27.1] - 2026-09-23
+
+a mutual TSP cancellation is answered
 
 Rev 3 §7.3: a cancellation (`TSP_RFD`) of a relationship held in both
 directions is answered with a cancellation before it is forgotten.
@@ -1326,7 +1442,9 @@ state None" and the peer was never answered (Keyring VTI-38).
 A consumer that answered on `reply_expected` with `cancel_relationship` now
 simply stops being asked to; nothing is sent twice.
 
-### 0.27.0 — trust-tasks-rs 0.22
+## [0.27.0] - 2026-09-23
+
+trust-tasks-rs 0.22
 
 Dependency bump, no code change. 0.22 renamed part of the `persona/*` family;
 nothing here uses those tasks, and the messaging specifications these crates do
@@ -1337,7 +1455,9 @@ public API — `MediatorAcl` among them — so a consumer combining it with anot
 `trust-tasks-rs` user has to move in step. A graph holding both versions does
 not merely carry a duplicate; it fails to compile on those types.
 
-### 0.26.27 — TSP relationships across two mediators
+## [0.26.27] - 2026-09-23
+
+TSP relationships across two mediators
 
 A routed TSP message now goes out through this profile's own mediator even
 when its route starts somewhere else. `send_routed_opaque` (and so
@@ -1366,7 +1486,9 @@ Authorization header: `enable_inter_mediator_relay = true` (or the legacy
 `SEND_FORWARDED` in `global_acl_default`), and `relay_trusted_mediators`
 either empty or listing the relaying mediator.
 
-### 0.26.26 — a TSP send survives a connection closed under it
+## [0.26.26] - 2026-09-23
+
+a TSP send survives a connection closed under it
 
 `TspOps::send_raw` — the POST behind every TSP send, including a VTA's
 Trust Task replies — made one attempt. When a pooled keep-alive connection
@@ -1384,7 +1506,9 @@ idempotently on the hash of its bytes (mediator 0.28.10 and later), so a
 retry of a POST that was in fact stored is a no-op. The timeout is set on
 this request only; the shared TDK client is unchanged.
 
-### 0.26.25 — asking for an account's lifetime counters
+## [0.26.25] - 2026-09-23
+
+asking for an account's lifetime counters
 
 `trust_tasks().account_get_detailed(profile, did_hash, include_activity,
 include_stats)` and `account_list_detailed(..., include_stats)` request each
@@ -1397,7 +1521,9 @@ unchanged.
 is a request member, so a mediator that predates it refuses the whole
 request rather than ignoring the member.
 
-### 0.26.24 — Trust Tasks over either transport
+## [0.26.24] - 2026-09-23
+
+Trust Tasks over either transport
 
 Every `trust_tasks()` method now goes over whichever transport the profile
 and mediator have in common. Callers write the same code either way: no
@@ -1424,7 +1550,9 @@ is an error naming the transport, never a silent wait.
 
 The document and its Data Integrity proof are identical on both wires.
 
-### 0.26.23 — asking for account activity
+## [0.26.23] - 2026-09-22
+
+asking for account activity
 
 `trust_tasks().account_get_with_activity(profile, did_hash, include_activity)`
 and `account_list_with_activity(..., include_activity)` request each
@@ -1435,13 +1563,17 @@ existing `account_get` / `account_list` are unchanged and don't ask.
 is a request member, so a mediator that predates it refuses the whole
 request as a schema violation rather than ignoring the member.
 
-### 0.26.22 — `config/reload`
+## [0.26.22] - 2026-09-22
+
+`config/reload`
 
 `trust_tasks().config_reload(profile)` sends the generic `config/reload` Trust
 Task (rootAdmin). The mediator re-reads its limits from its configuration
 file and returns the keys whose running value changed. Additive.
 
-### 0.26.21 — the legacy mediator admin client is deprecated
+## [0.26.21] - 2026-09-22
+
+the legacy mediator admin client is deprecated
 
 - **Deprecated:** `protocols::mediator::administration::Mediator`, the client
   for the legacy DIDComm `mediator/1.0` admin, account and ACL management
@@ -1456,7 +1588,9 @@ file and returns the keys whose running value changed. Additive.
   serves them.
 - Deprecation only: no behaviour changes.
 
-### 0.26.20 — `config/patch`
+## [0.26.20] - 2026-09-22
+
+`config/patch`
 
 `trust_tasks().config_patch(profile, overrides)` sends the generic
 `config/patch` Trust Task (rootAdmin only). It changes mediator limits at
@@ -1465,7 +1599,9 @@ effect now (`applied`), what was stored for the next start
 (`pending_restart`), and what was refused, with the reason (`rejected`).
 Additive.
 
-### 0.26.19 — a reply reaches the call that asked for it
+## [0.26.19] - 2026-09-21
+
+a reply reaches the call that asked for it
 
 `send_message(.., wait_for_response = true, ..)` — which every Trust Task call
 and other request/response exchange uses — now registers interest in the reply
@@ -1481,7 +1617,9 @@ making request/response calls on the same profile hit this under load.
 timed-out or failed wait no longer leaves a stale entry that a later message
 with the same id is handed to. A request that fails to transmit cancels its
 registration. `live_stream_get` is unchanged for callers.
-### 0.26.18 — the traffic monitor
+## [0.26.18] - 2026-09-21
+
+the traffic monitor
 
 `trust_tasks().monitor_subscribe(profile, filter, lease_seconds,
 max_events_per_second, renew)` and `trust_tasks().monitor_unsubscribe(profile,
@@ -1489,14 +1627,18 @@ id)`, plus `protocols::trust_tasks::decode_monitor_event(&Message)` to pick the
 signed `messaging/monitor/event` batches out of a live stream. The profile needs
 its websocket enabled; events are never queued.
 
-### 0.26.17 — `message_delete` and `queue_purge`
+## [0.26.17] - 2026-09-21
+
+`message_delete` and `queue_purge`
 
 `trust_tasks().message_delete(profile, did_hash, msg_ids)` and
 `trust_tasks().queue_purge(profile, did_hash, queue, peer, older_than_seconds, dry_run)`
 — the `messaging/message/delete` and `messaging/queue/purge` Trust Tasks. Dry-run
 a purge and confirm the count before running it for real.
 
-### 0.26.16 — `message_list` and `message_get`
+## [0.26.16] - 2026-09-21
+
+`message_list` and `message_get`
 
 `trust_tasks().message_list(profile, did_hash, queue, peer, cursor, limit)` and
 `trust_tasks().message_get(profile, did_hash, msg_id)` — the
@@ -1504,20 +1646,26 @@ a purge and confirm the count before running it for real.
 returns the stored envelope still encrypted; a caller holding the recipient's
 key can unpack it locally.
 
-### 0.26.15 — `queue_status`
+## [0.26.15] - 2026-09-21
+
+`queue_status`
 
 `trust_tasks().queue_status(profile, did_hash, include_peers)` — the
 `messaging/queue/status` Trust Task: an account's two queues live, optionally
 broken down by counterparty. `did_hash = None` reads the caller's own.
 
-### 0.26.14 — `stats_show` and `queue_list`
+## [0.26.14] - 2026-09-21
+
+`stats_show` and `queue_list`
 
 `trust_tasks().stats_show(profile)` and
 `trust_tasks().queue_list(profile, queue, sort, min_count, cursor, limit)` —
 the admin-only `messaging/stats/show` and `messaging/queue/list` Trust Tasks, for
 mediator operator tooling. Requires `trust-tasks-rs` 0.21.10.
 
-### 0.26.13 — every Trust Task leaves with `issuedAt` and a proof
+## [0.26.13] - 2026-09-21
+
+every Trust Task leaves with `issuedAt` and a proof
 
 `trust_tasks()` requests now carry `issuedAt` and an `eddsa-jcs-2022` Data
 Integrity `proof` made with the profile's Ed25519 key (an `assertionMethod` key
@@ -1537,7 +1685,9 @@ New dependencies: `trust-tasks-proof` 0.21 (`affinidi` backend only) and
 `chrono`. Both were already in the build graph through `trust-tasks-rs` and the
 workspace's own `affinidi-data-integrity`.
 
-### 0.26.12 — a re-establishing send survives the peer inviting us first
+## [0.26.12] - 2026-09-20
+
+a re-establishing send survives the peer inviting us first
 
 `send_reestablishing` reads the send readiness and then invites, and those are
 two separate awaits on the relationship store. The peer can move our half
@@ -1574,7 +1724,9 @@ side, but a consumer with its own workaround for it can drop it. Found by
 `vta-service`, whose one-shot D6 recovery reported the peer as silent for a frame
 that had never left the node (OpenVTC/verifiable-trust-infrastructure#1582).
 
-### 0.26.11 — queue status, and a purge you can narrow
+## [0.26.11] - 2026-09-20
+
+queue status, and a purge you can narrow
 
 `ATM::queue_status()` returns this DID's own depth, effective limits, resulting
 saturation and oldest-message age at the mediator. The point is to pace
@@ -1597,7 +1749,9 @@ unknown parameters, so an unescaped `&` in a peer value would turn one
 parameter into two and fail loudly — but it should not be possible to reach
 that in the first place.
 
-### 0.26.10 — the deletion handler stops re-deleting redelivered messages
+## [0.26.10] - 2026-09-19
+
+the deletion handler stops re-deleting redelivered messages
 
 0.26.8 stopped discarding the mediator's answer to a background delete, and what
 it surfaced was a flood of warnings on every service that had just connected:
@@ -1640,7 +1794,9 @@ Deletion is still at-least-once end to end: a suppressed delete costs nothing,
 since an un-deleted message is redelivered and queued again. Behaviour-only; no
 API change.
 
-### 0.26.9 — `purge_queue`
+## [0.26.9] - 2026-09-18
+
+`purge_queue`
 
 `ATM::purge_queue(profile, folder)` empties one of the calling profile's own
 queues at the mediator in a single call (`DELETE /purge/{folder}`), with
@@ -1661,7 +1817,9 @@ itself back.
 
 Purging destroys messages — they are not returned to their senders. Additive.
 
-### 0.26.8 — background deletions batch, and their failures are no longer silent
+## [0.26.8] - 2026-09-18
+
+background deletions batch, and their failures are no longer silent
 
 The deletion handler sent one `DELETE` per message and discarded the result
 (`let _ = atm.delete_messages_direct(...)`). Both halves hurt, and they compound:
@@ -1681,7 +1839,9 @@ at the mediator's own limit of 100), a refusal is retried with backoff honouring
 refusals inside a successful response are surfaced too. Internal only — no API
 change.
 
-### 0.26.7 — §7.2.2 drop counter (D8)
+## [0.26.7] - 2026-09-17
+
+§7.2.2 drop counter (D8)
 
 Observability for the relationship gate (design note
 `tsp-relationship-recovery.md`, D8). `ATMConfigBuilder::with_relationship_drop_counter`
@@ -1691,7 +1851,9 @@ inbound TSP application message from a VID it holds no relationship with (at bot
 relationship we lost" alarm — the one event that was previously invisible except
 in a single error-level log line. Additive; no counter configured is a no-op.
 
-### 0.26.6 — TSP relationship recovery runtime (D6–D9)
+## [0.26.6] - 2026-09-17
+
+TSP relationship recovery runtime (D6–D9)
 
 The runtime layer over the D1–D5 recovery cores (design note
 `tsp-relationship-recovery.md`), all additive:
@@ -1712,7 +1874,9 @@ The runtime layer over the D1–D5 recovery cores (design note
   keep a live relationship perpetually mid-handshake (D2 made accepting one
   cheap).
 
-### 0.26.5 — TSP relationship recovery
+## [0.26.5] - 2026-09-17
+
+TSP relationship recovery
 
 Rev 3 §7.2.2 has an endpoint silently drop application traffic from a VID it
 holds no relationship with, so a restart onto the ephemeral relationship store —
@@ -1738,8 +1902,12 @@ additive, pure, tested decision cores (design note `tsp-relationship-recovery.md
 All additive; no existing signatures change. The behavioural half — the
 `affinidi-tsp` reconcile transition these compose with — ships in that crate.
 
-## Unreleased (0.26.3) — an authentication or transport-adapter `429` stays typed
-### 0.26.4 — inbound TSP control messages reach the consumer
+## [0.26.3] - 2026-09-16
+
+an authentication or transport-adapter `429` stays typed
+## [0.26.4] - 2026-09-16
+
+inbound TSP control messages reach the consumer
 
 `tsp_to_inbound` recorded a relationship control message and then dropped it,
 because `Inbound` had no way to carry a message kind. It now surfaces it with
@@ -1799,7 +1967,9 @@ every ATM error as `MessagingError::Transport(String)` on its way through
 - Requires `affinidi-messaging-core` 0.1.7 and `affinidi-did-authentication`
   0.3.13.
 
-## Unreleased (0.26.2) — an HTTP status is data, and a `429` says who sent it
+## [0.26.2] - 2026-09-16
+
+an HTTP status is data, and a `429` says who sent it
 
 A non-success HTTP response used to reach the caller as
 `ATMError::TransportError(String)`, the status buried in text. A caller could
@@ -1872,7 +2042,9 @@ mediator fault, without parsing the message.
   status is lost twice. Fixing this needs a change to that crate.
 - **HTTP-date `Retry-After`** is not parsed. The mediator sends seconds.
 
-## Unreleased (0.26.1) — inbound TSP control messages are recorded
+## [0.26.1] - 2026-09-16
+
+inbound TSP control messages are recorded
 
 A **patch** rather than a minor: no signature moves, and nothing that worked
 before stops working. What changes is that something which never worked now
@@ -1899,7 +2071,9 @@ Deciding whether to *accept* an invite still belongs above this layer and is not
 yet surfaced; that needs `Inbound` to carry a message kind, which is a breaking
 change to `affinidi-messaging-core`.
 
-## Unreleased (0.26.0) — `trust-tasks-rs` 0.21
+## [0.26.0] - 2026-09-16
+
+`trust-tasks-rs` 0.21
 
 Breaking, and by public dependency rather than by anything in this crate's own
 source. `trust_tasks_rs` types appear in this SDK's public API — `MediatorAcl`
@@ -1915,7 +2089,9 @@ a tool reported it.
 `affinidi-tsp` 0.2 (Rev 3). Nothing downstream can take Rev 3 while this family
 still pins 0.20.
 
-## Unreleased (0.25.0) — TSP Rev 3
+## [0.25.0] - 2026-09-15
+
+TSP Rev 3
 
 Requires `affinidi-tsp` 0.2. **See that crate's changelog first: the wire format
 changed and there is no Rev 2 compatibility.** Everything here follows from it.
@@ -1970,7 +2146,9 @@ changed and there is no Rev 2 compatibility.** Everything here follows from it.
   the mediator changelog for the list and the reasoning. A consumer matching on
   any of them will stop matching.
 
-## Unreleased (0.24.0) — `trust-tasks-rs` 0.20
+## [0.24.0] - 2026-09-10
+
+`trust-tasks-rs` 0.20
 
 - Bumps `trust-tasks-rs` 0.19 → 0.20. **No source change** — only manifests.
   0.20 is additive for everything this crate uses: its one breaking change is a
@@ -1988,7 +2166,9 @@ changed and there is no Rev 2 compatibility.** Everything here follows from it.
   0.20.1 for `vta/contexts/secrets/1.0` and could not reach it while this crate
   required ^0.19.
 
-## Unreleased (0.22.0) — `trust-tasks-rs` 0.18
+## [0.22.0] - 2026-09-06
+
+`trust-tasks-rs` 0.18
 
 - Bumps `trust-tasks-rs` 0.17 → 0.18. No source change: 0.18.0 carries exactly
   one upstream change (trustoverip/dtgwg-trust-tasks-tf#370, retyping the
@@ -2004,7 +2184,9 @@ changed and there is no Rev 2 compatibility.** Everything here follows from it.
 - That failure is why this bump exists. `vta-sdk` could not reach 0.18 while
   this crate required ^0.17.
 
-## Unreleased (0.21.1) — a mediated peer is TSP-capable
+## [0.21.1] - 2026-08-31
+
+a mediated peer is TSP-capable
 
 - `TspOps::select_protocol` decided "does this peer speak TSP" with
   `!ResolvedVid::endpoints.is_empty()`. With `affinidi-tsp` 0.1.15 that list
@@ -2015,7 +2197,9 @@ changed and there is no Rev 2 compatibility.** Everything here follows from it.
 - No behaviour change for an unmediated peer, and none under a fresh cached
   capability or a completed relationship (both settle before the resolve).
 
-## Unreleased (0.21.0) — `trust-tasks-rs` 0.17
+## [0.21.0] - 2026-08-27
+
+`trust-tasks-rs` 0.17
 
 - Bumps `trust-tasks-rs` 0.12 → 0.17.
 - **Breaking for consumers.** 0.17 marks the generated payload, response and
@@ -2031,7 +2215,9 @@ changed and there is no Rev 2 compatibility.** Everything here follows from it.
   change: the same members are set, and the only new failure mode is a
   builder left missing a required member, which every call site sets.
 
-## Unreleased (0.20.0) — `trust-tasks-rs` 0.12
+## [0.20.0] - 2026-08-26
+
+`trust-tasks-rs` 0.12
 
 - Bumps `trust-tasks-rs` 0.11 → 0.12.
 - **Breaking for consumers, despite no source change here.** This crate's
@@ -2041,7 +2227,9 @@ changed and there is no Rev 2 compatibility.** Everything here follows from it.
   merely warn; they fail to compile with `expected MediatorAcl, found a
   different MediatorAcl`.
 - No behaviour change in this crate.
-## Unreleased (0.19.12) — dependency refresh
+## [0.19.12] - 2026-08-23
+
+dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
 - Bumps `tokio-tungstenite` 0.29 → 0.30.
@@ -2049,7 +2237,9 @@ changed and there is no Rev 2 compatibility.** Everything here follows from it.
   compiles unmodified against them. Bumped workspace-wide in the same
   change so no two versions of these crates are compiled side by side.
 
-## Unreleased (0.19.11) — drop the unmaintained `rustls-pemfile`
+## [0.19.11] - 2026-08-23
+
+drop the unmaintained `rustls-pemfile`
 
 - SSL certificate loading in `config.rs` now parses PEM with
   `CertificateDer::pem_reader_iter` from `rustls-pki-types`, which `rustls`

@@ -1,6 +1,8 @@
 # Meeting Place Changelog
 
-## 0.5.1 — the `api` endpoint is checked before tokens are sent to it
+## [0.5.1] - 2026-11-13
+
+the `api` endpoint is checked before tokens are sent to it
 
 `MeetingPlace::new` passes the `api` service endpoint from the Meeting Place
 DID document to `TDKSharedState::check_service_endpoint` and returns
@@ -13,24 +15,28 @@ Behaviour change (R3.6): a Meeting Place DID whose `api` endpoint is plain
 `http://` on another host is refused at construction. Requests also inherit
 the shared client's new connect and request timeouts. No API change.
 
-## Unreleased (0.5.0) — tdk-common 0.7
+## [0.5.0] - 2026-10-01
+
+tdk-common 0.7
 
 Moves to `affinidi-tdk-common` 0.7 (`affinidi-data-integrity` 0.8). `TDKSharedState` and `TDKProfile` are in this crate's public API, so it moves a minor. No source change.
 
-## Unreleased (0.4.5) — dependency refresh
+## [0.4.5] - 2026-08-23
+
+dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
 - No source or API change; the bumps are declaration-only and the crate
   compiles unmodified against them. Bumped workspace-wide in the same
   change so no two versions of these crates are compiled side by side.
 
-## 19th July 2026 (0.4.4)
+## [0.4.4] - 2026-07-19
 
 - Bumped the `affinidi-did-common` requirement from `"0.3"` to `"0.4"`.
   No functional change to this crate: `Document` gained a typed
   `also_known_as` field, which is additive.
 
-## 13th June 2026 (0.4.3)
+## [0.4.3] - 2026-06-13
 
 - **Publish fix.** The W9 semver wave (#448) added a wildcard match arm here
   for `affinidi-did-common`'s now-`#[non_exhaustive]` `Endpoint` enum, but the
@@ -41,18 +47,18 @@ Moves to `affinidi-tdk-common` 0.7 (`affinidi-data-integrity` 0.8). `TDKSharedSt
   transitively. This bump publishes the already-fixed source. No API or
   behaviour change beyond the W9 match arm.
 
-## 1st June 2026 (0.4.2)
+## [0.4.2] - 2026-06-01
 
 - Release on `affinidi-messaging-didcomm` 0.15 (#327). Dependency-only;
   no Meeting Place API or behaviour change.
 
-## 31st May 2026 (0.4.1)
+## [0.4.1] - 2026-05-31
 
 - Bump `affinidi-messaging-didcomm` to 0.14 (DIDComm v2.1 interop fixes:
   ECDH-1PU authcrypt KDF #322, JWS unprotected `kid` #323,
   sign-then-encrypt unpack #324). No Meeting Place API change.
 
-## 2nd May 2026 (0.4.0)
+## [0.4.0] - 2026-05-02
 
 - **BREAKING:** Migrated to `affinidi-tdk-common` 0.6 — field accesses on
   `TDKSharedState` (`.client`, `.did_resolver`, `.authentication`) now go
@@ -93,45 +99,45 @@ Moves to `affinidi-tdk-common` 0.7 (`affinidi-data-integrity` 0.8). `TDKSharedSt
   OOB-message base64 round-trip, and URI extraction edge cases.
 - **DOCS:** Added `#![forbid(unsafe_code)]` at the crate root.
 
-## 28th March 2026 (0.3.2)
+## [0.3.2] - 2026-03-28
 
 - **FIX:** Republish with `affinidi-messaging-didcomm` 0.13 dependency
   (published 0.3.1 still referenced 0.12 on crates.io)
 
-## 10th March 2026 (0.2.3)
+## [0.2.3] - 2026-03-10
 
 - **CHORE:** Updated to new `affinidi-messaging-didcomm` 0.13.0
   - Import paths changed from `affinidi_didcomm` to `affinidi_messaging_didcomm`
 
-## 18th December 2025 (0.2.2)
+## [0.2.2] - 2025-12-18
 
 - **CHORE:** Updating dependencies
 
-## 3rd November 2025 (0.2.1)
+## [0.2.1] - 2025-11-03
 
 - **CHORE:** Updating dependencies
 
-## 30th September 2025 (0.2.0)
+## [0.2.0] - 2025-09-30
 
 - **BREAKING:** Removed SSI Library dependencies
 
-## 29th May 2025 (0.1.10)
+## [0.1.10] - 2025-05-29
 
 - **MAINTENANCE:** Updating dependencies (mainly SSI crate)
 - **UPDATE:** Meeting Place API changed, requiring mediator DID to be specified
 
-## 3rd May 2025 (0.1.9)
+## [0.1.9] - 2025-05-03
 
 - **MAINTENANCE:** Updating dependencies, especially due to changes with DID
   authentication
 
-## 16th April 2025 (0.1.8)
+## [0.1.8] - 2025-04-16
 
 - Removed hardcoded API endpoint for MPX
   - Will derive the API endpoint from the DID (#api), otherwise will fail back to
     the default MPX API
 
-## 29th March 2025 (0.1.7)
+## [0.1.7] - 2025-03-29
 
 - **FEATURE:** MeetingPlace API's added
   - query-offer
@@ -139,6 +145,6 @@ Moves to `affinidi-tdk-common` 0.7 (`affinidi-data-integrity` 0.8). `TDKSharedSt
   - register-offer
   - deregister-offer
 
-## Release 0.1.0
+## [0.1.0] - 2025-03-03
 
 - Initial release of crate

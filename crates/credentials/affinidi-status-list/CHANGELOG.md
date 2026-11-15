@@ -1,6 +1,8 @@
 # Affinidi Status List Changelog
 
-## Unreleased (0.2.0) — issuer allocation state split out; multibase `encodedList`; all W3C status purposes
+## [0.2.0] - 2026-11-15
+
+issuer allocation state split out; multibase `encodedList`; all W3C status purposes
 
 Breaking (R3.6): API and wire changes. Coordinate with every service that
 publishes or fetches Bitstring Status List credentials.
@@ -48,7 +50,9 @@ publishes or fetches Bitstring Status List credentials.
   (`Es256Verifier`, `EdDsaVerifier`, ...) under an algorithm allowlist, the
   same trait the OID4VC crates use. The closure-based `verify` is unchanged.
 
-## Unreleased (0.1.7) — IETF Token Status List
+## [0.1.7] - 2026-10-10
+
+IETF Token Status List
 
 Additive: a new `token` module and three new `StatusListError` variants
 (the enum is `#[non_exhaustive]`). Nothing existing changes.
@@ -77,25 +81,29 @@ Additive: a new `token` module and three new `StatusListError` variants
 
 The CWT form (`statuslist+cwt`) is not implemented.
 
-## Unreleased (0.1.6) — `rand` 0.10
+## [0.1.6] - 2026-10-01
+
+`rand` 0.10
 
 No behaviour change and no public API change: this is a private dependencies here.
 Verified by the crate's test suite.
 
-## Unreleased (0.1.5) — dependency refresh
+## [0.1.5] - 2026-08-23
+
+dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
 - No source or API change; the bumps are declaration-only and the crate
   compiles unmodified against them. Bumped workspace-wide in the same
   change so no two versions of these crates are compiled side by side.
 
-## 14th June 2026 Release 0.1.4
+## [0.1.4] - 2026-06-14
 
 - `StatusListError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
   additively. Patch bump keeps the `0.1` pin valid; consumers that `match` it
   must add a `_` wildcard arm. No behaviour change. (W7 sweep)
 
-## 1st June 2026 Release 0.1.3
+## [0.1.3] - 2026-06-01
 
 ### Fixed
 
@@ -111,7 +119,7 @@ Verified by the crate's test suite.
   and `set` now reserve the index in `assigned`, making it the single
   authority for which slots are free. Added a 500-round regression test.
 
-## 28th May 2026 Release 0.1.2
+## [0.1.2] - 2026-05-28
 
 ### Security
 

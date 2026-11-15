@@ -1,7 +1,8 @@
 # Affinidi Messaging Core Changelog
 
-## Unreleased
-### 0.1.13 — relationship operations can hand back the control message to send
+## [0.1.13] - 2026-11-15
+
+relationship operations can hand back the control message to send
 
 - `RelationshipChange { state, control_message }` and three defaulted
   `RelationshipManager` methods: `request_relationship_with_control`,
@@ -19,7 +20,9 @@
   `pack` straight after requesting a relationship (which fails for TSP while
   `Pending`), and no longer call `len()` on the optional `verification_key`.
 
-### 0.1.12 — a transport can say where a sent message is held, and an inbound can ask for a receipt
+## [0.1.12] - 2026-11-14
+
+a transport can say where a sent message is held, and an inbound can ask for a receipt
 
 - `DeliveryScope` (`Local`, `Relayed`, `Unknown`, the default) and
   `MessageTransport::delivery_scope(dest)`: whether a message sent to `dest`
@@ -35,7 +38,9 @@
 
 No breaking change.
 
-### 0.1.11 — a transport can say why a message left the outbox
+## [0.1.11] - 2026-09-26
+
+a transport can say why a message left the outbox
 
 `MessageTransport::outbox_status(hop_ids)` reports where each sent message
 stands at the sender's mediator, as an `OutboxStatus` keyed by hop id:
@@ -53,14 +58,18 @@ saw a recipient that collected before its first poll. Who removed the message
 is what separates delivery from loss, and this is how a transport reports it.
 See affinidi-tdk-rs#896.
 
-### 0.1.10 — `reply_expected` means an answer is still owed
+## [0.1.10] - 2026-09-23
+
+`reply_expected` means an answer is still owed
 
 Documentation only. `InboundKind::RelationshipControl::reply_expected` is
 `true` when a TSP §7.3 answer to a cancellation is still owed by the consumer
 — a transport that sends the answer itself reports `false` once it has — and
 `thread_digest` on a cancellation is the relationship digest it named.
 
-### 0.1.9 — a queue-full refusal is a distinguishable thing
+## [0.1.9] - 2026-09-20
+
+a queue-full refusal is a distinguishable thing
 
 `MessagingError::queue_full()` and `HttpStatusError::queue_full()` return which
 of the mediator's three queue-depth gates refused a send, as a `QueueFullGate`
@@ -89,7 +98,9 @@ a destination, and prose that merely quotes a gate name must not trigger it.
 
 Additive: new methods and a new type, nothing removed or changed.
 
-### 0.1.8 — an `Inbound` says whether it is traffic or a request about the relationship
+## [0.1.8] - 2026-09-16
+
+an `Inbound` says whether it is traffic or a request about the relationship
 
 `Inbound` gains `kind: InboundKind`, distinguishing application data from a
 request *about* the relationship carrying it (TSP Rev 3 §7.2 — an invite,
@@ -129,7 +140,9 @@ skips a frame that is not a binding envelope — its own comment names "TSP
 control frames" as a case — so the control messages now surfaced are skipped
 there exactly as they were never delivered before.
 
-### 0.1.7 — `HttpStatusError`, and `MessagingError::HttpStatus`
+## [0.1.7] - 2026-09-16
+
+`HttpStatusError`, and `MessagingError::HttpStatus`
 
 A transport's HTTP failure reached a `MessagingService` caller as
 `MessagingError::Transport(String)`, so a mediator `429` — and which service
@@ -154,9 +167,9 @@ sent it, and when to retry — was text.
 - New dependencies: `serde_json` (the rate-limit contract body) and `httpdate`
   (already in any graph that makes an HTTP call, via hyper).
 
-## 8th August 2026
+## [0.1.6] - 2026-08-08
 
-### 0.1.6 — `Protocol::DIDCommV1`, and `Protocol` is now `#[non_exhaustive]`
+`Protocol::DIDCommV1`, and `Protocol` is now `#[non_exhaustive]`
 
 Add `Protocol::DIDCommV1` for the new `affinidi-messaging-didcomm-v1` crate, so
 a consumer holding a `dyn MessagingProtocol` can tell DIDComm v1 apart from
@@ -177,9 +190,9 @@ it only in two equality comparisons against `Protocol::TSP`. Any consumer that
 does match exhaustively needs a `_ =>` arm.
 
 
-## 16th July 2026
+## [0.1.5] - 2026-07-16
 
-### 0.1.5 — `MessageTransport::outbox_message_ids` (outbox-drain evidence)
+`MessageTransport::outbox_message_ids` (outbox-drain evidence)
 
 Add `MessageTransport::outbox_message_ids()` — the hop-ids still held in the
 **sender's own outbox**, a transport's "not yet picked up" signal for the §5a
@@ -188,7 +201,9 @@ implements it; the default returns `None` (a stateless transport gives no such
 signal), so the addition is non-breaking.
 
 
-### 0.1.4 — `MessageTransport` wire contract
+## [0.1.4] - 2026-07-16
+
+`MessageTransport` wire contract
 
 Add the `transport::MessageTransport` trait and its vocabulary
 (`TransportKind`, `SendReceipt`, `Inbound`, `InboundAck`) — the contract a
@@ -208,7 +223,9 @@ moves already-packed bytes. Definition only — no implementors in this crate
 yet; the DIDComm adapter and conformance suite follow. Additive; pulls
 `futures-util` (for `BoxStream`) and `tokio` (`sync` only, for `watch`).
 
-### 0.1.3 — `ConnState` transport connection vocabulary
+## [0.1.3] - 2026-07-16
+
+`ConnState` transport connection vocabulary
 
 Add `transport::ConnState` (`Connecting` / `Connected` / `Disconnected`), a
 `#[non_exhaustive]` enum for the re-falsifiable connection state a messaging
@@ -217,9 +234,9 @@ DIDComm websocket transport now emits and the forthcoming `MessageTransport`
 trait / delivery layer observe, so connectivity is a live signal rather than a
 boot-time latch (R6.2). Additive; no existing API changed.
 
-## 14th June 2026
+## [0.1.2] - 2026-06-14
 
-### 0.1.2 — non_exhaustive MessagingError (W7 sweep)
+non_exhaustive MessagingError (W7 sweep)
 
 - `MessagingError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
   additively. Patch bump keeps the `0.1` pin valid; consumers that `match` it

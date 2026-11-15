@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/affinidi-did-resolver-cache-server.svg)](https://crates.io/crates/affinidi-did-resolver-cache-server)
 [![Documentation](https://docs.rs/affinidi-did-resolver-cache-server/badge.svg)](https://docs.rs/affinidi-did-resolver-cache-server)
-[![Rust](https://img.shields.io/badge/rust-1.94.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-resolver-cache-server)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-resolver-cache-server)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 A standalone network service for resolving and caching DID Documents at scale.
@@ -26,7 +26,7 @@ graph LR
 
 WebSocket clients multiplex multiple in-flight requests on one connection and
 may receive responses out of order. The
-[`affinidi-did-resolver-cache-sdk`](../affinidi-did-resolver-cache-sdk/) handles
+[`affinidi-did-resolver-cache-sdk`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-resolver-cache-sdk/) handles
 the matching on the client side.
 
 ## Running
@@ -125,8 +125,8 @@ need a different method mix, edit the SDK's default feature set at
 
 ## Related Crates
 
-- [`affinidi-did-resolver-cache-sdk`](../affinidi-did-resolver-cache-sdk/) — client SDK (enable the `network` feature to connect over WebSocket)
-- [`affinidi-did-common`](../affinidi-did-common/) — DID / DID Document types
+- [`affinidi-did-resolver-cache-sdk`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-resolver-cache-sdk/) — client SDK (enable the `network` feature to connect over WebSocket)
+- [`affinidi-did-common`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-common/) — DID / DID Document types
 
 ## License
 

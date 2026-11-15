@@ -1,11 +1,15 @@
 # affinidi-messaging-didcomm-v1 changelog
 
-## Unreleased (0.2.4) — affinidi-crypto 0.3
+## [0.2.4] - 2026-11-13
+
+affinidi-crypto 0.3
 
 - **Changed:** requires `affinidi-crypto` 0.3. No code change. The
   `CryptoError` conversion now refers to `affinidi-crypto` 0.3.
 
-## Unreleased (0.2.3) — re-adding an identity replaces its verkey binding
+## [0.2.3] - 2026-11-12
+
+re-adding an identity replaces its verkey binding
 
 ### Changed (behaviour, R3.6)
 
@@ -21,7 +25,9 @@
 - Adding a verkey that is already bound to a different DID still binds it to
   the newly added DID (unchanged, now documented). No signature change.
 
-## Unreleased (0.2.2) — `chacha20poly1305`, `salsa20`, `blake2` 0.11
+## [0.2.2] - 2026-10-01
+
+`chacha20poly1305`, `salsa20`, `blake2` 0.11
 
 No behaviour change and no public API change: these are private dependencies
 here. Content encryption moves to aead 0.6's `AeadInOut` detached API, and the
@@ -29,14 +35,16 @@ HSalsa20 key derivation takes salsa20 0.11's own key type. `crypto_secretbox`
 stays on 0.1 (no stable 0.2 yet). The libsodium known-answer vectors pass
 unchanged.
 
-## Unreleased (0.2.1) — dependency refresh
+## [0.2.1] - 2026-08-23
+
+dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
 - No source or API change; the bumps are declaration-only and the crate
   compiles unmodified against them. Bumped workspace-wide in the same
   change so no two versions of these crates are compiled side by side.
 
-## 0.2.0 — 8th August 2026
+## [0.2.0] - 2026-08-08
 
 Adds the two Aries protocols a wallet needs to use a mediator.
 
@@ -71,7 +79,7 @@ Adds the two Aries protocols a wallet needs to use a mediator.
 Scoped to pickup 2.0: Credo's default strategy is PickUpV2 and 1.0
 (`batch-pickup`) is legacy.
 
-## 0.1.1 — 8th August 2026
+## [0.1.1] - 2026-08-08
 
 Manifest fix. No code change.
 
@@ -86,7 +94,7 @@ Manifest fix. No code change.
   added in the *same release train*, a loose minor requirement only looks
   correct because no stale lockfile exists yet.
 
-## 0.1.0 — 8th August 2026
+## [0.1.0] - 2026-08-08
 
 Initial release: DIDComm v1 (Aries RFC 0019) transport primitives, alongside the
 existing DIDComm v2.1 support in `affinidi-messaging-didcomm`.

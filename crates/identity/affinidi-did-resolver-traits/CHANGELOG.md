@@ -2,9 +2,9 @@
 
 ## Changelog history
 
-## 15th November 2026
+## [0.1.5] - 2026-11-15
 
-### 0.1.5 — `Retry-After`, and the method crates' `NetworkError`
+`Retry-After`, and the method crates' `NetworkError`
 
 - Added `NetworkFetchError::retry_after` and `with_retry_after`: how long the
   host asked the caller to wait. Additive (`NetworkFetchError` is
@@ -19,9 +19,9 @@
   Behaviour change for a caller that looked up a did:peer:0 key by its
   `did:key:…` id (R3.6).
 
-## 16th September 2026
+## [0.1.4] - 2026-09-16
 
-### 0.1.4 — typed network fetch failures
+typed network fetch failures
 
 - Added `ResolverError::NetworkFetch(NetworkFetchError)`. A resolver whose
   fetch fails reports the URL and the HTTP status as data instead of a string,
@@ -33,17 +33,17 @@
 - Additive: `ResolverError` has been `#[non_exhaustive]` since 0.1.2, so a
   new variant breaks no `match`. Patch bump per ADR 0003.
 
-## 19th July 2026
+## [0.1.3] - 2026-07-19
 
-### 0.1.3 — affinidi-did-common 0.4
+affinidi-did-common 0.4
 
 - Bumped the `affinidi-did-common` requirement from `"0.3"` to `"0.4"`.
   No functional change to this crate: `Document` gained a typed
   `also_known_as` field, which is additive.
 
-## 14th June 2026
+## [0.1.2] - 2026-06-14
 
-### 0.1.2 — non_exhaustive ResolverError (W7 sweep)
+non_exhaustive ResolverError (W7 sweep)
 
 - `ResolverError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
   additively. Patch bump keeps the `0.1` pin valid; consumers that `match` it

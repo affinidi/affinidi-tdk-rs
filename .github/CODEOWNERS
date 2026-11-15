@@ -1,0 +1,15 @@
+# Required reviewers for the paths with the widest blast radius.
+#
+# .github/, scripts/ and the root manifests hold the release pipeline and its
+# guards: a merge to main publishes every bumped crate. crates/messaging/
+# defines the transport semantics every VTI service builds on (see
+# CONTRIBUTING.md). There is deliberately no `*` default.
+
+/.github/              @stormer78
+/scripts/              @stormer78
+/tools/                @stormer78
+/verify-publish.sh     @stormer78
+/Cargo.toml            @stormer78
+/rust-toolchain.toml   @stormer78
+/deny.toml             @stormer78
+/crates/messaging/     @stormer78

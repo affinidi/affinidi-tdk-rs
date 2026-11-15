@@ -50,7 +50,7 @@ let body = client.read_body_capped(response).await?;
 TypeScript and Swift guards. The crate's test suite runs every section it has
 the capabilities for and skips the rest with a declared reason.
 
-See [ADR 0006](../../../docs/adr/0006-egress-guard-for-attacker-influenceable-urls.md).
+See [ADR 0006](https://github.com/affinidi/affinidi-tdk-rs/blob/main/docs/adr/0006-egress-guard-for-attacker-influenceable-urls.md).
 
 ## License
 

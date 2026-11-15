@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/affinidi-did-authentication.svg)](https://crates.io/crates/affinidi-did-authentication)
 [![Documentation](https://docs.rs/affinidi-did-authentication/badge.svg)](https://docs.rs/affinidi-did-authentication)
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-tdk/common/affinidi-did-authentication)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-authentication/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 Authentication using proof of DID ownership. A client proves it controls a DID
@@ -39,7 +39,7 @@ Integrate DID authentication into your Rust services by using the library API.
 ### As a binary
 
 A test binary is available in the
-[`affinidi-tdk`](../../affinidi-tdk/) crate:
+[`affinidi-tdk`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/tdk/affinidi-tdk/) crate:
 
 ```bash
 # Using an environment profile
@@ -51,9 +51,9 @@ cargo run -- -a did:web:example.com manual -d did:peer:2...
 
 ## Related Crates
 
-- [`affinidi-secrets-resolver`](../affinidi-secrets-resolver/) — Secret management (dependency)
-- [`affinidi-did-resolver-cache-sdk`](../../../affinidi-did-resolver/affinidi-did-resolver-cache-sdk/) — DID resolution (dependency)
-- [`affinidi-tdk-common`](../affinidi-tdk-common/) — Shared TDK utilities
+- [`affinidi-secrets-resolver`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/core/affinidi-secrets-resolver/) — Secret management (dependency)
+- [`affinidi-did-resolver-cache-sdk`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-resolver-cache-sdk/) — DID resolution (dependency)
+- [`affinidi-tdk-common`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/tdk/affinidi-tdk-common/) — Shared TDK utilities
 
 ## License
 

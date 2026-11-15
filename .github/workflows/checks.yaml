@@ -5,6 +5,9 @@ on:
     types:
       - opened
       - synchronize
+      # A reopened PR, or a draft marked ready, gets a fresh run too.
+      - reopened
+      - ready_for_review
   # Nothing else in this repo runs against `main`. Without these triggers every
   # security job — `audit`, `cargo-deny`, `rust-scan` — only ever sees a PR's
   # merge preview, so an advisory published *after* a PR merges is never
@@ -17,6 +20,14 @@ on:
     - cron: "17 6 * * *"
   # On demand, e.g. to confirm a security fix on `main` without waiting a day.
   workflow_dispatch:
+
+# A new push to a PR supersedes the run already in flight for it: cancel that
+# one instead of paying for both. Only pull_request runs are cancelled —
+# scheduled and dispatched runs (and release.yaml, which has no such block)
+# always run to completion.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Read-only by default. The one job that needs more grants it itself, so a job
 # added later starts read-only rather than with the repository default.
@@ -46,9 +57,10 @@ jobs:
     with:
       toolchain: "1.95.0"
       # line-tables-only: file and line numbers in backtraces, without full
-      # debug info. A test build of the workspace was near the hosted runner's
-      # disk, and the vta-sdk crossing's second trust-tasks-rs (~3 GB) killed
-      # the runner mid-build (#940). Local builds keep the default.
+      # debug info. A full-debuginfo test build of the workspace sits near the
+      # hosted runner's disk limit; it ran out mid-build in #940 (then pushed
+      # over by a second trust-tasks-rs that has since left the graph). Kept
+      # because the margin is still thin. Local builds keep the default.
       rustflags: "-D warnings --cfg tracing_unstable -C debuginfo=line-tables-only"
       # paste (RUSTSEC-2024-0436) and crypto-bigint 0.5 (RUSTSEC-2026-0387) are
       # suppressed, for the reasons below. Every entry must still match
@@ -95,7 +107,7 @@ jobs:
       verifyPublish: ${{ github.event_name == 'pull_request' }}
       deprecationCheck: true
       # Paid larger runner for check/clippy/verify-publish/deprecation-check
-      # when the repo variable is set. See docs/ci-cost.md.
+      # when the repo variable is set. See docs/ci-cost.md for the sizing.
       runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-24.04' }}
 
   # Tests run on every event, including PRs — this is the gate that matters.
@@ -104,9 +116,10 @@ jobs:
     with:
       toolchain: "1.95.0"
       # line-tables-only: file and line numbers in backtraces, without full
-      # debug info. A test build of the workspace was near the hosted runner's
-      # disk, and the vta-sdk crossing's second trust-tasks-rs (~3 GB) killed
-      # the runner mid-build (#940). Local builds keep the default.
+      # debug info. A full-debuginfo test build of the workspace sits near the
+      # hosted runner's disk limit; it ran out mid-build in #940 (then pushed
+      # over by a second trust-tasks-rs that has since left the graph). Kept
+      # because the margin is still thin. Local builds keep the default.
       rustflags: "-D warnings --cfg tracing_unstable -C debuginfo=line-tables-only"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       runs-on: ${{ vars.CI_RUNNER_LARGE || 'ubuntu-24.04' }}

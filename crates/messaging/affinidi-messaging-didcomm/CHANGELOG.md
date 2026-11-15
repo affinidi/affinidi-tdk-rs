@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.15.15 — relays address the final recipient; sign-then-encrypt keeps its signature facts
+## [0.15.15] - 2026-11-15
+
+relays address the final recipient; sign-then-encrypt keeps its signature facts
 
 - **Fixed (#1031):** `DIDCommAdapter::wrap_for_relay` put the relay's own DID
   in the forward's `next`, so the mediator was told to deliver the message to
@@ -23,7 +25,9 @@
   messages, as it always should have.
 
 
-## Unreleased (0.15.14) — affinidi-crypto 0.3
+## [0.15.14] - 2026-11-13
+
+affinidi-crypto 0.3
 
 - **Changed:** requires `affinidi-crypto` 0.3. The KEKs and CEKs it derives
   and unwraps already come back in `Zeroizing` buffers, so the wrappers this
@@ -33,7 +37,9 @@
   the `CryptoError` conversion now refer to `affinidi-crypto` 0.3; a caller
   that builds them from its own `affinidi-crypto` needs 0.3.
 
-## Unreleased (0.15.13) — key material is wiped after use
+## [0.15.13] - 2026-11-12
+
+key material is wiped after use
 
 - **Changed:** `PrivateIdentity` wipes `signing_private` when it is dropped.
   It has a `Drop` impl and implements `ZeroizeOnDrop`, as
@@ -53,7 +59,9 @@
   `vta-mobile-core/src/didcomm.rs`, builds it with a struct literal and hands
   it to `DIDCommAgent::add_identity`, which still compiles.
 
-## Unreleased (0.15.12) — bounded JWS parsing
+## [0.15.12] - 2026-11-12
+
+bounded JWS parsing
 
 - **Behaviour:** `jws::verify::parse_jws` refuses a JWS with more than
   `DEFAULT_MAX_JWS_SIGNATURES` (16) signatures, checked before any signature
@@ -68,7 +76,9 @@
   length; both are checked before the per-signature loop.
 - The payload is decoded before the signature entries, so a JWS whose
   payload is not base64url is refused before any signing input is built.
-## Unreleased (0.15.11) — did:scid sender binding
+## [0.15.11] - 2026-10-21
+
+did:scid sender binding
 
 - **Behaviour (`messaging-core` adapter):** the plaintext `from` is checked
   against the authenticated sender by DID, ignoring a did:scid `src` locator,
@@ -77,12 +87,14 @@
   `did:scid:vh:1:<scid>?src=…`. Other DIDs are unchanged.
 - The `messaging-core` feature now depends on `affinidi-did-common`.
 
-## Unreleased (0.15.10) — `sha2` 0.11, drop `rand_core` 0.6
+## [0.15.10] - 2026-10-01
+
+`sha2` 0.11, drop `rand_core` 0.6
 
 No behaviour change and no public API change. `sha2` is a private dependency;
 `rand_core` 0.6 was declared but unused and is removed.
 
-## [0.15.9] - Unreleased
+## [0.15.9] - 2026-09-25
 
 ### Security
 
@@ -208,7 +220,7 @@ No behaviour change and no public API change. `sha2` is a private dependency;
     third-party (unprotected-only) messages is unaffected — no verifier change
     was required.
 
-## 2nd August 2026 (0.15.7)
+## [0.15.7] - 2026-08-02
 
 The unused `jwk` feature is dropped from the `p256`/`k256` deps — JWK
 handling goes through `affinidi-crypto`'s own `to_jwk`/`from_jwk`, and the
@@ -231,7 +243,7 @@ Crypto behaviour is unchanged — the golden/KAT vectors (`p256_sign_verify_roun
 `secp256k1_es256k_golden` RFC 6979, `ecdh_1pu_x25519_kek_golden`,
 `concat_kdf_es_golden`, `a256cbc_hs512_golden`) all still pass.
 
-## 31st July 2026 (0.15.6)
+## [0.15.6] - 2026-07-31
 
 Moves to **curve25519-dalek 5** (`ed25519-dalek` 2 -> 3, `x25519-dalek` 2 -> 3),
 which brings rand_core 0.10 and signature 3 with it. rand 0.10 renamed `OsRng`

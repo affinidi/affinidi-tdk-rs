@@ -8,7 +8,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-affinidi-messaging-didcomm-service = "0.3"
+affinidi-messaging-didcomm-service = "0.35"
 ```
 
 ## Features
@@ -121,7 +121,7 @@ RUST_LOG=didcomm_server::request=info
 
 ## Example
 
-See [`examples/echo_server.rs`](examples/echo_server.rs) for a complete working example with:
+See [`examples/echo_server.rs`](https://github.com/affinidi/affinidi-tdk-rs/blob/main/crates/messaging/affinidi-messaging-didcomm-service/examples/echo_server.rs) for a complete working example with:
 - Axum-style router with exact and regex routes (`.route()`, `.route_regex()`)
 - Function handlers with `Extension<T>` extractors for shared state
 - Shared state registration via `.extension()`
@@ -137,9 +137,9 @@ See [`examples/echo_server.rs`](examples/echo_server.rs) for a complete working 
 
 ## Related Crates
 
-- [`affinidi-messaging-sdk`](../affinidi-messaging-sdk/) -- Client SDK for Affinidi Messaging (dependency)
-- [`affinidi-messaging-didcomm`](../affinidi-messaging-didcomm/) -- DIDComm protocol layer (dependency)
-- [`affinidi-tdk-common`](../../affinidi-tdk/common/affinidi-tdk-common/) -- Shared types including `TDKProfile` (dependency)
+- [`affinidi-messaging-sdk`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-sdk/) -- Client SDK for Affinidi Messaging (dependency)
+- [`affinidi-messaging-didcomm`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-didcomm/) -- DIDComm protocol layer (dependency)
+- [`affinidi-tdk-common`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/tdk/affinidi-tdk-common/) -- Shared types including `TDKProfile` (dependency)
 - [`affinidi-messaging-mediator`](https://github.com/affinidi/affinidi-messaging-mediator) -- Mediator server implementation
 
 ## License

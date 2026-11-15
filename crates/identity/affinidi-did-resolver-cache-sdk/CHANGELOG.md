@@ -1,6 +1,8 @@
 # Affinidi DID Resolver Cache SDK
 
-## Unreleased (0.8.55) — typed fetch failures for did:webs, did:ebsi and did:scid:ke
+## [0.8.55] - 2026-11-15
+
+typed fetch failures for did:webs, did:ebsi and did:scid:ke
 
 - **Changed (#1043):** a failed fetch of a did:webs, did:ebsi or `did:scid:ke`
   DID is `ResolverError::NetworkFetch`, with its URL, HTTP status and
@@ -17,7 +19,9 @@
   and, with their features, `did-scid` 0.4.9, `did-ebsi` 0.1.8 and
   `affinidi-did-webs` 0.13.6.
 
-## Unreleased (0.8.54) — network mode: connection state observable, requests bounded, no wedge after reconnects
+## [0.8.54] - 2026-11-15
+
+network mode: connection state observable, requests bounded, no wedge after reconnects
 
 ### Fixed
 
@@ -82,12 +86,16 @@ Network mode only. No signature changes; patch bump per
   (`DIDCacheConfigBuilder`); the cache table lists did:ebsi, did:webs and
   custom-resolver methods as mutable, as the code treats them (#1053).
 
-## Unreleased (0.8.53) — affinidi-crypto 0.3
+## [0.8.53] - 2026-11-13
+
+affinidi-crypto 0.3
 
 - **Changed:** requires `affinidi-crypto` 0.3. No code change and no
   `affinidi-crypto` type in this crate's API.
 
-## Unreleased (0.8.52) — network mode checks the cache server's answer as local resolution would
+## [0.8.52] - 2026-11-12
+
+network mode checks the cache server's answer as local resolution would
 
 ### Changed
 
@@ -143,19 +151,25 @@ No public API change. Patch bump per
 [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) point 3; the
 behaviour change is called out here (R3.6).
 
-## Unreleased (0.8.51) — affinidi-did-webs 0.13
+## [0.8.51] - 2026-11-11
+
+affinidi-did-webs 0.13
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.13, on
   affinidi-keri 0.8: native CESR bodies resolve, keripy's delegated rotations
   verify, and the `EO` and `DND` configuration traits are enforced.
 
-## Unreleased (0.8.50) — affinidi-did-webs 0.12
+## [0.8.50] - 2026-11-11
+
+affinidi-did-webs 0.12
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.12, on
   affinidi-keri 0.7: rotations verify as keripy verifies them, and a recovery
   rotation supersedes interaction events and what they anchored.
 
-## Unreleased (0.8.49) — affinidi-did-webs 0.11
+## [0.8.49] - 2026-11-10
+
+affinidi-did-webs 0.11
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.11: did:webs
   on KERI 2.0 (alpha). Designations are read for both ACDC versions, a stream
@@ -163,19 +177,25 @@ behaviour change is called out here (R3.6).
   designation the resolver does not implement fails with
   `unsupportedDesignation`.
 
-## Unreleased (0.8.48) — affinidi-did-webs 0.10
+## [0.8.48] - 2026-11-10
+
+affinidi-did-webs 0.10
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.10, on
   affinidi-keri 0.6: rotations now verify in keripy, and thresholds of 10 or
   more are read as hex.
 
-## Unreleased (0.8.47) — affinidi-did-webs 0.9
+## [0.8.47] - 2026-11-09
+
+affinidi-did-webs 0.9
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.9, which
   no longer turns on `serde_json`'s `preserve_order` for the whole build. A
   consumer enabling `did-webs` keeps its own JSON key order and `Value` size.
 
-## Unreleased (0.8.46) — did:webs obeys the host policy
+## [0.8.46] - 2026-11-09
+
+did:webs obeys the host policy
 
 - **Behaviour (security):** `did:webs` resolution follows
   `DIDCacheConfigBuilder::with_host_policy`, as did:web, did:webvh and did:scid
@@ -184,14 +204,18 @@ behaviour change is called out here (R3.6).
   the default `PublicOnly`. Requires affinidi-did-webs 0.8.2.
 - **Added:** `network_resolvers::WebsResolver::with_policy`.
 
-## Unreleased (0.8.45) — affinidi-did-webs 0.8
+## [0.8.45] - 2026-11-08
+
+affinidi-did-webs 0.8
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.8, which
   resolves as the did:webs specification requires: a DID resolves only when its
   AID designates it, signatures are held to the signing threshold, replies are
   ordered by BADA, and the published `did.json` is compared as a whole.
 
-## Unreleased (0.8.44) — did:scid forks are refused
+## [0.8.44] - 2026-10-31
+
+did:scid forks are refused
 
 - **Behaviour (security):** the did:scid source book refuses a log that does
   not contain the version it has verified for that SCID, at that version's
@@ -214,7 +238,9 @@ behaviour change is called out here (R3.6).
   the version ids in its error text, which a caller may pass on; they are
   logged at `warn` for the operator.
 
-## Unreleased (0.8.43) — did:scid version floors that survive a restart
+## [0.8.43] - 2026-10-22
+
+did:scid version floors that survive a restart
 
 - **Behaviour (security):** a did:scid DID URL whose `src` the source book
   does not know for that identity is also checked against the sources it does
@@ -232,7 +258,9 @@ behaviour change is called out here (R3.6).
   or the listener) and seeds them back at boot; `seed` raises a floor but
   never lowers it (VTI-KEY-162).
 
-## Unreleased (0.8.42) — native did:scid resolution
+## [0.8.42] - 2026-10-21
+
+native did:scid resolution
 
 - **Behaviour (breaking for did:scid callers):** a `did:scid:vh:1` DID resolves
   to its own document, with the bare `did:scid:vh:1:<scid>` DID as `id` and its
@@ -257,7 +285,9 @@ behaviour change is called out here (R3.6).
 - **Added:** `ScidResolverWithPolicy`, which `DIDCacheClient` now registers.
   `ScidResolver` still refuses non-public hosts and keeps no sources.
 
-## Unreleased (0.8.41) — didwebvh-rs 0.8, did-scid 0.3
+## [0.8.41] - 2026-10-01
+
+didwebvh-rs 0.8, did-scid 0.3
 
 Moves to `didwebvh-rs` 0.8 and `did-scid` 0.3, both on `affinidi-data-integrity`
 0.8. Neither appears in this crate's public API, so this is a patch: a fresh
@@ -265,12 +295,16 @@ resolve of `affinidi-did-resolver-cache-sdk = "0.8"` (trust-tasks-proof's
 requirement, for example) now brings no `affinidi-data-integrity` 0.7 copy with
 it. No behaviour change.
 
-## Unreleased (0.8.40) — clippy `collapsible_if`
+## [0.8.40] - 2026-10-01
+
+clippy `collapsible_if`
 
 No behaviour change. The shortcut check in `resolve` is written as a let-chain
 so `cargo clippy -D warnings` passes on Rust 1.95.
 
-## Unreleased (0.8.39) — a deactivated did:webvh no longer resolves
+## [0.8.39] - 2026-09-29
+
+a deactivated did:webvh no longer resolves
 
 ### Changed
 
@@ -290,7 +324,9 @@ so `cargo clippy -D warnings` passes on Rust 1.95.
 - Code that deliberately resolves deactivated DIDs (to show history, say) must
   use `didwebvh-rs` directly and read `MetaData::deactivated`.
 
-## Unreleased (0.8.38) — a rate-limited DID host is typed, and does not multiply
+## [0.8.38] - 2026-09-16
+
+a rate-limited DID host is typed, and does not multiply
 
 ### Added
 
@@ -352,7 +388,9 @@ so `cargo clippy -D warnings` passes on Rust 1.95.
 Patch bump per ADR 0003: both enums are `#[non_exhaustive]`, so the new
 variants break no `match`.
 
-## Unreleased (0.8.37) — did:webvh host policy, one setting for did:web and did:webvh
+## [0.8.37] - 2026-09-12
+
+did:webvh host policy, one setting for did:web and did:webvh
 
 ### Changed
 
@@ -405,7 +443,9 @@ variants break no `match`.
 This is a patch bump per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md)
 point 3: `vta-sdk` pins `^0.8` through `[patch.crates-io]`.
 
-## Unreleased (0.8.36) — retire did:cheqd resolution, clearing eight advisories
+## [0.8.36] - 2026-09-05
+
+retire did:cheqd resolution, clearing eight advisories
 
 Closes [#760]. `did:cheqd` still **parses**; this SDK no longer **resolves** it.
 
@@ -453,7 +493,7 @@ client.append_resolver(MethodName::Cheqd, Box::new(MyCheqdResolver));
 
 [#760]: https://github.com/affinidi/affinidi-tdk-rs/issues/760
 
-## 0.8.35
+## [0.8.35] - 2026-09-05
 
 ### Changed
 
@@ -476,35 +516,35 @@ client.append_resolver(MethodName::Cheqd, Box::new(MyCheqdResolver));
 
 - `WebResolver::with_policy` and the re-exported `HostPolicy`.
 
-## 0.8.34
+## [0.8.34] - 2026-08-23
 
 ### Changed
 
 - `did-webs` feature now requires `affinidi-did-webs` 0.7, which can designate
   `alsoKnownAs` identifiers.
 
-## 0.8.33
+## [0.8.33] - 2026-08-23
 
 ### Changed
 
 - `did-webs` feature now requires `affinidi-did-webs` 0.6, which fixes key
   rotation silently withdrawing service endpoints and designated aliases.
 
-## 0.8.32
+## [0.8.32] - 2026-08-23
 
 ### Changed
 
 - `did-scid` feature now requires `did-scid` 0.2.3, which fixes `did:scid:ke`
   being unreachable through `resolve`.
 
-## 0.8.31
+## [0.8.31] - 2026-08-23
 
 ### Changed
 
 - `did-webs` feature now requires `affinidi-did-webs` 0.5, which fetches over
   plain HTTP for loopback hosts and adds `WebsResolver::allow_http`.
 
-## 0.8.30
+## [0.8.30] - 2026-08-23
 
 ### Changed
 
@@ -513,21 +553,21 @@ client.append_resolver(MethodName::Cheqd, Box::new(MyCheqdResolver));
 - `did-scid` feature now requires `did-scid` 0.2, which adds `did:scid:ke:1`
   (KERI AIDs via `did:webs`) and reports an unresolvable format by name.
 
-## 0.8.28
+## [0.8.28] - 2026-08-23
 
 ### Changed
 
 - `did-webs` feature now requires `affinidi-did-webs` 0.3, which enforces
   witness receipts when a key event log declares witnesses.
 
-## 0.8.27
+## [0.8.27] - 2026-08-23
 
 ### Changed
 
 - `did-webs` feature now requires `affinidi-did-webs` 0.2, which derives
   `alsoKnownAs` from a verified designated-aliases attestation.
 
-## 0.8.26
+## [0.8.26] - 2026-08-23
 
 ### Added
 
@@ -548,14 +588,18 @@ client.append_resolver(MethodName::Cheqd, Box::new(MyCheqdResolver));
   rotation is never picked up. This affected every custom-registered resolver,
   not only `did:webs`.
 
-## Unreleased (0.8.25) — dependency refresh
+## [0.8.25] - 2026-08-23
+
+dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
 - No source or API change; the bumps are declaration-only and the crate
   compiles unmodified against them. Bumped workspace-wide in the same
   change so no two versions of these crates are compiled side by side.
 
-## Unreleased (0.8.24) — drop the unmaintained `number_prefix`
+## [0.8.24] - 2026-08-23
+
+drop the unmaintained `number_prefix`
 
 - The `benchmark` example formats binary sizes with a small inlined helper
   instead of `number_prefix`, which is unmaintained (RUSTSEC-2025-0119). One
@@ -566,7 +610,9 @@ client.append_resolver(MethodName::Cheqd, Box::new(MyCheqdResolver));
   does not split the dependency.
 - No library change.
 
-## Unreleased (0.8.23) — did:ethr, did:pkh and did:jwk resolve in-tree
+## [0.8.23] - 2026-08-22
+
+did:ethr, did:pkh and did:jwk resolve in-tree
 
 - **`did:ethr`, `did:pkh` and `did:jwk` are now resolved by in-tree crates**
   (`affinidi-did-ethr`, `affinidi-did-pkh`, `affinidi-did-jwk`) instead of the
@@ -601,7 +647,7 @@ client.append_resolver(MethodName::Cheqd, Box::new(MyCheqdResolver));
 - `did:pkh` refuses an unknown chain namespace instead of resolving it
   generically.
 
-## 2nd August 2026 (0.8.22)
+## [0.8.22] - 2026-08-02
 
 **BREAKING (behaviour): `did:ethr` and `did:pkh` are now behind features and
 OFF by default.**
@@ -627,11 +673,9 @@ called out here rather than encoded in the version — see R3.6 in CLAUDE.md.
 
 ## Changelog history
 
-## 23rd July 2026
+## [0.8.21] - 2026-07-23
 
-#
-
-## 0.8.21 — `resolve_any` accepts a community name
+`resolve_any` accepts a community name
 
 `resolve_any("example.com/@")` now classifies as an agent name and resolves,
 where it previously failed as malformed. The agent name FAQ gives a name with
@@ -645,7 +689,9 @@ manifest requirement stays `0.1` because both crates release together, so a
 No API change. `AgentName::is_community()` distinguishes the form for callers
 that key storage by local name and need to route it elsewhere.
 
-### 0.8.20 — a display name for a resolved DID
+## [0.8.20] - 2026-07-23
+
+a display name for a resolved DID
 
 `ResolveResponse::display_name()` returns the verified human name for a DID
 when one is known, and the DID itself otherwise. It is the call display code
@@ -660,7 +706,7 @@ Every consumer that shows a DID to a person previously had to re-derive this:
 resolve the DID, read `alsoKnownAs`, resolve each claimed name, check it points
 back. The resolver already holds every piece.
 
-#### It cannot show an unverified name
+### It cannot show an unverified name
 
 `ResolveResponse::shortcut` is only ever populated after verification, so a UI
 that routes every DID through `display_name()` degrades to the full DID rather
@@ -668,7 +714,7 @@ than to a spoofable one. Displaying a name straight from `alsoKnownAs` is a
 phishing surface — anyone may claim `bigbank.com/@support` in their own
 document.
 
-#### Extensible by design
+### Extensible by design
 
 The value is a `DidShortcut`, a `#[non_exhaustive]` enum rather than a bare
 `Option<String>`, so further shortcut schemes can be added without a breaking
@@ -678,7 +724,7 @@ something printable uses `display_name()` and never matches at all.
 `ResolveResponse` gains a field rather than changing `new` — additive on a
 sealed struct, per ADR 0003.
 
-#### Two directions, one of them opt-in
+### Two directions, one of them opt-in
 
 From a name (`resolve_any` / `resolve_agent_name`) the shortcut is free:
 verification has just run, and the name was previously discarded from the
@@ -689,7 +735,7 @@ is set. **Off by default**: it costs a network round-trip to the naming host,
 which a caller that only wants a document should not pay unasked. Behaviour and
 latency for existing consumers are unchanged.
 
-#### Verification is the same three stages
+### Verification is the same three stages
 
 Entered from the DID end, `derive_shortcut` requires that the candidate come
 from this document's `alsoKnownAs`, that the document be the one just resolved,
@@ -701,9 +747,9 @@ resolve the DID again and re-enter derivation without bound. Candidates are
 capped, as a hostile document may claim hundreds. A name a document claims but
 which resolves elsewhere is logged and skipped, never displayed.
 
-## 20th July 2026
+## [0.8.19] - 2026-07-20
 
-### 0.8.19 — resolve agent names over the WebSocket connection
+resolve agent names over the WebSocket connection
 
 Opt in with `with_agent_names_over_websocket(true)`. **Off by default**, and
 requires `affinidi-did-resolver-cache-server` 0.9.9 or newer.
@@ -713,7 +759,7 @@ transports**: HTTP to the cache server for name → DID, then WebSocket for
 DID → document. The server now does both in one exchange on the connection the
 client already holds.
 
-#### How it stays compatible
+### How it stays compatible
 
 The name travels in `WSRequest::did` *and* in a new optional `agent_name`. A
 server that predates this ignores the unknown field, tries to parse the name as a
@@ -726,23 +772,23 @@ a full `network_timeout` with nothing to report.
 `WSResponse` gains an optional `agent_name` echo. No new `WSResponseType`
 variant — see the note on that type for why.
 
-#### Not auto-detected, deliberately
+### Not auto-detected, deliberately
 
 An older server's response to a name request is a generic "failed to parse DID",
 indistinguishable from a real failure without matching on error strings. Enabling
 this against an old server is therefore safe but useless — you get an error, not
 a hang. Capability discovery is the proper answer and is not attempted here.
 
-#### Verification is unchanged
+### Verification is unchanged
 
 `alsoKnownAs` is still checked client-side, against the document this client
 received. The server resolves and caches; it is not trusted to have verified
 anything. `WSCommands::ResponseReceived` now carries the whole `WSResponse`
 rather than picked-apart fields, so the resolved DID and echoed name are
 available without further protocol changes.
-## 20th July 2026
+## [0.8.18] - 2026-07-20
 
-### 0.8.18 — seal the WebSocket wire types
+seal the WebSocket wire types
 
 `WSRequest`, `WSResponse`, `WSResponseError` and `WSResponseType` are now
 `#[non_exhaustive]`, with `WSRequest::new`, `WSResponse::new` / `with_logs` and
@@ -754,7 +800,7 @@ the cache server for name→DID, then WebSocket for DID→document. Collapsing t
 onto the connection the client already holds means growing these types, and
 growing them should not require a breaking release each time.
 
-#### The wire rule these types now document
+### The wire rule these types now document
 
 Sealing records a Rust-level constraint. The wire-level one is stricter and
 matters more, so it is written on `WSResponseType`:
@@ -774,9 +820,9 @@ rather than rejected, that absent logs are omitted, and that the enum really is
 externally tagged.
 
 No behaviour change — this is types and construction paths only.
-## 20th July 2026
+## [0.8.17] - 2026-07-20
 
-### 0.8.17 — single-flight for concurrent agent name lookups
+single-flight for concurrent agent name lookups
 
 Concurrent first-time lookups of the *same* agent name now collapse into one
 backend call, mirroring the single-flight the document cache has always had.
@@ -800,9 +846,9 @@ that would only appear under concurrent load in production.
 Deferred from 0.8.15, where it was called out as an inefficiency rather than a
 correctness problem. It remains an optimisation — no behaviour changes for a
 single caller.
-## 20th July 2026
+## [0.8.16] - 2026-07-20
 
-### 0.8.16 — seal `ResolveResponse`
+seal `ResolveResponse`
 
 `ResolveResponse` is now `#[non_exhaustive]`, with `ResolveResponse::new(..)` as
 the construction path. Fields remain `pub` for reads (ADR 0003 Option B).
@@ -827,9 +873,9 @@ Not done here: the WebSocket wire types (`WSRequest`, `WSResponse`,
 a prerequisite for evolving the protocol additively. They are *constructed* by
 the cache server, so sealing needs constructors designed alongside whatever
 protocol change actually needs them, rather than speculatively.
-## 19th July 2026
+## [0.8.15] - 2026-07-19
 
-### 0.8.15 — agent names (`resolve_any`)
+agent names (`resolve_any`)
 
 New optional `agent-names` feature. Off by default; nothing changes for existing
 callers when it is not enabled.
@@ -870,9 +916,9 @@ name*. The expensive half (document resolution) is already de-duplicated by the
 existing `inflight` map; concurrent duplicate name lookups cost an extra backend
 call, which is an inefficiency rather than a correctness problem.
 
-## 19th July 2026
+## [0.8.14] - 2026-07-19
 
-### 0.8.14 — didwebvh-rs 0.6
+didwebvh-rs 0.6
 
 - Bumped the `didwebvh-rs` requirement from `"0.5"` to `"0.6"`.
 
@@ -888,17 +934,17 @@ call, which is an inefficiency rather than a correctness problem.
   needed here: the only use is a `#[from] DIDWebVHError` conversion in
   `did-scid`'s error type, not an exhaustive `match`.
 
-## 19th July 2026
+## [0.8.13] - 2026-07-19
 
-### 0.8.13 — affinidi-did-common 0.4
+affinidi-did-common 0.4
 
 - Bumped the `affinidi-did-common` requirement from `"0.3"` to `"0.4"`.
   No functional change to this crate: `Document` gained a typed
   `also_known_as` field, which is additive.
 
-## 17th June 2026
+## [0.8.11] - 2026-06-17
 
-### 0.8.11 — `did-cheqd` is now opt-in (no forced rustls `ring` backend)
+`did-cheqd` is now opt-in (no forced rustls `ring` backend)
 
 - **`did-cheqd` removed from the default `did-methods` set.** It pulled
   `did-resolver-cheqd`, whose `tonic 0.12` dependency hardcodes the rustls
@@ -931,17 +977,17 @@ call, which is an inefficiency rather than a correctness problem.
   `Verifier::new_with_extra_roots`, so the Android cross-compile gap from #483/#484
   does not apply here. No source change required.
 
-## 14th June 2026
+## [0.8.10] - 2026-06-14
 
-### 0.8.10 — non_exhaustive DIDCacheError (W7 sweep)
+non_exhaustive DIDCacheError (W7 sweep)
 
 - `DIDCacheError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
   additively. Patch bump keeps the `0.8` pin valid; consumers that `match` it
   must add a `_` arm. No behaviour change.
 
-## 13th June 2026
+## [0.8.9] - 2026-06-13
 
-### 0.8.9 — supervise the network task (W15)
+supervise the network task (W15)
 
 - **Network task supervised.** In network mode the background task is now
   spawned through the shared `affinidi-task-utils` `TaskSupervisor` (the same
@@ -960,7 +1006,9 @@ call, which is an inefficiency rather than a correctness problem.
 - No public API removed; the network feature additionally pulls in
   `affinidi-task-utils`. Local (default) builds are unaffected.
 
-### 0.8.8 — client resilience: no-panic init, local fallback, stampede dedup (W3)
+## [0.8.8] - 2026-06-13
+
+client resilience: no-panic init, local fallback, stampede dedup (W3)
 
 - **Construction never panics or hangs.** The startup wait for the network task
   to connect replaces `rx.recv().await.unwrap()` with a bounded wait
@@ -979,25 +1027,21 @@ call, which is an inefficiency rather than a correctness problem.
 - Note: full restart-supervision of the background network task is deferred to
   W15 (shared supervision utility); this is the interim hardening.
 
-## 6th June 2026
+## [0.8.7] - 2026-06-06
 
-### 0.8.7 — affinidi-crypto 0.2
+affinidi-crypto 0.2
 
 - Bump `affinidi-crypto` to `0.2` (P-384/P-521 key agreement +
   `#[non_exhaustive]` key-agreement enums, #357). No API change in this
   crate.
 
-## 18th April 2026
-
-### DID Resolver Cache SDK (0.8.6)
+## [0.8.6] - 2026-04-18
 
 - **CHANGED:** Bumped `didwebvh-rs` dependency from `0.4` to `0.5`. Public
   resolver API unchanged; enables the `data-integrity 0.5.4` migration
   downstream.
 
-## 17th April 2026
-
-### DID Resolver Cache SDK (0.8.5)
+## [0.8.5] - 2026-04-17
 
 - **SECURITY:** Swapped the upstream `did-web` crate for the new
   [`affinidi-did-web`](../did-methods/did-web/) crate, which sits on
@@ -1014,9 +1058,7 @@ call, which is an inefficiency rather than a correctness problem.
 - **CHANGED:** MSRV bumped `1.90.0 → 1.94.0` via the workspace
   `rust-version`, required by the workspace-wide dep refresh.
 
-## 27th March 2026
-
-### DID Resolver Cache SDK (0.8.4)
+## [0.8.4] - 2026-03-27
 
 - **FIX:** Updated `didwebvh-rs` 0.4.0 API call — `resolve()` now takes a
   `ResolveOptions` struct instead of positional `(Option, bool)` arguments,

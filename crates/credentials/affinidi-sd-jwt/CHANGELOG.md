@@ -1,6 +1,8 @@
 # Affinidi SD-JWT Changelog
 
-## Unreleased (0.2.1) — one compact-JWS header decoder
+## [0.2.1] - 2026-11-15
+
+one compact-JWS header decoder
 
 - **Changed:** the KB-JWT `typ` check reuses the crate's compact-JWS part
   decoder instead of its own copy. Same results; the error for an
@@ -12,7 +14,9 @@
   which plug ES256 / EdDSA / custom raw-bytes signers and verifiers, with an
   algorithm allowlist, into this crate's traits. No API change here.
 
-## Unreleased (0.2.0) — key binding checked under `cnf.jwk`, with `aud`, `nonce` and `iat` required
+## [0.2.0] - 2026-11-12
+
+key binding checked under `cnf.jwk`, with `aud`, `nonce` and `iat` required
 
 Breaking (R3.6): `verify` changes signature and a requested key binding check
 is stricter.
@@ -80,7 +84,9 @@ let opts = VerificationOptions::with_key_binding(KeyBindingCheck::new(
 verify(&sd_jwt, &issuer_verifier, &hasher, &opts)?;
 ```
 
-## Unreleased (0.1.8) — RFC 9901 §7.1 disclosure processing
+## [0.1.8] - 2026-10-21
+
+RFC 9901 §7.1 disclosure processing
 
 Fixes #962. `holder::resolve_claims`, and so `verifier::verify`, now perform
 RFC 9901 §7.1 steps 3–5 in one pass over the payload and every disclosed value.
@@ -104,7 +110,9 @@ RFC 9901 §7.1 steps 3–5 in one pass over the payload and every disclosed valu
   cannot produce one from a well-formed SD-JWT. Only `{"...": digest}` objects
   with no other key are array-element digests (RFC 9901 §4.2.4.2).
 
-## Unreleased (0.1.7) — Key Binding JWT `typ` and freshness
+## [0.1.7] - 2026-10-11
+
+Key Binding JWT `typ` and freshness
 
 - **Behaviour (stricter):** with `verify_kb`, a Key Binding JWT whose header
   `typ` is not `kb+jwt` is refused (RFC 9901 §4.3, §7.3). Without the check, a
@@ -120,26 +128,30 @@ RFC 9901 §7.1 steps 3–5 in one pass over the payload and every disclosed valu
 
 For the OpenID4VP verifier in OpenVTC/verifiable-trust-infrastructure#1988.
 
-## Unreleased (0.1.6) — `rand` 0.10, `sha2` 0.11
+## [0.1.6] - 2026-10-01
+
+`rand` 0.10, `sha2` 0.11
 
 No behaviour change and no public API change: these are private dependencies here.
 Verified by the crate's test suite.
 
-## Unreleased (0.1.5) — dependency refresh
+## [0.1.5] - 2026-08-23
+
+dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
 - No source or API change; the bumps are declaration-only and the crate
   compiles unmodified against them. Bumped workspace-wide in the same
   change so no two versions of these crates are compiled side by side.
 
-## 13th June 2026 Release 0.1.4
+## [0.1.4] - 2026-06-13
 
 Semver wave (W7/W10 — release W11). `SdJwtError` and `SdJwt` are now
 `#[non_exhaustive]`; `SdJwt::new(jws, disclosures, kb_jwt)` is the construction
 path (fields stay public for reads). Patch bump — see ADR 0003 and the migration
 guide.
 
-## 13th June 2026 Release 0.1.3
+## [0.1.3] - 2026-06-13
 
 ### Security
 
@@ -148,7 +160,7 @@ guide.
   and the copy-paste hazard if the verifier is ever lifted out of the test-only
   module. `subtle` is pulled in by the existing `_test-utils` feature.
 
-## 28th May 2026 Release 0.1.2
+## [0.1.2] - 2026-05-28
 
 ### Security
 

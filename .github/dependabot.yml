@@ -1,0 +1,39 @@
+# Dependency update PRs.
+#
+# github-actions: third-party actions are pinned to commit SHAs (tag in the
+# trailing comment), which nothing else would ever move. Dependabot updates
+# the SHA and the comment together.
+#
+# cargo: lockfile-only. A change to a crate's Cargo.toml is a source change
+# that needs a version bump and a CHANGELOG entry (scripts/check-version-bumps.sh)
+# and publishes on merge, so requirement bumps stay a human decision; lockfile
+# refreshes need neither. The fuzz crates' detached lockfiles are policed by
+# scripts/check-fuzz-lock.sh and are not listed here.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(ci)"
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    versioning-strategy: lockfile-only
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: "chore(deps)"

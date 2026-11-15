@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased (0.12.10) — per-user state directory; start-up failures exit (#1032)
+## [0.12.10] - 2026-11-15
+
+per-user state directory; start-up failures exit (#1032
 
 - **Behaviour:** the state file and log now live in a per-user directory,
   `$XDG_CONFIG_HOME/affinidi-messaging-text-client/` (else
@@ -21,7 +23,9 @@
 - The state is sent to the UI only when something changed (no longer a full
   copy every second), behind an `Arc`.
 
-## Unreleased (0.12.9) — affinidi-messaging-sdk 0.49
+## [0.12.9] - 2026-11-15
+
+affinidi-messaging-sdk 0.49
 
 - Requires `affinidi-messaging-sdk` 0.49 and `affinidi-tdk` 0.47. The inbound
   channel is now the SDK's bounded `mpsc` (lossless; the socket is held back
@@ -30,7 +34,9 @@
   overwritten with the mediator's attachment id), so replies thread to the
   sender. They are still acknowledged by `UnpackMetadata::sha256_hash`.
 
-## Unreleased (0.12.8) — inbound messages handled without panicking
+## [0.12.8] - 2026-11-12
+
+inbound messages handled without panicking
 
 - Inbound messages with missing or unreadable fields are logged and skipped
   instead of panicking: a `chat-message` with no `text`, a `chat-effect` with
@@ -54,7 +60,9 @@
 - **Behaviour:** a `config.json` that exists but cannot be read or parsed is
   no longer replaced by an empty state; the client reports it and exits
   without writing. Only a missing file starts from the default state.
-## Unreleased (0.12.7) — dependency currency
+## [0.12.7] - 2026-09-06
+
+dependency currency
 
 No behaviour change: `ratatui-image` 10 → 11.
 

@@ -1,6 +1,8 @@
 # ADR 0001 — Centralize JOSE crypto primitives in `affinidi-crypto`
 
-- **Status:** Proposed
+- **Status:** Accepted — implemented in `affinidi-crypto` 0.1.8 (the `jose`
+  module, #337) and adopted by `affinidi-messaging-didcomm` 0.15.0, which
+  deleted its bespoke crypto (#339)
 - **Date:** 2026-06-01
 - **Tracking issue:** #327 (follow-up to #326, which fixed #322/#323/#324)
 - **Supersedes / relates to:** the didcomm/vta-sdk patch interaction (#328), `vti-didcomm-js` wire-compat sibling

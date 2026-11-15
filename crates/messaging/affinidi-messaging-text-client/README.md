@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 A terminal-based DIDComm chat client for interacting with
-[Affinidi Messaging](../) mediators. Useful for testing, demos, and debugging
+[Affinidi Messaging](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/) mediators. Useful for testing, demos, and debugging
 message flows.
 
 This crate is `publish = false` — it's distributed via this repository, not
@@ -43,7 +43,7 @@ Don't copy the state file off the host or commit it to source control.
 
 ## Related Crates
 
-- [`affinidi-messaging-sdk`](../affinidi-messaging-sdk/) — Messaging SDK (dependency)
+- [`affinidi-messaging-sdk`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-sdk/) — Messaging SDK (dependency)
 - [`affinidi-messaging-mediator`](https://github.com/affinidi/affinidi-messaging-mediator) — Mediator service
 
 ## License

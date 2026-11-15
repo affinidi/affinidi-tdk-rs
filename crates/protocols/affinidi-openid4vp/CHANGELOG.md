@@ -1,6 +1,8 @@
 # Affinidi OpenID4VP Changelog
 
-## Unreleased (0.1.5) — docs say what is verified and what is not
+## [0.1.5] - 2026-11-13
+
+docs say what is verified and what is not
 
 Documentation only; no code change.
 
@@ -16,7 +18,9 @@ Documentation only; no code change.
 - `RequestObject::validate` is described as the verifier's check before
   signing; there is no wallet-side verification of a request object.
 
-## 11th October 2026 (0.1.4) — OpenID4VP 1.0 verifier pieces
+## [0.1.4] - 2026-10-11
+
+OpenID4VP 1.0 verifier pieces
 
 Additive: the verifier side of OpenID4VP 1.0, beside the existing pre-1.0 and
 Presentation Exchange types, which are unchanged.
@@ -49,7 +53,7 @@ Presentation Exchange types, which are unchanged.
 
 Requires `affinidi-oid4vc-core` 0.1.10.
 
-## 14th June 2026 Release 0.1.3
+## [0.1.3] - 2026-06-14
 
 - `Oid4vpError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
   additively. Patch bump keeps the `0.1` pin valid; consumers that `match` it

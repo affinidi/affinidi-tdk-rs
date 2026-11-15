@@ -5,7 +5,7 @@ KERI-verified key state.
 
 ```toml
 [dependencies]
-affinidi-did-webs = "0.1"
+affinidi-did-webs = "0.13"
 ```
 
 ## What it does
@@ -154,8 +154,8 @@ specification's Implementors Guide calls "the best" for key agreement.
 
 | Designation | Schema | Becomes |
 |---|---|---|
-| Key agreement (`a.keys`: CESR keys — X25519 `C`, P-256 `1AAJ`, secp256k1 `1AAB`) | [`schemas/key-agreement-designation.json`](schemas/key-agreement-designation.json) `EJZrf6N4vbhA1hQIujWiIiQmNi455EGS3iXdhxLSwvAi` | `JsonWebKey` methods in `keyAgreement` |
-| Services (`a.services`: DID document service entries) | [`schemas/service-designation.json`](schemas/service-designation.json) `ELj0Sdf2Boi7BMiIFAEJ9_MSFJU8t-LavLN-gMb8oXM8` | entries in `service` |
+| Key agreement (`a.keys`: CESR keys — X25519 `C`, P-256 `1AAJ`, secp256k1 `1AAB`) | [`schemas/key-agreement-designation.json`](https://github.com/affinidi/affinidi-tdk-rs/blob/main/crates/identity/did-methods/did-webs/schemas/key-agreement-designation.json) `EJZrf6N4vbhA1hQIujWiIiQmNi455EGS3iXdhxLSwvAi` | `JsonWebKey` methods in `keyAgreement` |
+| Services (`a.services`: DID document service entries) | [`schemas/service-designation.json`](https://github.com/affinidi/affinidi-tdk-rs/blob/main/crates/identity/did-methods/did-webs/schemas/service-designation.json) `ELj0Sdf2Boi7BMiIFAEJ9_MSFJU8t-LavLN-gMb8oXM8` | entries in `service` |
 
 ```rust,no_run
 use affinidi_did_webs::create::{CreateConfig, create};
@@ -246,7 +246,7 @@ identifier's change authority — in both `authentication` and
 Verifiable Trust Infrastructure's `keyRoles` (VTI-KEY-090 to VTI-KEY-096), has
 nothing to select by, and the change authority signs everything.
 
-A **key role designation** ([`schemas/key-role-designation.json`](schemas/key-role-designation.json)
+A **key role designation** ([`schemas/key-role-designation.json`](https://github.com/affinidi/affinidi-tdk-rs/blob/main/crates/identity/did-methods/did-webs/schemas/key-role-designation.json)
 `EPulJFl5SEb8qb3ca5teXHRGiWmTsTkylGTrS2vB4ZQx`) binds other keys to roles —
 `attestation` (rendered in `assertionMethod`), `operational`
 (`authentication`), `messaging` (`keyAgreement`) — and once an identifier has
@@ -277,7 +277,7 @@ let result = create(
 `Change::KeyRoles` replaces the binding (a key left out is retired), and
 `Change::RevokeRoleKey` revokes one for compromise. This is a proof of concept
 of an extension proposed to the `did:webs` specification
-([docs/key-role-designation.md](docs/key-role-designation.md)): a resolver
+([docs/key-role-designation.md](https://github.com/affinidi/affinidi-tdk-rs/blob/main/crates/identity/did-methods/did-webs/docs/key-role-designation.md)): a resolver
 that does not implement it derives the key-state document instead, and refuses
 the `did.json` of an identifier that uses it.
 
@@ -377,8 +377,8 @@ is no switch for any of them.
 ## Related crates
 
 - [`affinidi-keri-core`](https://crates.io/crates/affinidi-keri-core) — KEL verification
-- [`affinidi-did-web`](../did-web/) — the `did:web` half of the family
-- [`affinidi-did-common`](../../affinidi-did-common/) — DID document types
+- [`affinidi-did-web`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/did-methods/did-web/) — the `did:web` half of the family
+- [`affinidi-did-common`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-common/) — DID document types
 
 ## Contributing
 

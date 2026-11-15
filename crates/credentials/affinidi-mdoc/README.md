@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/affinidi-mdoc.svg)](https://crates.io/crates/affinidi-mdoc)
 [![Documentation](https://docs.rs/affinidi-mdoc/badge.svg)](https://docs.rs/affinidi-mdoc)
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/credentials/affinidi-mdoc)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/credentials/affinidi-mdoc)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 ISO/IEC 18013-5 mdoc (Mobile Document) implementation for mobile driving
@@ -42,9 +42,9 @@ The eIDAS PID namespace `eu.europa.ec.eudi.pid.1` defines standard attributes:
 
 ## Related Crates
 
-- [`affinidi-vc`](../affinidi-vc/) — SD-JWT VC (`affinidi_vc::sd_jwt_vc`, the other eIDAS mandatory format)
-- [`affinidi-vc`](../affinidi-vc/) — W3C VC Data Model types
-- [`affinidi-status-list`](../affinidi-status-list/) — Credential status/revocation
+- [`affinidi-vc`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/credentials/affinidi-vc/) — SD-JWT VC (`affinidi_vc::sd_jwt_vc`, the other eIDAS mandatory format)
+- [`affinidi-vc`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/credentials/affinidi-vc/) — W3C VC Data Model types
+- [`affinidi-status-list`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/credentials/affinidi-status-list/) — Credential status/revocation
 
 ## License
 

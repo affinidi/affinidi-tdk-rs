@@ -1,6 +1,8 @@
 # Affinidi mdoc Changelog
 
-## 12th November 2026 (0.6.0) — ISO session keys; `MdocBuilder` needs a device key and validity
+## [0.6.0] - 2026-11-12
+
+ISO session keys; `MdocBuilder` needs a device key and validity
 
 **Behaviour change (R3.6).** Proximity session keys derived by 0.6 differ
 from those derived by 0.5 and earlier, and `MdocBuilder::build` refuses input
@@ -42,7 +44,9 @@ that 0.5 signed.
 - **Fixed — `MobileSecurityObject::create`** returns an error instead of
   overflowing when a decoy digest ID would not fit in a `u32`.
 
-## 12th November 2026 (0.5.0) — digests over received bytes; `DeviceResponse::verify`
+## [0.5.0] - 2026-11-12
+
+digests over received bytes; `DeviceResponse::verify`
 
 **Behaviour change (R3.6).** Reader-side checks are stricter, and some
 responses that 0.4 accepted are now rejected.
@@ -95,7 +99,9 @@ responses that 0.4 accepted are now rejected.
 The piecemeal methods remain. `verify_digests` still trusts the `mso` field;
 prefer `DeviceResponse::verify` on the reader side.
 
-## 21st October 2026 (0.4.0) — OpenID4VP 1.0 Final handovers
+## [0.4.0] - 2026-10-21
+
+OpenID4VP 1.0 Final handovers
 
 Fixes [#960](https://github.com/affinidi/affinidi-tdk-rs/issues/960); the fix is
 by [@razvp](https://github.com/razvp) ([#961](https://github.com/affinidi/affinidi-tdk-rs/pull/961)).
@@ -120,7 +126,9 @@ transcript could not interoperate. It now follows Appendix B.2.6.
   differ from 0.3.x. Both handovers are pinned by known-answer tests against the
   spec's example `SessionTranscript` bytes.
 
-## 14th October 2026 (0.3.3) — `ValidityInfo` dates are CBOR Tag 0
+## [0.3.3] - 2026-10-14
+
+`ValidityInfo` dates are CBOR Tag 0
 
 Fixes [#950](https://github.com/affinidi/affinidi-tdk-rs/issues/950); the fix is
 by [@razvp](https://github.com/razvp) ([#951](https://github.com/affinidi/affinidi-tdk-rs/pull/951)).
@@ -136,14 +144,18 @@ strict verifier could reject MSOs issued by this crate. They now carry Tag 0.
 - **Decoding is unchanged:** tagged and untagged dates both parse.
 - `ValidityInfo` now derives `PartialEq`.
 
-## 1st October 2026 (0.3.2) — `rand` 0.10
+## [0.3.2] - 2026-10-01
+
+`rand` 0.10
 
 No behaviour change and no public API change. `EdDsaCoseKey::generate` now
 calls `SigningKey::generate` directly: ed25519-dalek 3 and `rand` 0.10 share
 `rand_core` 0.10, so the detour through an intermediate byte array (which left
 an unzeroized copy of the key on the stack) is gone.
 
-## 7th September 2026 (0.3.1) — `sha2` 0.11, `hmac` 0.13, `hkdf` 0.13, `aes-gcm` 0.11
+## [0.3.1] - 2026-09-07
+
+`sha2` 0.11, `hmac` 0.13, `hkdf` 0.13, `aes-gcm` 0.11
 
 No behaviour change and no public API change: these are private dependencies
 here, which is what lets each crate move on its own schedule. Verified by
@@ -153,7 +165,7 @@ in the workspace.
 One-line change: `new_from_slice` moved from the `Mac` trait to `KeyInit`.
 144 tests green, including the device-MAC round-trips.
 
-## 1st September 2026 (0.3.0)
+## [0.3.0] - 2026-09-01
 
 Moves to **coset 0.4**.
 
@@ -184,7 +196,7 @@ note: there are multiple different versions of crate `coset` in the dependency g
 
 This release is what lets that side move.
 
-## 16th August 2026 (0.2.7)
+## [0.2.7] - 2026-08-16
 
 Adds the CBOR wire codec for **`DeviceResponse`** — `to_cbor_bytes` /
 `from_cbor_bytes` — completing the pair started in 0.2.6. This is the
@@ -221,7 +233,7 @@ Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md)
 point 3 — purely additive, and a minor bump would break the `[patch.crates-io]`
 redirects.
 
-## 16th August 2026 (0.2.6)
+## [0.2.6] - 2026-08-16
 
 Adds the CBOR **wire codec** for `IssuerSigned` — `to_cbor_bytes` /
 `from_cbor_bytes` (ISO/IEC 18013-5 §8.3.2.1.2.2).
@@ -265,7 +277,7 @@ Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md)
 point 3: the change is purely additive (a new module plus two inherent
 methods), and a minor bump would break the `[patch.crates-io]` redirects.
 
-## 2nd August 2026 (0.2.5)
+## [0.2.5] - 2026-08-02
 
 Moves this crate to the **elliptic-curve 0.14** family (`p256` / `k256` /
 `p384` / `p521` 0.13 -> 0.14), which brings rand_core 0.10, digest 0.11 and
@@ -284,7 +296,7 @@ Crypto behaviour is unchanged — the golden/KAT vectors (`p256_sign_verify_roun
 `secp256k1_es256k_golden` RFC 6979, `ecdh_1pu_x25519_kek_golden`,
 `concat_kdf_es_golden`, `a256cbc_hs512_golden`) all still pass.
 
-## 31st July 2026 (0.2.4)
+## [0.2.4] - 2026-07-31
 
 Moves to **curve25519-dalek 5** (`ed25519-dalek` 2 -> 3, `x25519-dalek` 2 -> 3),
 which brings rand_core 0.10 and signature 3 with it. rand 0.10 renamed `OsRng`
@@ -295,7 +307,7 @@ Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) p
 `[patch.crates-io]`, and a minor bump would break the redirect and pull a second
 copy from crates.io.
 
-## 14th June 2026 Release 0.2.3
+## [0.2.3] - 2026-06-14
 
 - **Fix (build):** `session.rs` no longer calls the now-deprecated
   `GenericArray::from_slice` for the AES-256-GCM key/nonce — the key is built via
@@ -305,13 +317,13 @@ copy from crates.io.
   Supersedes 0.2.2, which carried the same `MdocError` sealing below but failed
   to publish on the deprecation.
 
-## 14th June 2026 Release 0.2.2
+## [0.2.2] - 2026-06-14
 
 - `MdocError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
   additively. Patch bump keeps the `0.2` pin valid; consumers that `match` it
   must add a `_` wildcard arm. No behaviour change. (W7 sweep)
 
-## 1st June 2026 Release 0.2.1
+## [0.2.1] - 2026-06-01
 
 ### Security
 
@@ -321,7 +333,7 @@ copy from crates.io.
   `ciborium`. Removing the unused dependency clears the advisory with
   no code or behaviour change.
 
-## 28th May 2026 Release 0.2.0
+## [0.2.0] - 2026-05-28
 
 ### Security
 

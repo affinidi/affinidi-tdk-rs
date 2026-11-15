@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/affinidi-secrets-resolver.svg)](https://crates.io/crates/affinidi-secrets-resolver)
 [![Documentation](https://docs.rs/affinidi-secrets-resolver/badge.svg)](https://docs.rs/affinidi-secrets-resolver)
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-tdk/common/affinidi-secrets-resolver)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/core/affinidi-secrets-resolver/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 DID secret management for the Affinidi Trust Development Kit. Handles storage,
@@ -31,9 +31,9 @@ automatically enabled.
 
 ## Related Crates
 
-- [`affinidi-crypto`](../affinidi-crypto/) — Cryptographic primitives (dependency)
-- [`affinidi-encoding`](../affinidi-encoding/) — Multibase encoding (dependency)
-- [`affinidi-did-authentication`](../affinidi-did-authentication/) — DID authentication built on this crate
+- [`affinidi-crypto`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/core/affinidi-crypto/) — Cryptographic primitives (dependency)
+- [`affinidi-encoding`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/core/affinidi-encoding/) — Multibase encoding (dependency)
+- [`affinidi-did-authentication`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-authentication/) — DID authentication built on this crate
 
 ## License
 

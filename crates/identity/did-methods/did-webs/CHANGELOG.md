@@ -2,7 +2,7 @@
 
 All notable changes to this crate are documented here.
 
-## [0.13.6] - Unreleased
+## [0.13.6] - 2026-11-15
 
 ### Fixed
 
@@ -40,7 +40,7 @@ All notable changes to this crate are documented here.
   before. Metadata after a recovery reports the recovery rotation's sequence
   number.
 
-## [0.13.5] - Unreleased
+## [0.13.5] - 2026-11-15
 
 ### Changed
 
@@ -49,7 +49,7 @@ All notable changes to this crate are documented here.
   (`document.rs`, `key_agreement.rs`). The published `publicKeyJwk` values
   are unchanged.
 
-## [0.13.4] - Unreleased
+## [0.13.4] - 2026-11-13
 
 ### Changed
 
@@ -126,7 +126,7 @@ returns the deactivating version without keys; `update` publishes that
 version's `did.json` without keys. A stream past the bounds above fails with
 `DidWebsError::Stream`.
 
-## [0.13.2] - Unreleased
+## [0.13.2] - 2026-11-12
 
 ### Changed (behaviour, R3.6)
 

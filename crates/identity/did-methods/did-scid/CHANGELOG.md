@@ -1,6 +1,8 @@
 # did:scid
 
-## Unreleased (0.4.9) — builds without `did-webvh`; `ke` honours the options and resolves to the did:scid DID
+## [0.4.9] - 2026-11-15
+
+builds without `did-webvh`; `ke` honours the options and resolves to the did:scid DID
 
 - **Fixed (#1041):** `didwebvh-rs` is a hard dependency. The public API is
   typed in it (`ResolveOptions`, `DIDSCIDError::WebVHError`) and the crate
@@ -37,7 +39,9 @@
   ignored a non-public host policy or timeout now follows it; a caller
   matching `WebsError` for an HTTP status now gets `Network`.
 
-## Unreleased (0.4.8) — a deactivated did:scid:ke does not resolve
+## [0.4.8] - 2026-11-12
+
+a deactivated did:scid:ke does not resolve
 
 - **Behaviour:** `resolve` and `resolve_with_options` refuse a `did:scid:ke`
   whose did:webs identifier is deactivated (its last rotation committed to no
@@ -48,19 +52,25 @@
   in the build. Compatibility (R3.6): a lookup that returned a document now
   returns an error; `DIDSCIDError` is `#[non_exhaustive]`.
 
-## Unreleased (0.4.7) — affinidi-did-webs 0.13
+## [0.4.7] - 2026-11-11
+
+affinidi-did-webs 0.13
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.13, on
   affinidi-keri 0.8: native CESR bodies resolve, keripy's delegated rotations
   verify, and the `EO` and `DND` configuration traits are enforced.
 
-## Unreleased (0.4.6) — affinidi-did-webs 0.12
+## [0.4.6] - 2026-11-11
+
+affinidi-did-webs 0.12
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.12, on
   affinidi-keri 0.7: rotations verify as keripy verifies them, and a recovery
   rotation supersedes interaction events and what they anchored.
 
-## Unreleased (0.4.5) — affinidi-did-webs 0.11
+## [0.4.5] - 2026-11-10
+
+affinidi-did-webs 0.11
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.11: did:webs
   on KERI 2.0 (alpha). Designations are read for both ACDC versions, a stream
@@ -68,25 +78,33 @@
   designation the resolver does not implement fails with
   `unsupportedDesignation`.
 
-## Unreleased (0.4.4) — affinidi-did-webs 0.10
+## [0.4.4] - 2026-11-10
+
+affinidi-did-webs 0.10
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.10, on
   affinidi-keri 0.6: rotations now verify in keripy, and thresholds of 10 or
   more are read as hex.
 
-## Unreleased (0.4.3) — affinidi-did-webs 0.9
+## [0.4.3] - 2026-11-09
+
+affinidi-did-webs 0.9
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.9, which
   no longer turns on `serde_json`'s `preserve_order` for the whole build.
 
-## Unreleased (0.4.2) — affinidi-did-webs 0.8
+## [0.4.2] - 2026-11-08
+
+affinidi-did-webs 0.8
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.8, which
   resolves as the did:webs specification requires: a DID resolves only when its
   AID designates it, signatures are held to the signing threshold, replies are
   ordered by BADA, and the published `did.json` is compared as a whole.
 
-## Unreleased (0.4.1) — the version ids of a resolved log
+## [0.4.1] - 2026-10-31
+
+the version ids of a resolved log
 
 - **Added:** `ScidResolution::version_ids`, the `versionId` of every log entry
   verified, oldest first. A caller holding a version it verified earlier can
@@ -97,7 +115,9 @@
   threshold the latest entry was verified against, or `None` when it is
   unwitnessed.
 
-## Unreleased (0.4.0) — a did:scid resolves to its own document
+## [0.4.0] - 2026-10-21
+
+a did:scid resolves to its own document
 
 - **Behaviour (breaking for did:scid callers):** `resolve` and
   `resolve_with_options` now return the did:scid's own document for the `vh`
@@ -117,13 +137,17 @@
   `vh` format, so a caller can resolve under its own host policy (for example
   `did:scid:vh:1:<scid>?src=localhost:8000` in a local stack).
 
-## Unreleased (0.3.0) — didwebvh-rs 0.8
+## [0.3.0] - 2026-10-01
+
+didwebvh-rs 0.8
 
 **Breaking.** Moves to `didwebvh-rs` 0.8 (on `affinidi-data-integrity` 0.8).
 `DIDSCIDError` wraps didwebvh-rs's error type, so this is a public dependency
 and moving it is breaking. No behaviour change.
 
-## Unreleased (0.2.8) — a deactivated `did:scid:vh` no longer resolves
+## [0.2.8] - 2026-09-29
+
+a deactivated `did:scid:vh` no longer resolves
 
 - **Behaviour (security):** `resolve` for a `did:scid:vh` DID whose webvh log
   ends in a deactivation now returns `DIDSCIDError::WebVHError` wrapping
@@ -132,7 +156,9 @@ and moving it is breaking. No behaviour change.
   `resolve` discarded, so the retired DID's keys stayed usable. No API change.
   (SEC-4045 / VGI-04.)
 
-## Unreleased (0.2.7) — `didwebvh-rs` 0.7
+## [0.2.7] - 2026-09-12
+
+`didwebvh-rs` 0.7
 
 - Bumps `didwebvh-rs` 0.6 → 0.7. Only the manifest changes.
 - **Behaviour:** `resolve` for a `did:scid:vh` DID now contacts public hosts
@@ -145,7 +171,9 @@ and moving it is breaking. No behaviour change.
   now carries the 0.7 type. This is a patch bump per ADR 0003 point 3, as for
   the `didwebvh-rs` 0.5 → 0.6 move.
 
-## Unreleased (0.2.6) — retire did:cheqd resolution
+## [0.2.6] - 2026-09-05
+
+retire did:cheqd resolution
 
 Part of [#760]. A `did:scid` whose `?src=` names a `did:cheqd` still parses, and
 `ScidMethod::Cheqd` is unchanged; `resolve` now returns an explanatory
@@ -163,19 +191,19 @@ empty) and so does the enum variant, so code naming either still compiles.
 
 [#760]: https://github.com/affinidi/affinidi-tdk-rs/issues/760
 
-## 0.2.5
+## [0.2.5] - 2026-08-23
 
 ### Changed
 
 - `did-webs` feature now requires `affinidi-did-webs` 0.7.
 
-## 0.2.4
+## [0.2.4] - 2026-08-23
 
 ### Changed
 
 - `did-webs` feature now requires `affinidi-did-webs` 0.6.
 
-## 0.2.3
+## [0.2.3] - 2026-08-23
 
 ### Fixed
 
@@ -191,20 +219,20 @@ empty) and so does the enum variant, so code naming either still compiles.
 
   `did:scid:ke` did not work in 0.2.0, 0.2.1 or 0.2.2.
 
-## 0.2.2
+## [0.2.2] - 2026-08-23
 
 ### Changed
 
 - `did-webs` feature now requires `affinidi-did-webs` 0.5.
 
-## 0.2.1
+## [0.2.1] - 2026-08-23
 
 ### Changed
 
 - `did-webs` feature now requires `affinidi-did-webs` 0.4, which derives service
   endpoints from signed KERI endpoint authorisations.
 
-## 0.2.0
+## [0.2.0] - 2026-08-23
 
 ### Added
 
@@ -236,7 +264,7 @@ empty) and so does the enum variant, so code naming either still compiles.
 - A peer source for one format is no longer accepted for another. They place the
   SCID differently, so crossing them resolved to the wrong location.
 
-## 2nd August 2026 (0.1.13)
+## [0.1.13] - 2026-08-02
 
 `ssi-dids-core` becomes an optional dependency, enabled by `did-cheqd` —
 the only feature whose code actually uses it. No behavioural change; the
@@ -253,7 +281,7 @@ generic alias for `Sec1Point<C>` so it needs a per-module binding, and the
 deprecated `SigningKey::random(rng)` is now `Generate::generate()` (system
 CSPRNG, panics on failure).
 
-Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) point 3: `vta-sdk` and `didwebvh-rs` redirect
+Patch bump, per [ADR 0003](../../../../docs/adr/0003-public-api-semver-policy.md) point 3: `vta-sdk` and `didwebvh-rs` redirect
 this crate through `[patch.crates-io]`, and a minor bump breaks the redirect.
 
 Crypto behaviour is unchanged — the golden/KAT vectors (`p256_sign_verify_roundtrip`,
@@ -262,11 +290,9 @@ Crypto behaviour is unchanged — the golden/KAT vectors (`p256_sign_verify_roun
 
 ## Changelog history
 
-## 19th July 2026
+## [0.1.12] - 2026-07-19
 
-#
-
-## 0.1.12 — didwebvh-rs 0.6
+didwebvh-rs 0.6
 
 - Bumped the `didwebvh-rs` requirement from `"0.5"` to `"0.6"`.
 
@@ -282,17 +308,17 @@ Crypto behaviour is unchanged — the golden/KAT vectors (`p256_sign_verify_roun
   needed here: the only use is a `#[from] DIDWebVHError` conversion in
   `did-scid`'s error type, not an exhaustive `match`.
 
-## 19th July 2026
+## [0.1.11] - 2026-07-19
 
-### 0.1.11 — affinidi-did-common 0.4
+affinidi-did-common 0.4
 
 - Bumped the `affinidi-did-common` requirement from `"0.3"` to `"0.4"`.
   No functional change to this crate: `Document` gained a typed
   `also_known_as` field, which is additive.
 
-## 17th June 2026
+## [0.1.10] - 2026-06-17
 
-### 0.1.10 — drop `did-cheqd` from default features (no forced `ring` TLS)
+drop `did-cheqd` from default features (no forced `ring` TLS)
 
 - **`did-cheqd` is no longer a default feature.** It pulled `did-resolver-cheqd`,
   whose `tonic 0.12` dependency hardcodes the rustls `ring` backend on
@@ -306,9 +332,9 @@ Crypto behaviour is unchanged — the golden/KAT vectors (`p256_sign_verify_roun
 - Patch bump keeps the `0.1` pin valid. No API or behaviour change beyond the
   default feature set.
 
-## 14th June 2026
+## [0.1.9] - 2026-06-14
 
-### 0.1.9 — non_exhaustive DIDSCIDError (W7 sweep)
+non_exhaustive DIDSCIDError (W7 sweep)
 
 - `DIDSCIDError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
   additively. Patch bump keeps the `0.1` pin valid; consumers that `match` it

@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/affinidi-meeting-place.svg)](https://crates.io/crates/affinidi-meeting-place)
 [![Documentation](https://docs.rs/affinidi-meeting-place/badge.svg)](https://docs.rs/affinidi-meeting-place)
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-meeting-place)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/applications/affinidi-meeting-place/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 SDK for [Affinidi Meeting Place](https://meetingplace.world) — discover and
@@ -29,15 +29,15 @@ sequenceDiagram
 
 ```toml
 [dependencies]
-affinidi-meeting-place = "0.4"
+affinidi-meeting-place = "0.5"
 ```
 
 ## Related Crates
 
-- [`affinidi-did-authentication`](../affinidi-tdk/common/affinidi-did-authentication/) — DID authentication (dependency)
-- [`affinidi-tdk-common`](../affinidi-tdk/common/affinidi-tdk-common/) — Shared utilities (dependency)
-- [`affinidi-messaging`](../affinidi-messaging/) — DIDComm messaging framework
-- [`affinidi-did-resolver`](../affinidi-did-resolver/) — DID resolution
+- [`affinidi-did-authentication`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-authentication/) — DID authentication (dependency)
+- [`affinidi-tdk-common`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/tdk/affinidi-tdk-common/) — Shared utilities (dependency)
+- [`affinidi-messaging`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/) — DIDComm messaging framework
+- [`affinidi-did-resolver`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/identity/affinidi-did-resolver-cache-sdk/) — DID resolution
 
 ## License
 

@@ -1,6 +1,6 @@
 # affinidi-messaging-core
 
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-messaging/affinidi-messaging-core)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-core/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 Protocol-agnostic messaging traits for the Affinidi TDK. This crate defines a
@@ -54,10 +54,10 @@ Then enable the `messaging-core` feature on your protocol crate of choice:
 
 ```toml
 # For DIDComm
-affinidi-messaging-didcomm = { version = "0.1", features = ["messaging-core"] }
+affinidi-messaging-didcomm = { version = "0.15", features = ["messaging-core"] }
 
 # For TSP
-affinidi-tsp = { version = "0.1", features = ["messaging-core"] }
+affinidi-tsp = { version = "0.4", features = ["messaging-core"] }
 ```
 
 ## Usage
@@ -212,9 +212,9 @@ async fn secure_exchange(
 
 | Crate | Description |
 |---|---|
-| [`affinidi-messaging-didcomm`](../affinidi-messaging-didcomm/) | DIDComm v2.1 adapter (`DIDCommAdapter`) |
-| [`affinidi-tsp`](../affinidi-tsp/) | TSP adapter (`TspAdapter`) |
-| [`affinidi-messaging-sdk`](../affinidi-messaging-sdk/) | High-level messaging client SDK |
+| [`affinidi-messaging-didcomm`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-didcomm/) | DIDComm v2.1 adapter (`DIDCommAdapter`) |
+| [`affinidi-tsp`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-tsp/) | TSP adapter (`TspAdapter`) |
+| [`affinidi-messaging-sdk`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-sdk/) | High-level messaging client SDK |
 | [`affinidi-messaging-mediator`](https://github.com/affinidi/affinidi-messaging-mediator) | Mediator service supporting both protocols |
 
 ## License

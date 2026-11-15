@@ -1,11 +1,14 @@
 # Affinidi Trust Development Kit (TDK)
 
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-tdk)
+[![Rust](https://img.shields.io/badge/rust-1.95.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/tdk)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 The Affinidi TDK provides common libraries for building privacy-preserving
 services using decentralised identity technologies. This directory contains the
-unified `affinidi-tdk` crate and shared common libraries.
+unified `affinidi-tdk` facade, `affinidi-tdk-common` and
+`affinidi-tdk-test-support`; the libraries the facade re-exports live in the
+layer directories under `crates/` (see the
+[root README's crate index](../../README.md#crate-index)).
 
 > **Disclaimer:** This project is provided "as is" without warranties or
 > guarantees. Users assume all risks associated with its deployment and use.
@@ -17,17 +20,18 @@ unified `affinidi-tdk` crate and shared common libraries.
 A single dependency that re-exports the core TDK libraries. Use feature flags to
 include only what you need.
 
-### Common Libraries
+### Libraries re-exported by the facade (selection)
 
 | Crate | Description |
 |---|---|
-| [`affinidi-crypto`](./common/affinidi-crypto/) | Cryptographic primitives — key generation, JWK, Ed25519, P-256, P-384, secp256k1 |
-| [`affinidi-encoding`](./common/affinidi-encoding/) | Multibase and multicodec encoding utilities |
-| [`affinidi-secrets-resolver`](./common/affinidi-secrets-resolver/) | DID secret management and key resolution |
-| [`affinidi-did-authentication`](./common/affinidi-did-authentication/) | Authentication via DID ownership proofs |
-| [`affinidi-tdk-common`](./common/affinidi-tdk-common/) | Shared structs, TLS config, and cross-crate utilities |
-| [`affinidi-data-integrity`](./common/affinidi-data-integrity/) | W3C Data Integrity proofs (eddsa-jcs-2022, eddsa-rdfc-2022) |
-| [`affinidi-rdf-encoding`](./common/affinidi-rdf-encoding/) | RDFC-1.0 canonicalization and JSON-LD expansion |
+| [`affinidi-crypto`](../core/affinidi-crypto/) | Cryptographic primitives — key generation, JWK, Ed25519, P-256, P-384, secp256k1 |
+| [`affinidi-encoding`](../core/affinidi-encoding/) | Multibase and multicodec encoding utilities |
+| [`affinidi-secrets-resolver`](../core/affinidi-secrets-resolver/) | DID secret management and key resolution |
+| [`affinidi-did-authentication`](../identity/affinidi-did-authentication/) | Authentication via DID ownership proofs |
+| [`affinidi-tdk-common`](./affinidi-tdk-common/) | Shared structs, TLS config, and cross-crate utilities |
+| [`affinidi-tdk-test-support`](./affinidi-tdk-test-support/) | In-process test fixtures (dev-dependency) |
+| [`affinidi-data-integrity`](../credentials/affinidi-data-integrity/) | W3C Data Integrity proofs (eddsa-jcs-2022, eddsa-rdfc-2022) |
+| [`affinidi-rdf-encoding`](../credentials/affinidi-rdf-encoding/) | RDFC-1.0 canonicalization and JSON-LD expansion |
 
 ## Dependency Graph
 
@@ -60,11 +64,11 @@ graph TD
 
 ## Related Crates
 
-- [`affinidi-messaging`](../affinidi-messaging/) — DIDComm and TSP messaging framework
-- [`affinidi-tsp`](../affinidi-messaging/affinidi-tsp/) — Trust Spanning Protocol implementation
-- [`affinidi-messaging-core`](../affinidi-messaging/affinidi-messaging-core/) — Protocol-agnostic messaging traits
-- [`affinidi-did-resolver`](../affinidi-did-resolver/) — DID resolution and caching
-- [`affinidi-meeting-place`](../affinidi-meeting-place/) — Secure discovery and connection
+- [`affinidi-messaging`](../messaging/) — DIDComm and TSP messaging framework
+- [`affinidi-tsp`](../messaging/affinidi-tsp/) — Trust Spanning Protocol implementation
+- [`affinidi-messaging-core`](../messaging/affinidi-messaging-core/) — Protocol-agnostic messaging traits
+- [`affinidi-did-resolver-cache-sdk`](../identity/affinidi-did-resolver-cache-sdk/) — DID resolution and caching
+- [`affinidi-meeting-place`](../applications/affinidi-meeting-place/) — Secure discovery and connection
 
 ## License
 

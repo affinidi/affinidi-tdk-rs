@@ -17,7 +17,16 @@
 # An undocumented release is a silent breaking change waiting to happen.
 #
 # The rule: if a publishable crate's VERSION changed in this PR, that crate's
-# CHANGELOG.md must MENTION THE NEW VERSION.
+# CHANGELOG.md must carry a heading for the new version in exactly this form:
+#
+#     ## [x.y.z] - YYYY-MM-DD
+#
+# One grammar, so a reader (or a tool extracting "the notes for x.y.z") can
+# find a release and see when it shipped. Five heading shapes used to coexist,
+# and 32 changelogs headed versions that had already been published
+# `## Unreleased (x.y.z)` — merging to main publishes, so nothing in this repo
+# is "unreleased" once merged (#1065). `## Unreleased (x.y.z)` and
+# `## [x.y.z] - Unreleased` are therefore refused outright for the new version.
 #
 # Deliberately not the weaker "the changelog file was touched". A PR that edits
 # a changelog for one reason and bumps a version for another would satisfy that
@@ -34,23 +43,9 @@ set -euo pipefail
 
 BASE="${1:-origin/main}"
 
-# `pwd -P` — resolve symlinks. `cargo metadata` always reports fully resolved
-# manifest paths, so a plain `pwd` reached through a symlinked checkout (on
-# macOS, anything under /tmp) yields a prefix that never matches and every
-# path comparison below silently misses. See the guard at the crate list.
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-cd "$ROOT"
-
-if [ -t 1 ]; then
-  RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; CYAN=$'\033[0;36m'; NC=$'\033[0m'
-else
-  RED=''; GREEN=''; CYAN=''; NC=''
-fi
-
-if ! git rev-parse --verify --quiet "$BASE" >/dev/null; then
-  echo "${RED}error:${NC} base ref '$BASE' not found. Pass a reachable ref, e.g. origin/main." >&2
-  exit 2
-fi
+# shellcheck source=scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+guard_require_base "$BASE"
 
 echo "=== Changelog guard (base: $BASE) ==="
 echo
@@ -63,29 +58,9 @@ fi
 
 # Publishable crates as  name<TAB>relative-crate-dir. Non-publishable crates are
 # irrelevant here: nothing reaches a consumer, so there is no contract to record.
-crates=$(cargo metadata --format-version 1 --no-deps 2>/dev/null \
-  | jq -r '.packages[]
-      | select(.publish == null or .publish == ["crates.io"])
-      | "\(.name)\t\(.manifest_path)"' \
-  | sed "s|\t$ROOT/|\t|; s|/Cargo.toml\$||")
-
-# A crate dir that is still absolute means the `$ROOT/` strip above did not
-# take, and every path comparison below would then match nothing — the guard
-# passing while checking precisely zero crates. That is the failure mode this
-# whole script exists to prevent, so refuse rather than report success.
-# Tested with awk, not `grep -E '(^|\t)/'`: POSIX ERE has no `\t` escape, so GNU
-# grep reads that as a literal `t` and the pattern becomes `(^|t)/` — which
-# matches an innocent `crates/trust/...` and fails the guard on every run. (BSD
-# grep and ugrep do treat it as a tab, so it passes locally and fails in CI.)
-# awk's -F'\t' is a real tab on every awk, and anchoring on the last field is
-# what we actually mean.
-if printf '%s\n' "$crates" | awk -F'\t' 'NF && $NF ~ /^\// { bad = 1 } END { exit !bad }'; then
-  echo "${RED}error:${NC} crate paths did not resolve against ROOT ($ROOT)." >&2
-  echo "The strip of \`cargo metadata\`'s manifest paths produced absolute dirs, so" >&2
-  echo "nothing would be checked. Run this script from the repository itself rather" >&2
-  echo "than through a symlink to it." >&2
-  exit 2
-fi
+# guard_load_crates (lib.sh) refuses to continue if the ROOT strip failed.
+guard_load_crates
+crates=$(publishable_crates)
 
 fail=0
 found=0
@@ -114,13 +89,22 @@ while IFS="$(printf '\t')" read -r name dir; do
 
   found=1
   changelog="$dir/CHANGELOG.md"
+  ver_re=$(printf '%s' "$new_version" | sed 's/\./\\./g')
   if [ ! -f "$changelog" ]; then
     echo "  ${RED}MISSING${NC} $name: ${old_version:-<new>} -> $new_version but $changelog does not exist"
     fail=1
-  # Match the version as a whole token: a plain substring search would let
-  # `0.1.30`'s entry satisfy a bump to `0.1.3`.
-  elif grep -qE "(^|[^0-9.])$(printf '%s' "$new_version" | sed 's/\./\\./g')([^0-9.]|\$)" "$changelog"; then
+  # The version is escaped and the heading anchored at both ends, so
+  # `0.1.30`'s entry cannot satisfy a bump to `0.1.3`.
+  elif grep -qE "^##[[:space:]]+Unreleased[[:space:]]*\($ver_re\)|^##[[:space:]]+\[$ver_re\][[:space:]]+-[[:space:]]+Unreleased" "$changelog"; then
+    echo "  ${RED}UNRELEASED${NC} $name: ${old_version:-<new>} -> $new_version is headed \"Unreleased\" in $changelog"
+    echo "         merging publishes it; head it  ## [$new_version] - $(date -u +%Y-%m-%d)"
+    fail=1
+  elif grep -qE "^## \[$ver_re\] - [0-9]{4}-[0-9]{2}-[0-9]{2}\$" "$changelog"; then
     echo "  ${GREEN}ok${NC}   $name: ${old_version:-<new>} -> $new_version (documented)"
+  elif grep -qE "(^|[^0-9.])$ver_re([^0-9.]|\$)" "$changelog"; then
+    echo "  ${RED}HEADING${NC} $name: ${old_version:-<new>} -> $new_version is mentioned in $changelog but has no"
+    echo "         \"## [$new_version] - YYYY-MM-DD\" heading"
+    fail=1
   else
     echo "  ${RED}MISSING${NC} $name: ${old_version:-<new>} -> $new_version, but $new_version does not appear in $changelog"
     fail=1
@@ -139,7 +123,8 @@ if [ "$fail" -ne 0 ]; then
   echo "${RED}A crate is being published with no record of what changed.${NC}"
   echo "Consumers pin these crates loosely, so a behavioural change is breaking for"
   echo "them even when no signature changes — the changelog is where they find out."
-  echo "Add an entry naming the new version to the crate's ${CYAN}CHANGELOG.md${NC}."
+  echo "Add an entry headed ${CYAN}## [x.y.z] - YYYY-MM-DD${NC} for the new version to the"
+  echo "crate's CHANGELOG.md, newest first, with a one-line summary as its first line."
   exit 1
 fi
 

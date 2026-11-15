@@ -1,6 +1,8 @@
 # Changelog — `affinidi-tdk`
 
-## 0.48.0 — affinidi-status-list 0.2
+## [0.48.0] - 2026-11-15
+
+affinidi-status-list 0.2
 
 - **Changed (breaking):** requires `affinidi-status-list` 0.2, which it
   re-exports as `status_list` (`status-list` feature). In 0.2 the issuer's
@@ -14,7 +16,9 @@
   `affinidi-sd-jwt-vc` crate is removed from the workspace; the feature
   already re-exported `affinidi_vc::sd_jwt_vc`).
 
-## 0.47.0 — affinidi-messaging-sdk 0.49
+## [0.47.0] - 2026-11-15
+
+affinidi-messaging-sdk 0.49
 
 - **Changed (breaking):** requires `affinidi-messaging-sdk` 0.49, which it
   re-exports. The SDK's inbound message channel is now a bounded `mpsc`,
@@ -23,7 +27,9 @@
   `affinidi-messaging-helpers` and `affinidi-messaging-text-client` require
   this version.
 
-## 0.46.0 — affinidi-messaging-sdk 0.48 and affinidi-tsp 0.4
+## [0.46.0] - 2026-11-15
+
+affinidi-messaging-sdk 0.48 and affinidi-tsp 0.4
 
 - **Changed (breaking):** requires `affinidi-messaging-sdk` 0.48 and
   `affinidi-tsp` 0.4, whose types it re-exports. A TSP `ReceivedMessage` has a
@@ -32,14 +38,18 @@
   require this version.
 
 
-## Unreleased (0.45.0) — affinidi-messaging-sdk 0.47 and trust-tasks 0.39
+## [0.45.0] - 2026-11-14
+
+affinidi-messaging-sdk 0.47 and trust-tasks 0.39
 
 - **Changed (breaking):** requires `affinidi-messaging-sdk` 0.47
   (`trust-tasks-rs` / `trust-tasks-proof` 0.39), whose types it re-exports.
 - 0.44.0 (affinidi-crypto 0.3, below) was never published; it ships in this release.
   `affinidi-messaging-helpers` and `affinidi-messaging-text-client` require this version.
 
-## Unreleased (0.44.0) — affinidi-crypto 0.3
+## [0.44.0] - 2026-11-13
+
+affinidi-crypto 0.3
 
 - **Changed (breaking):** `affinidi_tdk::affinidi_crypto` re-exports
   `affinidi-crypto` 0.3. Its key pairs wipe themselves when dropped, so their
@@ -48,21 +58,27 @@
   CHANGELOG for the migration. `affinidi-messaging-helpers` and
   `affinidi-messaging-text-client` require this version.
 
-## Unreleased (0.43.0) — affinidi-messaging-sdk 0.46
+## [0.43.0] - 2026-11-13
+
+affinidi-messaging-sdk 0.46
 
 - **Changed (breaking):** the `messaging` feature re-exports
   `affinidi-messaging-sdk` 0.46 (`trust-tasks-rs` 0.38). See its CHANGELOG.
   `affinidi-messaging-helpers` and `affinidi-messaging-text-client` require
   this version.
 
-## Unreleased (0.42.0) — affinidi-mdoc 0.6
+## [0.42.0] - 2026-11-13
+
+affinidi-mdoc 0.6
 
 - **Changed:** the `mdoc` feature moves to `affinidi-mdoc` 0.6: proximity
   session keys are derived as ISO/IEC 18013-5 specifies (different keys from
   0.5), and `MdocBuilder::build` requires a device key and a validity window.
   See that crate's CHANGELOG.
 
-## Unreleased (0.41.0) — affinidi-sd-jwt 0.2, affinidi-vc 0.3
+## [0.41.0] - 2026-11-12
+
+affinidi-sd-jwt 0.2, affinidi-vc 0.3
 
 - **Changed:** the `sd-jwt` feature moves to `affinidi-sd-jwt` 0.2: key binding
   is checked under the credential's `cnf.jwk`, and `aud`, `nonce` and `iat`
@@ -70,39 +86,51 @@
   argument. The `vc` and `sd-jwt-vc` features move to `affinidi-vc` 0.3. See
   those crates' CHANGELOGs.
 
-## Unreleased (0.40.0) — affinidi-siopv2 0.2
+## [0.40.0] - 2026-11-12
+
+affinidi-siopv2 0.2
 
 - **Changed:** the `siopv2` feature moves to `affinidi-siopv2` 0.2: ID Tokens
   are signed with `SelfIssuedIdToken::sign` and checked with
   `verify_id_token`; the claims-only check is renamed `validate_claims`. See
   that crate's CHANGELOG.
 
-## Unreleased (0.39.0) — affinidi-trust-lists 0.2
+## [0.39.0] - 2026-11-12
+
+affinidi-trust-lists 0.2
 
 - **Changed:** the `trust` feature moves to `affinidi-trust-lists` 0.2: chain
   validation verifies certificate signatures, and parsed XML lists must be
   released with `assume_authenticated()` and are refused when stale. See that
   crate's CHANGELOG for the API changes.
-## Unreleased (0.38.0) — affinidi-mdoc 0.5
+## [0.38.0] - 2026-11-12
+
+affinidi-mdoc 0.5
 
 - **Changed:** the `mdoc` feature moves to `affinidi-mdoc` 0.5: item digests
   are checked over the bytes as received, `DeviceResponse::verify` runs the
   full reader check set, and COSE `alg` headers are checked. Stricter
   verification is a behaviour change for callers of the re-exported crate.
 
-## Unreleased (0.37.6) — affinidi-did-webs 0.13
+## [0.37.6] - 2026-11-11
+
+affinidi-did-webs 0.13
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.13, on
   affinidi-keri 0.8: native CESR bodies resolve, keripy's delegated rotations
   verify, and the `EO` and `DND` configuration traits are enforced.
 
-## Unreleased (0.37.5) — affinidi-did-webs 0.12
+## [0.37.5] - 2026-11-11
+
+affinidi-did-webs 0.12
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.12, on
   affinidi-keri 0.7: rotations verify as keripy verifies them, and a recovery
   rotation supersedes interaction events and what they anchored.
 
-## Unreleased (0.37.4) — affinidi-did-webs 0.11
+## [0.37.4] - 2026-11-10
+
+affinidi-did-webs 0.11
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.11: did:webs
   on KERI 2.0 (alpha). Designations are read for both ACDC versions, a stream
@@ -110,97 +138,137 @@
   designation the resolver does not implement fails with
   `unsupportedDesignation`.
 
-## Unreleased (0.37.3) — affinidi-did-webs 0.10
+## [0.37.3] - 2026-11-10
+
+affinidi-did-webs 0.10
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.10, on
   affinidi-keri 0.6: rotations now verify in keripy, and thresholds of 10 or
   more are read as hex.
 
-## Unreleased (0.37.2) — affinidi-did-webs 0.9
+## [0.37.2] - 2026-11-09
+
+affinidi-did-webs 0.9
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.9, which
   no longer turns on `serde_json`'s `preserve_order` for the whole build.
 
-## Unreleased (0.37.1) — affinidi-did-webs 0.8
+## [0.37.1] - 2026-11-08
+
+affinidi-did-webs 0.8
 
 - **Changed:** the `did-webs` feature moves to `affinidi-did-webs` 0.8, which
   resolves as the did:webs specification requires: a DID resolves only when its
   AID designates it, signatures are held to the signing threshold, replies are
   ordered by BADA, and the published `did.json` is compared as a whole.
 
-## Unreleased (0.37.0) — SDK 0.45
+## [0.37.0] - 2026-11-04
+
+SDK 0.45
 
 The facade re-exports `affinidi-messaging-sdk`, which moves to 0.45 (`trust-tasks-rs` 0.37). So this crate moves a minor. No source change.
 
-## Unreleased (0.36.0) — SDK 0.44
+## [0.36.0] - 2026-10-28
+
+SDK 0.44
 
 The facade re-exports `affinidi-messaging-sdk`, which moves to 0.44: `trust-tasks-rs` 0.36, and `decode_monitor_event` returns the `messaging/monitor/event` 0.2 type. So this crate moves a minor. No source change.
 
-## Unreleased (0.35.0) — SDK 0.43
+## [0.35.0] - 2026-10-27
+
+SDK 0.43
 
 The facade re-exports `affinidi-messaging-sdk`, which moves to 0.43: seven messaging tasks are spoken at 0.2 and their methods return the 0.2 types. So this crate moves a minor. No source change.
 
-## Unreleased (0.34.0) — SDK 0.42
+## [0.34.0] - 2026-10-27
+
+SDK 0.42
 
 The facade re-exports `affinidi-messaging-sdk`, which moves to 0.42: its Trust Task types are generated at build time and live at `affinidi_messaging_sdk::tasks`. So this crate moves a minor. No source change.
 
-## Unreleased (0.33.0) — SDK 0.41
+## [0.33.0] - 2026-10-27
+
+SDK 0.41
 
 The facade re-exports `affinidi-messaging-sdk`, which moves to 0.41 for `trust-tasks-rs` 0.35. So this crate moves a minor. No source change.
 
-## Unreleased (0.32.0) — SDK 0.40
+## [0.32.0] - 2026-10-24
+
+SDK 0.40
 
 The facade re-exports `affinidi-messaging-sdk`, which moves to 0.40 for `trust-tasks-rs` 0.34. So this crate moves a minor. No source change.
 
-## Unreleased (0.31.0) — TSP 1.0, SDK 0.39
+## [0.31.0] - 2026-10-22
+
+TSP 1.0, SDK 0.39
 
 The facade re-exports `affinidi-tsp` (feature `tsp`), which moves to 0.3 and
 TSP 1.0 (`YTSP-BAA`) — not wire-compatible with the 0.2.x (Rev 3) it
 re-exported before — and `affinidi-messaging-sdk`, which moves to 0.39 with it.
 So this crate moves a minor. No source change.
 
-## Unreleased (0.30.0) — did-scid 0.4
+## [0.30.0] - 2026-10-21
+
+did-scid 0.4
 
 Moves the re-exported `did_scid` (feature `did-scid`) to 0.4, whose `resolve`
 returns a did:scid's own document (bare `did:scid:vh:1:<scid>` as `id`, keys
 under it) rather than the did:webvh document that verifies it. The re-export
 makes that a breaking change here.
 
-## Unreleased (0.29.0) — mdoc 0.4
+## [0.29.0] - 2026-10-21
+
+mdoc 0.4
 
 The facade re-exports `affinidi-mdoc` (feature `mdoc`), which moves to 0.4
 (OpenID4VP 1.0 Final handovers, breaking), so this crate moves a minor with it.
 No source change.
 
-## Unreleased (0.28.0) — SDK 0.38
+## [0.28.0] - 2026-10-21
+
+SDK 0.38
 
 The facade re-exports `affinidi-messaging-sdk`, which moves to 0.38 (`trust-tasks-rs` 0.33), so this crate moves a minor with it. No source change.
 
-## Unreleased (0.27.0) — SDK 0.37
+## [0.27.0] - 2026-10-18
+
+SDK 0.37
 
 The facade re-exports `affinidi-messaging-sdk`, which moves to 0.37 (`trust-tasks-rs` 0.32), so this crate moves a minor with it. No source change.
 
-## Unreleased (0.26.0) — SDK 0.36
+## [0.26.0] - 2026-10-13
+
+SDK 0.36
 
 The facade re-exports `affinidi-messaging-sdk`, which moves to 0.36 (`trust-tasks-rs` 0.31), so this crate moves a minor with it. No source change.
 
-## Unreleased (0.25.0) — SDK 0.35
+## [0.25.0] - 2026-10-11
+
+SDK 0.35
 
 The facade re-exports `affinidi-messaging-sdk`, which moves to 0.35 (`trust-tasks-rs` 0.30), so this crate moves a minor with it. No source change.
 
-## Unreleased (0.24.0) — SDK 0.34
+## [0.24.0] - 2026-10-11
+
+SDK 0.34
 
 The facade re-exports `affinidi-messaging-sdk`, which moves to 0.34 (`trust-tasks-rs` 0.28), so this crate moves a minor with it. No source change.
 
-## Unreleased (0.23.0) — SDK 0.33
+## [0.23.0] - 2026-10-03
+
+SDK 0.33
 
 The facade re-exports `affinidi-messaging-sdk`, which moves to 0.33 (`trust-tasks-rs` 0.27), so this crate moves a minor with it. No source change.
 
-## Unreleased (0.22.0) — `affinidi-data-integrity` 0.8, SDK 0.32, did-scid 0.3
+## [0.22.0] - 2026-10-01
+
+`affinidi-data-integrity` 0.8, SDK 0.32, did-scid 0.3
 
 The facade re-exports `affinidi-data-integrity` 0.8 (the correctly versioned re-release of 0.7.14, on `affinidi-bbs` 0.4), `affinidi-tdk-common` 0.7, `affinidi-messaging-sdk` 0.32, `affinidi-meeting-place` 0.5 and `did-scid` 0.3 (`didwebvh-rs` 0.8). All of them move a minor, so this crate moves a minor with them. `did-scid` is taken by workspace path again: 0.21.1's registry pin is undone. No source change.
 
-## Unreleased (0.21.1) — `did-scid` from crates.io, pending 0.22
+## [0.21.1] - 2026-10-01
+
+`did-scid` from crates.io, pending 0.22
 
 No API or behaviour change. The workspace's `did-scid` moved to 0.3
 (`didwebvh-rs` 0.8), and because this crate re-exports `did_scid`, following it
@@ -209,23 +277,33 @@ would be breaking. This release keeps the optional `did-scid` dependency on
 did-scid 0.3 together with `affinidi-data-integrity` 0.8 and SDK 0.32, so
 there is one breaking tdk release, not two.
 
-## Unreleased (0.21.0) — SDK 0.31
+## [0.21.0] - 2026-09-30
+
+SDK 0.31
 
 The facade re-exports the messaging SDK, which moves a minor for trust-tasks-rs 0.25, so this crate moves a minor with it. No source change.
 
-## Unreleased (0.20.0) — SDK 0.30
+## [0.20.0] - 2026-09-27
+
+SDK 0.30
 
 The facade re-exports the messaging SDK, which moves a minor for trust-tasks-rs 0.24, so this crate moves a minor with it. No source change.
 
-## Unreleased (0.19.0) — SDK 0.29
+## [0.19.0] - 2026-09-27
+
+SDK 0.29
 
 The facade re-exports the messaging SDK, which removes the legacy mediator admin senders in 0.29, so this crate moves a minor with it. No source change.
 
-## Unreleased (0.18.0) — trust-tasks-rs 0.23
+## [0.18.0] - 2026-09-26
+
+trust-tasks-rs 0.23
 
 Carries the messaging crates' move to trust-tasks-rs 0.23: a pin on a bumped 0.x crate does not admit its new line, so this crate moves a minor with it.
 
-## Unreleased (0.17.0) — `trust-tasks-rs` 0.21
+## [0.17.0] - 2026-09-23
+
+`trust-tasks-rs` 0.21
 
 The facade re-exports the messaging family, so it moves with it. A re-export
 makes the re-exported crate's version part of this crate's public API — which
@@ -236,7 +314,9 @@ a minor for it — `trust_tasks_rs` types cross their API, so a consumer has to
 move in step rather than resolve two versions. No code change here; the pins
 follow.
 
-## Unreleased (0.15.0) — TSP Rev 3
+## [0.15.0] - 2026-09-15
+
+TSP Rev 3
 
 Breaking: the facade now re-exports `affinidi-tsp` 0.2, which speaks Trust
 Spanning Protocol Rev 3 and **cannot interoperate with a Rev 2 peer in either
@@ -247,7 +327,9 @@ mixed fleet does not degrade, it goes silent.
 See `affinidi-tsp`'s changelog for the wire changes and `docs/tsp/` for the
 migration status.
 
-## Unreleased (0.14.0) — `trust-tasks-rs` 0.20
+## [0.14.0] - 2026-09-10
+
+`trust-tasks-rs` 0.20
 
 - Bumps `trust-tasks-rs` 0.19 → 0.20. **No source change** — only manifests.
   0.20 is additive for everything this crate uses: its one breaking change is a
@@ -266,7 +348,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
 
-## 0.12.0
+## [0.12.0] - 2026-09-06
 
 - Re-exports `affinidi-messaging-sdk` 0.22.0, whose move to `trust-tasks-rs`
   0.18 is breaking for consumers: the SDK's public API carries generated types
@@ -274,7 +356,7 @@ For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
   so two `trust-tasks-rs` versions in one graph fail to compile rather than
   warn. A consumer must move to 0.18 in the same change.
 
-## 0.11.0
+## [0.11.0] - 2026-09-01
 
 ### Changed
 
@@ -288,7 +370,7 @@ For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
   requirement is itself what changed: a consumer resolving `affinidi-tdk` 0.10.0
   from crates.io stays pinned to `affinidi-mdoc` 0.2 and can never reach 0.3.
 
-## 0.10.0
+## [0.10.0] - 2026-08-27
 
 ### Changed
 
@@ -305,7 +387,7 @@ For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
   requirement is itself what changed: a consumer resolving `affinidi-tdk` 0.9.0
   from crates.io stays pinned to the SDK's 0.20 line and can never reach 0.17.
 
-## 0.9.0
+## [0.9.0] - 2026-08-26
 
 ### Changed
 
@@ -320,49 +402,49 @@ For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
   rather than the one beside it in this workspace — which is how a stale
   `trust-tasks-rs` node survived the 0.12 move.
 
-## 0.8.14
+## [0.8.14] - 2026-08-23
 
 ### Changed
 
 - `did-webs` feature now re-exports `affinidi-did-webs` 0.7.
 
-## 0.8.13
+## [0.8.13] - 2026-08-23
 
 ### Changed
 
 - `did-webs` feature now re-exports `affinidi-did-webs` 0.6.
 
-## 0.8.12
+## [0.8.12] - 2026-08-23
 
 ### Changed
 
 - `did-scid` feature now re-exports `did-scid` 0.2.3.
 
-## 0.8.11
+## [0.8.11] - 2026-08-23
 
 ### Changed
 
 - `did-webs` feature now re-exports `affinidi-did-webs` 0.5.
 
-## 0.8.10
+## [0.8.10] - 2026-08-23
 
 ### Changed
 
 - `did-webs` feature now re-exports `affinidi-did-webs` 0.4.
 - `did-scid` feature now re-exports `did-scid` 0.2.
 
-## 0.8.7
+## [0.8.7] - 2026-08-23
 
 ### Changed
 
 - `did-webs` feature now re-exports `affinidi-did-webs` 0.2.
-## 0.8.8
+## [0.8.8] - 2026-08-23
 
 ### Changed
 
 - `did-webs` feature now re-exports `affinidi-did-webs` 0.3.
 
-## 0.8.6
+## [0.8.6] - 2026-08-23
 
 ### Added
 

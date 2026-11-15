@@ -22,6 +22,9 @@ on:
     types:
       - opened
       - synchronize
+      # A reopened PR, or a draft marked ready, gets a fresh run too.
+      - reopened
+      - ready_for_review
     paths:
       - "crates/core/affinidi-crypto/**"
       - "crates/core/affinidi-secrets-resolver/**"
@@ -32,6 +35,14 @@ on:
       - "rust-toolchain.toml"
       - ".github/workflows/checks-wasm.yaml"
   workflow_dispatch:
+
+# A new push to a PR supersedes the run already in flight for it: cancel that
+# one instead of paying for both. Only pull_request runs are cancelled —
+# scheduled and dispatched runs (and release.yaml, which has no such block)
+# always run to completion.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Read-only: the job checks out and compiles; it writes nothing back.
 permissions:

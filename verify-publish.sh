@@ -31,8 +31,26 @@ get_local_version() {
   echo "$METADATA" | jq -r ".packages[] | select(.name == \"$1\") | .version"
 }
 
+# Highest non-yanked version of EXACTLY this crate on crates.io, or nothing.
+#
+# Not `cargo search "$1" | head -1`: search is fuzzy and ranked, so for short
+# names (`did-example`, `agent-names`) the first hit need not be the crate
+# asked for, and `--order` would compare against some other crate's version.
+# The sparse index is keyed by exact (lower-cased) name and lists every
+# published version, one JSON object per line.
+# https://doc.rust-lang.org/cargo/reference/registry-index.html#index-files
 get_remote_version() {
-  cargo search "$1" 2>/dev/null | head -1 | sed 's/.*= "\([^"]*\)".*/\1/'
+  local name prefix
+  name=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  case ${#name} in
+    1) prefix="1" ;;
+    2) prefix="2" ;;
+    3) prefix="3/${name:0:1}" ;;
+    *) prefix="${name:0:2}/${name:2:2}" ;;
+  esac
+  curl -fsS "https://index.crates.io/$prefix/$name" 2>/dev/null \
+    | jq -rs '[ .[] | select(.yanked | not) | .vers | select(test("-") | not) ]
+              | max_by(split(".") | map(tonumber)) // empty'
 }
 
 show_publish_order() {

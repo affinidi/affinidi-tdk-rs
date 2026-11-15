@@ -1,6 +1,8 @@
 # Affinidi OID4VC Core Changelog
 
-## Unreleased (0.1.12) — SD-JWT adapters for the raw-bytes signer/verifier
+## [0.1.12] - 2026-11-15
+
+SD-JWT adapters for the raw-bytes signer/verifier
 
 Additive.
 
@@ -24,7 +26,9 @@ Additive.
 - **Internal:** compact-JWS splitting and segment decoding are shared by the
   unverified and verified decoders. Same results and errors.
 
-## Unreleased (0.1.11) — affinidi-crypto 0.3
+## [0.1.11] - 2026-11-13
+
+affinidi-crypto 0.3
 
 - **Changed:** requires `affinidi-crypto` 0.3 (`jwe` feature).
   `EcdhEsDecryptionKey::generate` moves the scalar out of the generated key
@@ -32,7 +36,9 @@ Additive.
   `affinidi-crypto` already in a `Zeroizing` buffer. No behaviour change and
   no `affinidi-crypto` type in this crate's API.
 
-## Unreleased (0.1.10) — compact JWE with `ECDH-ES` direct (`jwe` feature)
+## [0.1.10] - 2026-10-11
+
+compact JWE with `ECDH-ES` direct (`jwe` feature
 
 New opt-in `jwe` feature and module: the OpenID4VP 1.0 encrypted authorization
 response (`response_mode=direct_post.jwt`).
@@ -52,19 +58,23 @@ response (`response_mode=direct_post.jwt`).
 Builds on `affinidi-crypto` 0.2.11's `jose::gcm` and `jose::ecdh`. Additive;
 the feature is off by default.
 
-## Unreleased (0.1.9) — `sha2` 0.11
+## [0.1.9] - 2026-10-01
+
+`sha2` 0.11
 
 No behaviour change and no public API change: this is a private dependencies here.
 Verified by the crate's test suite.
 
-## Unreleased (0.1.8) — dependency refresh
+## [0.1.8] - 2026-08-23
+
+dependency refresh
 
 - Bumps `base64` 0.22 → 0.23.
 - No source or API change; the bumps are declaration-only and the crate
   compiles unmodified against them. Bumped workspace-wide in the same
   change so no two versions of these crates are compiled side by side.
 
-## 2nd August 2026 (0.1.7)
+## [0.1.7] - 2026-08-02
 
 **`Es256Signer::generate_with_rng` now bounds `R: rand::CryptoRng`** (rand
 0.10) instead of the rand_core 0.6 traits. Callers passing a rand 0.8-era
@@ -90,7 +100,7 @@ Crypto behaviour is unchanged — the golden/KAT vectors (`p256_sign_verify_roun
 `secp256k1_es256k_golden` RFC 6979, `ecdh_1pu_x25519_kek_golden`,
 `concat_kdf_es_golden`, `a256cbc_hs512_golden`) all still pass.
 
-## 31st July 2026 (0.1.6)
+## [0.1.6] - 2026-07-31
 
 `EddsaSigner::generate_with_rng` now bounds `R: rand::CryptoRng` (rand 0.10)
 instead of the rand_core 0.6 traits. Callers passing a rand 0.8-era RNG must
@@ -106,13 +116,13 @@ Patch bump, per [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) p
 `[patch.crates-io]`, and a minor bump would break the redirect and pull a second
 copy from crates.io.
 
-## 14th June 2026 Release 0.1.5
+## [0.1.5] - 2026-06-14
 
 - `JwtError` and `OAuthError` are now `#[non_exhaustive]` (ADR-0003) so new
   variants land additively. Patch bump keeps the `0.1` pin valid; consumers that
   `match` them must add a `_` wildcard arm. No behaviour change. (W7 sweep)
 
-## 3rd June 2026 Release 0.1.3
+## [0.1.3] - 2026-06-03
 
 ### Added
 
@@ -130,7 +140,7 @@ copy from crates.io.
   `.iter()`, so consumers stop re-implementing (and occasionally
   mishandling) the array form.
 
-## 28th May 2026 Release 0.1.2
+## [0.1.2] - 2026-05-28
 
 ### Security
 

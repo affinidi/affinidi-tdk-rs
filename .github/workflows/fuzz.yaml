@@ -5,6 +5,12 @@ name: fuzz
 # a short smoke pass on PRs that touch a fuzzed crate, and a longer pass nightly.
 on:
   pull_request:
+    types:
+      - opened
+      - synchronize
+      # A reopened PR, or a draft marked ready, gets a fresh run too.
+      - reopened
+      - ready_for_review
     paths:
       - "crates/messaging/affinidi-messaging-didcomm/**"
       - "crates/messaging/affinidi-messaging-didcomm-v1/**"
@@ -25,6 +31,14 @@ on:
     # 03:17 UTC daily — off the hour to avoid the scheduler rush.
     - cron: "17 3 * * *"
   workflow_dispatch:
+
+# A new push to a PR supersedes the run already in flight for it: cancel that
+# one instead of paying for both. Only pull_request runs are cancelled —
+# scheduled and dispatched runs (and release.yaml, which has no such block)
+# always run to completion.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

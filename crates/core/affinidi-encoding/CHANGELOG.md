@@ -1,6 +1,8 @@
 # Affinidi Encoding Changelog
 
-## Unreleased (0.1.7) — one checked multikey / did:key decoder
+## [0.1.7] - 2026-11-15
+
+one checked multikey / did:key decoder
 
 Additive (#1056).
 
@@ -25,7 +27,9 @@ Additive (#1056).
   be a breaking change.
 
 
-## Unreleased (0.1.6) — the post-quantum code points are now pinned, not trusted
+## [0.1.6] - 2026-09-15
+
+the post-quantum code points are now pinned, not trusted
 
 No behaviour change: a test and a comment. Every value was already correct.
 
@@ -47,13 +51,13 @@ parameter set, so SLH-DSA secrets stay memory-only. It exists to stop that gap
 being closed from this side by picking an unused number, which round-trips
 in-workspace and is unreadable everywhere else.
 
-## 14th June 2026 (0.1.5)
+## [0.1.5] - 2026-06-14
 
 - **SEMVER:** `EncodingError` is now `#[non_exhaustive]` (ADR-0003), so new
   variants land additively. Patch bump keeps the `0.1` pin valid; consumers that
   `match` it must add a `_` wildcard arm. No behaviour change.
 
-## 18th April 2026 (0.1.3)
+## [0.1.3] - 2026-04-18
 
 - **FEATURE:** Added post-quantum multicodec constants aligned with the
   official multicodec registry (all currently `draft`):
@@ -74,6 +78,8 @@ in-workspace and is unreadable everywhere else.
   byte-level varint-prefix assertions (in downstream
   `affinidi-secrets-resolver` tests).
 
-## 0.1.1 — prior releases
+## [0.1.1] - 2026-02-01
+
+prior releases
 
 (No CHANGELOG recorded for earlier 0.1.x releases.)

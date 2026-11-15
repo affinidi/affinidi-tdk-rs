@@ -179,18 +179,18 @@ export RUST_LOG=none,affinidi_messaging_sdk=debug
 ## Examples
 
 Runnable examples live in
-[affinidi-messaging-helpers](../affinidi-messaging-helpers/examples/), e.g.
+[affinidi-messaging-helpers](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-helpers/examples/), e.g.
 `trust_ping`, `mediator_ping`, `alice_bob` and `oob_invite`. They need a
 mediator (see
 [affinidi-messaging-mediator](https://github.com/affinidi/affinidi-messaging-mediator))
-and an environment file from the helpers' setup tool.
+and a hand-written `environments.json` (schema in the helpers README).
 
 ## Related crates
 
-- [`affinidi-messaging-didcomm`](../affinidi-messaging-didcomm/): the DIDComm implementation
-- [`affinidi-tsp`](../affinidi-tsp/): the Trust Spanning Protocol implementation
-- [`affinidi-messaging-core`](../affinidi-messaging-core/): protocol-agnostic messaging traits
-- [`affinidi-messaging-delivery`](../affinidi-messaging-delivery/): reliable delivery on top of a transport
+- [`affinidi-messaging-didcomm`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-didcomm/): the DIDComm implementation
+- [`affinidi-tsp`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-tsp/): the Trust Spanning Protocol implementation
+- [`affinidi-messaging-core`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-core/): protocol-agnostic messaging traits
+- [`affinidi-messaging-delivery`](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/messaging/affinidi-messaging-delivery/): reliable delivery on top of a transport
 - [`affinidi-messaging-mediator`](https://github.com/affinidi/affinidi-messaging-mediator): the mediator
 
 ## License

@@ -87,6 +87,29 @@ if [ -n "$rustver_line" ]; then
   fi
 fi
 
+# --- MSRV strings in Markdown ------------------------------------------------
+# The README badges (`rust-X.Y.Z%2B`) and "Rust X.Y.Z+" prerequisites restate
+# the MSRV by hand. They sat at 1.90.0 for months after the workspace moved to
+# 1.95.0 (#1062, #1063), so they are policed here against Cargo.toml's
+# rust-version, and a bump fails until they follow it.
+if [ -n "${rv:-}" ]; then
+  while IFS= read -r hit; do
+    [ -z "$hit" ] && continue
+    file=$(printf '%s\n' "$hit" | cut -d: -f1)
+    lineno=$(printf '%s\n' "$hit" | cut -d: -f2)
+    content=$(printf '%s\n' "$hit" | cut -d: -f3-)
+    for ver in $(printf '%s\n' "$content" \
+        | grep -oE 'rust-[0-9]+\.[0-9]+(\.[0-9]+)?%2B|Rust(\*\*)? [0-9]+\.[0-9]+(\.[0-9]+)?\+' \
+        | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?'); do
+      if [ "$ver" != "$rv" ]; then
+        echo "  ${RED}DIFF${NC} $file:$lineno MSRV text -> ${RED}$ver${NC} (expected rust-version $rv)"
+        fail=1
+      fi
+    done
+  done < <(git grep -nE 'rust-[0-9]+\.[0-9]+(\.[0-9]+)?%2B|Rust(\*\*)? [0-9]+\.[0-9]+(\.[0-9]+)?\+' -- '*.md' ':!*CHANGELOG*' || true)
+  [ "$fail" -eq 0 ] && echo "  ${GREEN}ok${NC}   Markdown MSRV badges and prerequisites -> $rv"
+fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then
   echo "${GREEN}Toolchain in sync.${NC}"

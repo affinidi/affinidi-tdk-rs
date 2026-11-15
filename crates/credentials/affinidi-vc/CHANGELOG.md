@@ -1,6 +1,8 @@
 # Affinidi VC Changelog
 
-## Unreleased (0.3.2) — SD-JWT VC `typ`
+## [0.3.2] - 2026-11-12
+
+SD-JWT VC `typ`
 
 - **Changed:** `sd_jwt_vc::issue` signs with JWS header `typ` `dc+sd-jwt`
   (draft-ietf-oauth-sd-jwt-vc §3.2.1, `SD_JWT_VC_TYP`) instead of `sd+jwt`.
@@ -11,7 +13,9 @@
   and are refused by `verify`. `verify_temporal` and the rest of the module do
   not look at `typ`.
 
-## Unreleased (0.3.1) — SD-JWT VC verification; temporal claims checked strictly
+### Also in 0.3.2: SD-JWT VC verification; temporal claims checked strictly
+
+Prepared as 0.3.1, which was never published; these changes first shipped in 0.3.2.
 
 - **Added:** `sd_jwt_vc::verify(serialized, issuer_key, hasher, &VerifyOptions)`
   returning `VerifiedSdJwtVc { claims, vct, issuer, status, key_bound }`.
@@ -51,19 +55,21 @@
 - **Added:** `SdJwtVcError::InvalidClaims`, `ProtectedClaim` and
   `Verification` (the enum is `#[non_exhaustive]`).
 
-## Unreleased (0.3.0) — affinidi-sd-jwt 0.2
+## [0.3.0] - 2026-11-12
+
+affinidi-sd-jwt 0.2
 
 `affinidi-sd-jwt` moves to 0.2, and its `SdJwt` is part of this crate's API
 (`SdJwtVc::sd_jwt`), so this crate moves a minor with it (R3.6). No source
 change. See the `affinidi-sd-jwt` 0.2.0 entry for the key binding changes.
 
-## 14th June 2026 (0.2.1)
+## [0.2.1] - 2026-06-14
 
 `SdJwtVcError` is now `#[non_exhaustive]` (ADR-0003), completing the sealing the
 W7 wave started on `VcError`. Patch bump keeps the `0.2` pin valid; match it with
 a `_` wildcard arm. No behaviour change. (W7 sweep)
 
-## 13th June 2026 (0.1.2)
+## [0.1.2] - 2026-06-13
 
 Semver wave (W7/W10 — release W11). `VcError`, `VerifiableCredential`, and
 `CredentialStatus` are now `#[non_exhaustive]`: match `VcError` with a wildcard

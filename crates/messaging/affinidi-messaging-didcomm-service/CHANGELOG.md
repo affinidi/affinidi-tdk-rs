@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.35.0 — observable connection state, one owner per message, bounded handlers, enforced config
+## [0.35.0] - 2026-11-15
+
+observable connection state, one owner per message, bounded handlers, enforced config
 
 Behaviour changes for consumers (R3.6) are marked **Behaviour**; read them
 before upgrading.
@@ -82,7 +84,9 @@ before upgrading.
 - New dependency: `affinidi-messaging-core` 0.1.13, for `ConnState`.
 
 
-## 0.34.0 — affinidi-messaging-sdk 0.49; offline sync acks by the mediator's id
+## [0.34.0] - 2026-11-15
+
+affinidi-messaging-sdk 0.49; offline sync acks by the mediator's id
 
 - **Changed (breaking):** requires `affinidi-messaging-sdk` 0.49, whose types
   it re-exports. See that crate's changelog for the send/receive behaviour
@@ -96,24 +100,32 @@ before upgrading.
   `id`, so a reply threads to the sender. The `tsp` build already acked by
   the attachment id.
 
-## 0.33.0 — affinidi-messaging-sdk 0.48 and affinidi-tsp 0.4
+## [0.33.0] - 2026-11-15
+
+affinidi-messaging-sdk 0.48 and affinidi-tsp 0.4
 
 - **Changed (breaking):** requires `affinidi-messaging-sdk` 0.48 and
   `affinidi-tsp` 0.4, whose types it re-exports. No source change.
 
 
-## Unreleased (0.32.0) — affinidi-messaging-sdk 0.47
+## [0.32.0] - 2026-11-14
+
+affinidi-messaging-sdk 0.47
 
 - **Changed (breaking):** requires `affinidi-messaging-sdk` 0.47
   (`trust-tasks-rs` 0.39, `affinidi-crypto` 0.3), whose types it re-exports.
   No source change.
 
-## 0.31.0 — affinidi-messaging-sdk 0.46
+## [0.31.0] - 2026-11-13
+
+affinidi-messaging-sdk 0.46
 
 - **Changed (breaking):** requires `affinidi-messaging-sdk` 0.46
   (`trust-tasks-rs` 0.38), whose types it re-exports. No source change.
 
-## Unreleased (0.30.2) — no reply to problem reports; error text kept local
+## [0.30.2] - 2026-11-12
+
+no reply to problem reports; error text kept local
 
 Follows 0.30.1 (#1083); merge that first.
 
@@ -136,37 +148,53 @@ Follows 0.30.1 (#1083); merge that first.
   are not checked (`HandlerContext` does not carry the inbound type).
 - `examples/echo_server.rs`'s fallback follows the same rules as `Router`.
 
-## 0.30.1 — log names a repeated TSP invite
+## [0.30.1] - 2026-11-12
+
+log names a repeated TSP invite
 
 The debug line for an inbound TSP control message that was not recorded now
 also names a copy of an invite already acted on, which
 `affinidi-messaging-sdk` 0.45.8 refuses. Log text only.
 
-## Unreleased (0.30.0) — SDK 0.45
+## [0.30.0] - 2026-11-04
+
+SDK 0.45
 
 Moves to `affinidi-messaging-sdk` 0.45 (`trust-tasks-rs` 0.37). The SDK is a public dependency here, so this crate moves a minor. No source change.
 
-## Unreleased (0.29.0) — SDK 0.44
+## [0.29.0] - 2026-10-28
+
+SDK 0.44
 
 Moves to `affinidi-messaging-sdk` 0.44 (`trust-tasks-rs` 0.36). The SDK is a public dependency here, so this crate moves a minor. No source change.
 
-## Unreleased (0.28.0) — SDK 0.43
+## [0.28.0] - 2026-10-27
+
+SDK 0.43
 
 Moves to `affinidi-messaging-sdk` 0.43, whose account types for `account/update` are now the 0.2 ones. The SDK is a public dependency here, so this crate moves a minor.
 
-## Unreleased (0.27.0) — SDK 0.42
+## [0.27.0] - 2026-10-27
+
+SDK 0.42
 
 Moves to `affinidi-messaging-sdk` 0.42, and takes the Trust Task types from `affinidi_messaging_sdk::tasks` instead of `trust-tasks-rs`, which is no longer a dependency. The SDK is a public dependency here, so this crate moves a minor.
 
-## Unreleased (0.26.0) — SDK 0.41, trust-tasks 0.35
+## [0.26.0] - 2026-10-27
+
+SDK 0.41, trust-tasks 0.35
 
 Moves to `affinidi-messaging-sdk` 0.41 and `trust-tasks-rs` 0.35. The SDK is a public dependency here, so this crate moves a minor. No source change.
 
-## Unreleased (0.25.0) — SDK 0.40, trust-tasks 0.34
+## [0.25.0] - 2026-10-24
+
+SDK 0.40, trust-tasks 0.34
 
 Moves to `affinidi-messaging-sdk` 0.40 and `trust-tasks-rs` 0.34. The SDK is a public dependency here, so this crate moves a minor. No source change.
 
-## Unreleased (0.24.0) — SDK 0.39, TSP 1.0
+## [0.24.0] - 2026-10-22
+
+SDK 0.39, TSP 1.0
 
 Moves to `affinidi-messaging-sdk` 0.39 and `affinidi-tsp` 0.3. With the `tsp`
 feature this speaks TSP 1.0 (`YTSP-BAA`) and cannot exchange TSP messages with
@@ -174,21 +202,29 @@ a service still on 0.23.x (Rev 3) in either direction — upgrade both ends
 together. See `affinidi-tsp`'s changelog. The SDK is a public dependency, so
 this crate moves a minor. No source change.
 
-## Unreleased (0.23.1) — did:scid profiles
+## [0.23.1] - 2026-10-21
+
+did:scid profiles
 
 - **Behaviour:** a `message.from` that differs from the profile DID only by a
   did:scid `src` locator no longer logs a mismatch warning.
 - `affinidi-did-common` moves from a dev-dependency to a dependency.
 
-## Unreleased (0.23.0) — SDK 0.38, trust-tasks 0.33
+## [0.23.0] - 2026-10-21
+
+SDK 0.38, trust-tasks 0.33
 
 Moves to `affinidi-messaging-sdk` 0.38 and `trust-tasks-rs` 0.33. The SDK is a public dependency here, so this crate moves a minor. No source change.
 
-## Unreleased (0.22.0) — SDK 0.37, trust-tasks 0.32
+## [0.22.0] - 2026-10-18
+
+SDK 0.37, trust-tasks 0.32
 
 Moves to `affinidi-messaging-sdk` 0.37 and `trust-tasks-rs` 0.32. The SDK is a public dependency here, so this crate moves a minor. No source change.
 
-## Unreleased (0.21.1) — end-to-end tests moved to affinidi-messaging-mediator
+## [0.21.1] - 2026-10-14
+
+end-to-end tests moved to affinidi-messaging-mediator
 
 The tests that ran this crate against the embedded test mediator
 (`soft_restart_websocket`, `tsp_live_stream`, `tsp_transport_adapter`,
@@ -198,41 +234,59 @@ The `affinidi-messaging-test-mediator`, `affinidi-tdk`,
 `affinidi-messaging-core` and `futures-util` dev-dependencies went with them.
 Tests only; nothing a consumer builds changes.
 
-## Unreleased (0.21.0) — SDK 0.36, trust-tasks 0.31
+## [0.21.0] - 2026-10-13
+
+SDK 0.36, trust-tasks 0.31
 
 Moves to `affinidi-messaging-sdk` 0.36, `affinidi-tdk` 0.26 and `trust-tasks-rs` 0.31. The SDK is a public dependency here, so this crate moves a minor. No source change.
 
-## Unreleased (0.20.0) — SDK 0.35, trust-tasks 0.30
+## [0.20.0] - 2026-10-11
+
+SDK 0.35, trust-tasks 0.30
 
 Moves to `affinidi-messaging-sdk` 0.35, `affinidi-tdk` 0.25 and `trust-tasks-rs` 0.30. The SDK is a public dependency here, so this crate moves a minor. No source change.
 
-## Unreleased (0.19.0) — SDK 0.34, trust-tasks 0.28
+## [0.19.0] - 2026-10-11
+
+SDK 0.34, trust-tasks 0.28
 
 Moves to `affinidi-messaging-sdk` 0.34, `affinidi-tdk` 0.24 and `trust-tasks-rs` 0.28. The SDK is a public dependency here, so this crate moves a minor. No source change.
 
-## Unreleased (0.18.1) — test-mediator 0.19 (dev-dependency)
+## [0.18.1] - 2026-10-10
+
+test-mediator 0.19 (dev-dependency
 
 The `affinidi-messaging-test-mediator` dev-dependency moves to 0.19. Tests
 only; nothing a consumer builds changes.
 
-## Unreleased (0.18.0) — SDK 0.33, trust-tasks 0.27
+## [0.18.0] - 2026-10-03
+
+SDK 0.33, trust-tasks 0.27
 
 Moves to `affinidi-messaging-sdk` 0.33, `affinidi-tdk` 0.23 and `trust-tasks-rs` 0.27. The SDK is a public dependency here, so this crate moves a minor. No source change.
 
-## Unreleased (0.17.1) — test-mediator 0.17 (dev-dependency)
+## [0.17.1] - 2026-10-02
+
+test-mediator 0.17 (dev-dependency
 
 The `affinidi-messaging-test-mediator` dev-dependency moves to 0.17. Tests
 only; nothing a consumer builds changes.
 
-## Unreleased (0.17.0) — SDK 0.32, trust-tasks 0.26
+## [0.17.0] - 2026-10-01
+
+SDK 0.32, trust-tasks 0.26
 
 Moves to `affinidi-messaging-sdk` 0.32, `affinidi-tdk-common` 0.7 and `trust-tasks-*` 0.26 (on data-integrity 0.8). Their types (`ATMError`, `TDKProfile`) are in this crate's public API, so it moves a minor. No source change.
 
-## Unreleased (0.16.0) — trust-tasks-rs 0.25
+## [0.16.0] - 2026-09-30
+
+trust-tasks-rs 0.25
 
 Moves to `trust-tasks-rs` 0.25, with the rest of the `trust-tasks-*` family at 0.25. That release conforms the Trust Task vetting, member and endorsement specs to the DTG Credentials v1 statement and authority credentials (trustoverip/dtgwg-trust-tasks-tf#691). A public dependency moving a minor is breaking, so this crate moves a minor. No source change.
 
-## Unreleased (0.15.2) — a payload sent right behind an invite is delivered
+## [0.15.2] - 2026-09-29
+
+a payload sent right behind an invite is delivered
 
 ### Fixed
 
@@ -248,24 +302,34 @@ Moves to `trust-tasks-rs` 0.25, with the rest of the `trust-tasks-*` family at 0
   relationship gate discards, is logged at warn as a dropped frame with the
   reason.
 
-## Unreleased (0.15.1) — test-mediator 0.14 in dev-dependencies
+## [0.15.1] - 2026-09-28
+
+test-mediator 0.14 in dev-dependencies
 
 The `affinidi-messaging-test-mediator` dev-dependency moves 0.13 -> 0.14, which
 embeds mediator 0.33. Tests only; no source or public API change.
 
-## Unreleased (0.15.0) — trust-tasks-rs 0.24
+## [0.15.0] - 2026-09-27
+
+trust-tasks-rs 0.24
 
 trust-tasks-rs and trust-tasks-proof 0.23 -> 0.24. A minor rather than a patch, as for 0.21, 0.22 and 0.23: the public API carries generated Trust Task types, so a consumer must move in the same change. 0.24 changes how a `oneOf` branch that uses a compound `not` is generated (trust-tasks-rs #665: `auth/passkey/enroll/invite/update/0.1` and `auth/revoke-session/0.2` become structs with optional members instead of uninhabited enums); this crate uses neither, and trust-tasks-proof is unchanged. Takes SDK 0.30. No source change.
 
-## Unreleased (0.14.0) — SDK 0.29
+## [0.14.0] - 2026-09-27
+
+SDK 0.29
 
 Carries the messaging crates' removal of the legacy mediator admin surface: a pin on a bumped 0.x crate does not admit its new line, so this crate moves a minor with it. No source change.
 
-## Unreleased (0.13.0) — trust-tasks-rs 0.23
+## [0.13.0] - 2026-09-26
+
+trust-tasks-rs 0.23
 
 trust-tasks-rs and trust-tasks-proof 0.22 -> 0.23. A minor rather than a patch, as for 0.21 and 0.22: the public API carries generated Trust Task types, so a consumer must move in the same change. 0.23 also resolves a proof's key only when the issuer lists it under the relationship the proof declares (proofPurpose, VTI-KEY-022), so a Trust Task signed with a key its DID document does not list for that purpose is now refused.
 
-## Unreleased (0.12.1) — `sender_did` is the authenticated sender
+## [0.12.1] - 2026-09-25
+
+`sender_did` is the authenticated sender
 
 ### Security
 
@@ -283,7 +347,9 @@ trust-tasks-rs and trust-tasks-proof 0.22 -> 0.23. A minor rather than a patch, 
 
 Built on `affinidi-messaging-sdk` 0.27.2.
 
-## Unreleased (0.12.0) — TSP relationship persistence + ensure
+## [0.12.0] - 2026-09-23
+
+TSP relationship persistence + ensure
 
 Lets a facade consumer form and persist TSP relationships, which the framework
 otherwise could not reach because it builds the ATM internally (design note
@@ -311,12 +377,16 @@ this crate's API — `MediatorAcl` among them — so a consumer combining it wit
 another `trust-tasks-rs` user has to move in step. A graph holding both
 versions does not merely carry a duplicate; it fails to compile on those types.
 
-## Unreleased (0.10.0) — `trust-tasks-rs` 0.21
+## [0.10.0] - 2026-09-16
+
+`trust-tasks-rs` 0.21
 
 Dependency move only; no source change. Minor because the handler traits carry
 `trust_tasks_rs` types.
 
-## Unreleased (0.9.0) — TSP Rev 3 control messages
+## [0.9.0] - 2026-09-15
+
+TSP Rev 3 control messages
 
 - **Handles TSP control messages.** The service had no relationship lifecycle at
   all: invites, accepts and cancels arrived and were discarded as
@@ -328,9 +398,13 @@ Dependency move only; no source change. Minor because the handler traits carry
 - Requires `affinidi-tsp` 0.2 / `affinidi-messaging-sdk` 0.22 when built with
   `--features tsp`.
 
-## Unreleased (0.5.0) — `trust-tasks-rs` 0.17
+## [0.5.0] - 2026-08-27
 
-## Unreleased (0.8.0) — `trust-tasks-rs` 0.20
+`trust-tasks-rs` 0.17
+
+## [0.8.0] - 2026-09-10
+
+`trust-tasks-rs` 0.20
 
 - Bumps `trust-tasks-rs` 0.19 → 0.20. **No source change** — only manifests.
   0.20 is additive for everything this crate uses: its one breaking change is a
@@ -343,12 +417,16 @@ Dependency move only; no source change. Minor because the handler traits carry
   a move that never arrives — and the version guard cannot see it, because only
   its manifest changed.
 
-## Unreleased (0.6.0) — `trust-tasks-rs` 0.18
+## [0.6.0] - 2026-09-06
+
+`trust-tasks-rs` 0.18
 
 - Follows `affinidi-messaging-sdk` 0.22.0 to `trust-tasks-rs` 0.18. No source
   change.
 
-## Unreleased (0.5.1) — `trust-tasks-rs` 0.17
+## [0.5.1] - 2026-09-01
+
+`trust-tasks-rs` 0.17
 
 - Requires `affinidi-tdk` 0.11 (was 0.10), which re-exports `affinidi-mdoc`
   0.3 / `coset` 0.4. Declaration-only; no source change here.
@@ -359,7 +437,9 @@ Dependency move only; no source change. Minor because the handler traits carry
 - **Breaking for consumers** only in that this crate now requires
   `trust-tasks-rs` 0.17; no API or behaviour change here.
 
-## Unreleased (0.4.0) — `trust-tasks-rs` 0.12
+## [0.4.0] - 2026-08-26
+
+`trust-tasks-rs` 0.12
 
 - Bumps `trust-tasks-rs` 0.11 → 0.12. No source change; the crate compiles
   unmodified against it.
