@@ -1,5 +1,21 @@
 # Changelog — `affinidi-tdk-common`
 
+## [0.7.3] - 2026-11-15
+
+Workspace lint and dependency housekeeping. No API or behaviour change.
+
+- Dependency versions now come from the root `[workspace.dependencies]`
+  for the external crates shared by five or more workspace members
+  (#1070). The published manifest still names concrete requirements; the
+  resolved dependency graph and every feature selection are unchanged.
+- Now inherits the workspace lints (`[lints] workspace = true`, #1064):
+  `unsafe_code` is denied and the workspace clippy lints apply.
+- Minimum dependency requirements raised to versions already in use across the
+  workspace (no new major/minor, Cargo.lock unchanged):
+  `affinidi-data-integrity` 0.8 -> 0.8.9, `affinidi-did-common` 0.4 -> 0.4.8,
+  `affinidi-did-resolver-cache-sdk` 0.8 -> 0.8.55, `affinidi-net-guard` 0.1.0
+  -> 0.1.1, `affinidi-secrets-resolver` 0.5 -> 0.5.19.
+
 ## [0.7.2] - 2026-11-15
 
 `AuthenticationCache` authenticates concurrently

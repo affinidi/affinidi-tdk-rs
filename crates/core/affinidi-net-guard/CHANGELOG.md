@@ -4,6 +4,17 @@ All notable changes to `affinidi-net-guard` are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this crate
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-11-15
+
+Workspace lint and dependency housekeeping. No API or behaviour change.
+
+- Dependency versions now come from the root `[workspace.dependencies]`
+  for the external crates shared by five or more workspace members
+  (#1070). The published manifest still names concrete requirements; the
+  resolved dependency graph and every feature selection are unchanged.
+- Workspace lints now include `unsafe_code = "deny"` (#1064); this crate
+  keeps its stricter `#![forbid(unsafe_code)]`.
+
 ## [0.1.1] - 2026-10-01
 
 ### Fixed

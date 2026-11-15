@@ -2,6 +2,16 @@
 
 All notable changes to this crate are documented here.
 
+## [0.13.7] - 2026-11-15
+
+Workspace lint and dependency housekeeping. No API or behaviour change.
+
+- Dependency versions now come from the root `[workspace.dependencies]`
+  for the external crates shared by five or more workspace members
+  (#1070). The published manifest still names concrete requirements; the
+  resolved dependency graph and every feature selection are unchanged.
+- Workspace lints now include `unsafe_code = "deny"` (#1064).
+
 ## [0.13.6] - 2026-11-15
 
 ### Fixed

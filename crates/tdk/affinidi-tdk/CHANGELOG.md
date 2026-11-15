@@ -1,5 +1,25 @@
 # Changelog — `affinidi-tdk`
 
+## [0.48.1] - 2026-11-15
+
+Workspace lint and dependency housekeeping. No API or behaviour change.
+
+- Dependency versions now come from the root `[workspace.dependencies]`
+  for the external crates shared by five or more workspace members
+  (#1070). The published manifest still names concrete requirements; the
+  resolved dependency graph and every feature selection are unchanged.
+- Workspace lints now include `unsafe_code = "deny"` (#1064); this crate
+  keeps its stricter `#![forbid(unsafe_code)]`.
+- Minimum dependency requirements raised to versions already in use across the
+  workspace (no new major/minor, Cargo.lock unchanged): `affinidi-crypto` 0.3
+  -> 0.3.2, `affinidi-data-integrity` 0.8.7 -> 0.8.9,
+  `affinidi-did-authentication` 0.3.16 -> 0.3.17, `affinidi-did-common` 0.4.7
+  -> 0.4.8, `affinidi-did-resolver-cache-sdk` 0.8.53 -> 0.8.55,
+  `affinidi-did-webs` 0.13.4 -> 0.13.6, `affinidi-messaging-didcomm` 0.15.14
+  -> 0.15.15, `affinidi-oid4vc-core` 0.1.11 -> 0.1.12,
+  `affinidi-secrets-resolver` 0.5.18 -> 0.5.19, `affinidi-tdk-common` 0.7 ->
+  0.7.2, `did-ebsi` 0.1 -> 0.1.8, `did-scid` 0.4 -> 0.4.9.
+
 ## [0.48.0] - 2026-11-15
 
 affinidi-status-list 0.2
