@@ -2,8 +2,9 @@ name: release-guards
 # Cheap, build-free PR guards that protect the release pipeline:
 #
 #   1. toolchain-sync  — every `toolchain:` pin in .github/workflows/* and the
-#      Cargo.toml MSRV must match rust-toolchain.toml's channel. Kills the
-#      multi-file edit trap where a toolchain bump misses a workflow.
+#      Cargo.toml MSRV must match rust-toolchain.toml's channel, and the MSRV
+#      badges / "Rust X+" lines in the Markdown must match the MSRV. Kills the
+#      multi-file edit trap where a toolchain bump misses a workflow or README.
 #
 #   2. version-bump    — any publishable crate whose source changed in this PR
 #      must also bump its Cargo.toml version. Stops the 2026-06-13 trap where an
@@ -18,8 +19,16 @@ name: release-guards
 #      via `did-example` (#629) and `affinidi-messaging-core` (#630, long
 #      misdiagnosed as an unfixable vta-sdk failure).
 #
+#   4. changelog       — a bumped publishable crate's CHANGELOG.md must carry a
+#      `## [x.y.z] - YYYY-MM-DD` heading for the new version.
+#
+#   5. markdown links  — every relative link, and every link into this repo's
+#      `tree/main` / `blob/main`, in tracked Markdown must resolve in the
+#      checkout (#1063). Offline: no network, no build.
+#
 # Deliberately standalone and outside the shared affinidi/pipeline-rust workflow
-# (those are org-owned). Pure bash + git + jq + `cargo metadata`; no Rust build.
+# (those are org-owned). Pure bash + git + jq + python3 + `cargo metadata`; no
+# Rust build.
 # It carries NO hardcoded `toolchain:` pin of its own — the toolchain is taken
 # from rust-toolchain.toml via rustup auto-install, so this workflow adds nothing
 # new for the toolchain-sync check to police.
@@ -29,6 +38,17 @@ on:
     types:
       - opened
       - synchronize
+      # A reopened PR, or a draft marked ready, gets a fresh run too.
+      - reopened
+      - ready_for_review
+
+# A new push to a PR supersedes the run already in flight for it: cancel that
+# one instead of paying for both. Only pull_request runs are cancelled —
+# scheduled and dispatched runs (and release.yaml, which has no such block)
+# always run to completion.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Read-only: the jobs read the checkout and write nothing back. Fork pull
 # requests get the read-only token and no secrets (`pull_request`, never
@@ -60,3 +80,6 @@ jobs:
 
       - name: Workspace duplicate guard (patch.crates-io coverage)
         run: bash scripts/check-workspace-duplicates.sh
+
+      - name: Markdown link check (offline)
+        run: python3 scripts/check-md-links.py

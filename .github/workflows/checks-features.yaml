@@ -19,6 +19,9 @@ on:
     types:
       - opened
       - synchronize
+      # A reopened PR, or a draft marked ready, gets a fresh run too.
+      - reopened
+      - ready_for_review
     paths:
       # The facade re-exports crates from every area, so a change to any of
       # them (or to the lockfile) can break a facade feature combination.
@@ -26,6 +29,14 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/checks-features.yaml"
+
+# A new push to a PR supersedes the run already in flight for it: cancel that
+# one instead of paying for both. Only pull_request runs are cancelled —
+# scheduled and dispatched runs (and release.yaml, which has no such block)
+# always run to completion.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Read-only: the jobs read the checkout and write nothing back. Fork pull
 # requests get the read-only token and no secrets (`pull_request`, never
@@ -73,10 +84,14 @@ jobs:
         with:
           toolchain: "1.95.0"
 
+      # One cache for the whole matrix: the legs build largely the same
+      # dependency graph, so seven per-leg caches were seven cold copies of it.
+      # Only the all-features leg (the superset) saves; the others restore.
       - name: Cache cargo registry + build
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: facade-${{ matrix.combo.short }}
+          shared-key: facade-features
+          save-if: ${{ matrix.combo.short == 'all-features' }}
 
       - name: cargo check -p affinidi-tdk ${{ matrix.combo.flags }}
         run: cargo check -p affinidi-tdk ${{ matrix.combo.flags }}
