@@ -13,6 +13,7 @@ pub mod config;
 pub mod errors;
 pub mod handlers;
 pub mod limits;
+pub mod name_lookup;
 pub mod server;
 pub mod statistics;
 
@@ -55,6 +56,10 @@ pub struct SharedData {
     /// something per-IP rate limiting cannot do, because the cap has to hold
     /// however many source addresses the load arrives from.
     pub agent_name_permits: Arc<Semaphore>,
+    /// Negative cache and single-flight for agent name lookups: a failing
+    /// name is not re-fetched for `agent_name_negative_cache_ttl`, and
+    /// identical concurrent lookups share one fetch.
+    pub agent_name_lookups: name_lookup::AgentNameLookups,
     /// The per-client limiter the HTTP layer applies. WebSocket request
     /// messages are charged to the same buckets.
     pub rate_limiter: RateLimiterState,

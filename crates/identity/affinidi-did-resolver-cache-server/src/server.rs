@@ -3,6 +3,7 @@ use crate::{
     config::init,
     handlers::{application_routes, health_checker_handler},
     limits::WsLimits,
+    name_lookup::AgentNameLookups,
     statistics::{Statistics, statistics},
 };
 use affinidi_did_resolver_cache_sdk::{
@@ -180,6 +181,10 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
         webvh_log_cache,
         agent_name_resolver,
         agent_name_permits: Arc::new(Semaphore::new(config.agent_name_concurrency)),
+        agent_name_lookups: AgentNameLookups::new(
+            config.agent_name_negative_cache_capacity,
+            config.agent_name_negative_cache_ttl,
+        ),
         rate_limiter: rate_limiter.clone(),
         client_ip_extractor: client_ip_extractor.clone(),
         ws_limits: Arc::new(WsLimits::from_config(&config)),

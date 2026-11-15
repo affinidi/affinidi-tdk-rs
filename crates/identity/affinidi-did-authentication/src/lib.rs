@@ -29,7 +29,7 @@ use errors::{DIDAuthError, HttpStatusError, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 use tracing::{Instrument, Level, debug, error, info, span, trace, warn};
 use uuid::Uuid;
 
@@ -269,21 +269,25 @@ impl DIDAuthentication {
     /// * `did_resolver` - The DID Resolver Cache Client
     /// * `secrets_resolver` - The Secrets Resolver
     /// * `client` - The HTTP Client to use for requests
-    /// * `retry_limit` - The number of times to retry authentication (-1 = unlimited)
+    /// * `retry_limit` - The number of times to retry authentication (-1 = no
+    ///   attempt limit, still bounded by [`DEFAULT_MAX_RETRY_ELAPSED`])
     ///
     /// Only errors for which [`DIDAuthError::is_retryable`] holds are retried;
     /// any other is returned at once, from the attempt that hit it.
     ///
-    /// # Unlimited retries (`retry_limit = -1`)
+    /// The whole retry loop is bounded by [`DEFAULT_MAX_RETRY_ELAPSED`] in every
+    /// mode; use [`authenticate_with_max_elapsed`](Self::authenticate_with_max_elapsed)
+    /// to choose another bound.
     ///
-    /// `-1` is an explicit opt-in to retry for as long as the service keeps
-    /// failing retryably. Waits on rate limiters (`429`) stay bounded by
-    /// [`MAX_RATE_LIMIT_WAIT`] in every mode, but a service that keeps answering
-    /// `408`/`5xx` (or keeps timing out) holds the call open indefinitely,
-    /// retrying every 10 s once the backoff has grown. A caller choosing `-1`
-    /// must bound the call itself (for example with `tokio::time::timeout`, as
-    /// the TDK authentication task does); the first retry under `-1` logs a
-    /// warning saying so.
+    /// # No attempt limit (`retry_limit = -1`)
+    ///
+    /// `-1` retries for as long as the service keeps failing retryably **and**
+    /// the maximum elapsed time has not run out: a service that keeps answering
+    /// `408`/`5xx` (or keeps timing out) is retried every 10 s once the backoff
+    /// has grown, until the next wait would take the call past the bound, and
+    /// the call then returns [`DIDAuthError::RetriesExhausted`] wrapping the last
+    /// error. Waits on rate limiters (`429`) stay bounded by
+    /// [`MAX_RATE_LIMIT_WAIT`] in every mode.
     ///
     /// # Returns
     /// Ok if successful, Err if failed
@@ -296,6 +300,42 @@ impl DIDAuthentication {
         secrets_resolver: &S,
         client: &Client,
         retry_limit: i32,
+    ) -> Result<()>
+    where
+        S: SecretsResolver,
+    {
+        self.authenticate_with_max_elapsed(
+            profile_did,
+            endpoint_did,
+            did_resolver,
+            secrets_resolver,
+            client,
+            retry_limit,
+            DEFAULT_MAX_RETRY_ELAPSED,
+        )
+        .await
+    }
+
+    /// [`authenticate`](Self::authenticate), with the retry loop bounded by
+    /// `max_elapsed` instead of [`DEFAULT_MAX_RETRY_ELAPSED`].
+    ///
+    /// The bound applies in every mode, `retry_limit = -1` included: a retry
+    /// whose backoff would end past `max_elapsed` (measured from the call's
+    /// start) is not made, and the call returns
+    /// [`DIDAuthError::RetriesExhausted`] wrapping the last attempt's error.
+    /// A single attempt in progress is bounded by `client`'s own timeouts, not
+    /// cut short. A finite `retry_limit` that is reached first ends the loop as
+    /// before.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn authenticate_with_max_elapsed<S>(
+        &mut self,
+        profile_did: &str,
+        endpoint_did: &str,
+        did_resolver: &DIDCacheClient,
+        secrets_resolver: &S,
+        client: &Client,
+        retry_limit: i32,
+        max_elapsed: Duration,
     ) -> Result<()>
     where
         S: SecretsResolver,
@@ -317,6 +357,7 @@ impl DIDAuthentication {
         }
 
         // Authenticate using default logic
+        let started = Instant::now();
         let mut retry_count: u32 = 0;
         let mut timer = 1;
         let mut rate_limit_waited = Duration::ZERO;
@@ -362,9 +403,8 @@ impl DIDAuthentication {
                     if retry_limit == -1 && retry_count == 1 {
                         warn!(
                             "DID ({}): retry_limit = -1: retrying authentication without an attempt \
-                             limit; only rate-limit waits are bounded, so the caller must bound \
-                             this call with its own timeout",
-                            profile_did
+                             limit, until {:?} has elapsed",
+                            profile_did, max_elapsed
                         );
                     }
 
@@ -375,6 +415,16 @@ impl DIDAuthentication {
                         );
                         return Err(exhausted(err));
                     };
+
+                    // The overall bound: never start a wait that would end past it.
+                    if started.elapsed().saturating_add(delay) > max_elapsed {
+                        warn!(
+                            "DID ({}): Attempt #{}. Giving up: retrying would exceed the maximum \
+                             elapsed time of {:?}: {}",
+                            profile_did, retry_count, max_elapsed, err
+                        );
+                        return Err(exhausted(err));
+                    }
 
                     error!(
                         "DID ({}): Attempt #{}. Error authenticating: {:?} :: Sleeping for ({:?})",
@@ -890,6 +940,16 @@ where
     )
     .map_err(|e| DIDAuthError::DIDComm(format!("pack failed: {e}")))
 }
+
+/// The longest [`DIDAuthentication::authenticate`] keeps retrying, in every
+/// mode (`retry_limit = -1` included), before it returns
+/// [`DIDAuthError::RetriesExhausted`] wrapping the last error.
+///
+/// Fifteen minutes rides out a service restart or a short outage while still
+/// ending, so a caller that forgets its own timeout cannot hang on a failing
+/// (or hostile) service forever. Choose another bound with
+/// [`DIDAuthentication::authenticate_with_max_elapsed`].
+pub const DEFAULT_MAX_RETRY_ELAPSED: Duration = Duration::from_secs(15 * 60);
 
 /// The most [`DIDAuthentication::authenticate`] spends waiting on rate limiters
 /// across all its retries — and so also the longest single `Retry-After` it
@@ -1463,6 +1523,60 @@ mod tests {
                 err,
                 DIDAuthError::RetriesExhausted { attempts: 1, .. }
             ));
+        }
+
+        /// `retry_limit = -1` against a service that always answers 503 ends
+        /// once the next wait would pass the maximum elapsed time, with the
+        /// 503 inside `RetriesExhausted`.
+        #[tokio::test]
+        async fn no_attempt_limit_is_bounded_by_max_elapsed() {
+            let (url, served) = serve(
+                "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            )
+            .await;
+            let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+                .await
+                .unwrap();
+            let secrets = SimpleSecretsResolver::new(&[]).await;
+            let started = Instant::now();
+            // Waits are 1 s, then 2 s: the second would end at ~3 s > 2.5 s.
+            let err = tokio::time::timeout(
+                Duration::from_secs(10),
+                DIDAuthentication::new().authenticate_with_max_elapsed(
+                    "did:example:alice",
+                    &url,
+                    &resolver,
+                    &secrets,
+                    &reqwest::Client::new(),
+                    -1,
+                    Duration::from_millis(2500),
+                ),
+            )
+            .await
+            .expect("bounded by max elapsed")
+            .unwrap_err();
+            assert!(started.elapsed() < Duration::from_millis(2500));
+            assert_eq!(served.load(Ordering::SeqCst), 2);
+            let DIDAuthError::RetriesExhausted { attempts, last } = &err else {
+                panic!("expected RetriesExhausted, got {err:?}");
+            };
+            assert_eq!(*attempts, 2);
+            assert_eq!(last.http_status().unwrap().status, 503);
+        }
+
+        /// A finite limit reached before the bound ends the loop as before.
+        #[tokio::test]
+        async fn a_finite_limit_is_unchanged_by_max_elapsed() {
+            let (url, served) = serve(
+                "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            )
+            .await;
+            let err = authenticate(&url, 2).await;
+            assert_eq!(served.load(Ordering::SeqCst), 2);
+            assert!(
+                matches!(err, DIDAuthError::RetriesExhausted { attempts: 2, .. }),
+                "{err:?}"
+            );
         }
 
         /// A 429 with no source header (a proxy) is still typed, unattributed.

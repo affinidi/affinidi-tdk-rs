@@ -1,5 +1,40 @@
 # Affinidi DID Resolver Cache Server
 
+## [0.12.0] - 2026-11-15
+
+Agent name lookups: negative cache, single-flight, `Retry-After` (AgenticSec #547)
+
+- **Added — negative cache for agent name lookups.** A failed lookup is
+  remembered per canonical name, so repeating a failing name no longer
+  fetches it again. Definitive failures (the host answered without a
+  redirect, the target is not a DID, the address guard refused the name, too
+  many hops, no resolver) are kept for `agent_name_negative_cache_ttl`
+  (default 60 s); transient ones (transport/DNS errors, timeouts, upstream
+  `5xx`/`408`/`429`) for at most 5 s, never longer than that TTL, so a blip
+  does not become an outage for the name. `0` disables it. Bounded by
+  `agent_name_negative_cache_capacity` (default 10000 entries). A cached
+  failure answers with the original status and body (a `5xx` keeps its
+  original `reference`). Successes are not cached by this layer.
+- **Added — single-flight.** Concurrent lookups of the same name share one
+  upstream fetch and one `agent_name_concurrency` permit, on both the HTTP
+  endpoint and the WebSocket path.
+- **Changed — a lookup shed at the `agent_name_concurrency` ceiling** now
+  carries `Retry-After: 1` with its `503`. The ceiling itself (default 16) is
+  unchanged and still sheds rather than queues.
+- New config keys `agent_name_negative_cache_ttl` and
+  `agent_name_negative_cache_capacity` in `conf/cache-conf.toml`; like every
+  key, a misspelling or an unparseable value fails startup.
+- **Breaking (API):** `SharedData` gains the public field
+  `agent_name_lookups` (new type `name_lookup::AgentNameLookups`), and
+  `Config` gains `agent_name_negative_cache_ttl` and
+  `agent_name_negative_cache_capacity`. Code that builds either with a struct
+  literal must set them (`Config { ..Default::default() }` is unaffected).
+- **Behaviour note (R3.6):** a name that failed answers from the cache for up
+  to the TTL, so a name fixed upstream can take up to 60 s (by default) to
+  resolve here; set `agent_name_negative_cache_ttl = "0"` to keep the old
+  behaviour. Per-client rate limiting (`rate_limit_per_ip`) already applied to
+  this endpoint and is unchanged.
+
 ## [0.11.2] - 2026-11-15
 
 Server-side error detail stays in the logs (AgenticSec #530)

@@ -3,7 +3,7 @@ use affinidi_did_resolver_cache_sdk::{
     networking::{WSRequest, WSResponse, WSResponseError, WSResponseType},
 };
 use affinidi_rate_limit::TooManyRequests;
-use agent_names::{AgentName, AgentNameResolver};
+use agent_names::AgentName;
 use axum::{
     Extension,
     extract::{
@@ -30,6 +30,7 @@ use crate::{
     SharedData, WebvhLogCache,
     handlers::{ClientError, did_within_size_limit, fetch_webvh_log, resolve_with_timeout},
     limits::{ConnectionRefused, ConnectionSlot},
+    name_lookup::{LookupOutcome, lookup},
 };
 
 /// Build a WSResponse, fetching the raw DID log for WebVH DIDs.
@@ -97,33 +98,17 @@ async fn resolve_agent_name(state: &SharedData, name: String) -> WSResponseType 
         }
     };
 
-    // Same outbound-fetch ceiling as the HTTP endpoint: shed rather than queue.
-    let Ok(_permit) = state.agent_name_permits.try_acquire() else {
-        state.stats().await.increment_agent_name_error();
-        warn!("ws: shedding agent name lookup '{parsed}': outbound fetch ceiling reached");
-        return fail("Too many agent name lookups in flight; retry shortly".to_string());
-    };
-
-    let did = match tokio::time::timeout(state.resolve_timeout, resolver.resolve(&parsed)).await {
-        Ok(Some(Ok(did))) => did,
-        Ok(Some(Err(e))) => {
+    // Same lookup as the HTTP endpoint: negative cache, single-flight, and the
+    // outbound-fetch ceiling (shed rather than queue).
+    let did = match lookup(state, resolver, &parsed).await {
+        LookupOutcome::Resolved(did) => did,
+        LookupOutcome::Failed(failure) => {
             state.stats().await.increment_agent_name_error();
-            return fail(
-                ClientError::new(
-                    StatusCode::BAD_GATEWAY,
-                    &e,
-                    &format!("ws: failed to resolve agent name '{parsed}'"),
-                )
-                .to_text(),
-            );
+            return fail(failure.error.to_text());
         }
-        Ok(None) => {
+        LookupOutcome::Shed => {
             state.stats().await.increment_agent_name_error();
-            return fail(format!("No resolver could resolve '{parsed}'"));
-        }
-        Err(_elapsed) => {
-            state.stats().await.increment_agent_name_error();
-            return fail("Timed out resolving agent name".to_string());
+            return fail("Too many agent name lookups in flight; retry shortly".to_string());
         }
     };
 

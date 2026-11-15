@@ -26,23 +26,35 @@
 //! - At most `agent_name_concurrency` lookups fetch upstream at once, so the
 //!   endpoint cannot be used to fan out arbitrary traffic at third parties (or
 //!   to scan them) faster than that. Requests over the ceiling are shed with
-//!   503 rather than queued: a saturated server must not accumulate an
-//!   unbounded backlog of pending outbound fetches.
+//!   503 and `Retry-After` rather than queued: a saturated server must not
+//!   accumulate an unbounded backlog of pending outbound fetches.
+//! - Identical concurrent lookups share one fetch, and failures are
+//!   negative-cached (`agent_name_negative_cache_ttl`), so repeating a name
+//!   does not repeat the fetch. See [`crate::name_lookup`].
+//! - Every route, this one included, sits behind the per-client rate limiter
+//!   (`rate_limit_per_ip` / `rate_limit_burst`).
 //!
 //! Neither is complete — see `agent_names::HttpRedirectResolver::allow_private_addresses`
 //! on the residual DNS-rebinding exposure. Enable this only if you accept that
 //! your cache server will fetch caller-chosen URLs.
 
-use agent_names::{AgentName, AgentNameResolver};
+use agent_names::AgentName;
 use axum::{
     Json,
     extract::{Path, State},
+    response::{IntoResponse, Response},
 };
-use http::StatusCode;
-use serde_json::{Value, json};
-use tracing::{debug, warn};
+use http::{StatusCode, header};
+use serde_json::json;
+use tracing::debug;
 
-use crate::{SharedData, handlers::ClientError};
+use crate::{
+    SharedData,
+    name_lookup::{LookupOutcome, lookup},
+};
+
+/// `Retry-After` (seconds) on a lookup shed at the outbound-fetch ceiling.
+const SHED_RETRY_AFTER_SECS: &str = "1";
 
 /// `GET /did/v1/resolve-name/{*name}`
 ///
@@ -55,7 +67,7 @@ use crate::{SharedData, handlers::ClientError};
 pub async fn resolve_name_handler(
     State(state): State<SharedData>,
     Path(name): Path<String>,
-) -> (StatusCode, Json<Value>) {
+) -> Response {
     if name.len() > state.max_did_size {
         state.stats.lock().await.increment_agent_name_error();
         return (
@@ -66,7 +78,8 @@ pub async fn resolve_name_handler(
                     state.max_did_size
                 )
             })),
-        );
+        )
+            .into_response();
     }
 
     let parsed = match AgentName::parse(&name) {
@@ -77,7 +90,8 @@ pub async fn resolve_name_handler(
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": e.to_string() })),
-            );
+            )
+                .into_response();
         }
     };
 
@@ -87,65 +101,33 @@ pub async fn resolve_name_handler(
         return (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "Agent name resolution is not enabled on this server" })),
-        );
+        )
+            .into_response();
     };
 
-    // Take an outbound-fetch permit, or shed the request. `try_acquire` rather
-    // than `acquire` is the point: queueing here would convert a fetch ceiling
-    // into an unbounded backlog, which is the thing being defended against.
-    let Ok(_permit) = state.agent_name_permits.try_acquire() else {
-        state.stats.lock().await.increment_agent_name_error();
-        warn!("shedding agent name lookup '{parsed}': outbound fetch ceiling reached");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "error": "Too many agent name lookups in flight; retry shortly"
-            })),
-        );
-    };
-
-    let outcome = tokio::time::timeout(state.resolve_timeout, resolver.resolve(&parsed)).await;
-
-    match outcome {
-        Ok(Some(Ok(did))) => {
+    match lookup(&state, resolver, &parsed).await {
+        LookupOutcome::Resolved(did) => {
             state.stats.lock().await.increment_agent_name_success();
-            debug!("resolved agent name '{parsed}' -> '{did}'");
             (
                 StatusCode::OK,
                 Json(json!({ "name": parsed.as_str(), "did": did })),
             )
+                .into_response()
         }
-        Ok(Some(Err(e))) => {
+        LookupOutcome::Failed(failure) => {
             state.stats.lock().await.increment_agent_name_error();
-            // The detail (which may name the address the name led to) is
-            // logged under a reference, not returned.
-            let status = StatusCode::BAD_GATEWAY;
-            let error = ClientError::new(
-                status,
-                &e,
-                &format!("failed to resolve agent name '{parsed}'"),
-            );
-            (status, Json(error.to_json()))
+            (failure.status, Json(failure.error.to_json())).into_response()
         }
-        Ok(None) => {
+        LookupOutcome::Shed => {
             state.stats.lock().await.increment_agent_name_error();
             (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": format!("No resolver could resolve '{parsed}'") })),
-            )
-        }
-        Err(_elapsed) => {
-            state.stats.lock().await.increment_agent_name_error();
-            warn!("timed out resolving agent name '{parsed}'");
-            (
-                StatusCode::GATEWAY_TIMEOUT,
+                StatusCode::SERVICE_UNAVAILABLE,
+                [(header::RETRY_AFTER, SHED_RETRY_AFTER_SECS)],
                 Json(json!({
-                    "error": format!(
-                        "Timed out after {} seconds resolving agent name",
-                        state.resolve_timeout.as_secs()
-                    )
+                    "error": "Too many agent name lookups in flight; retry shortly"
                 })),
             )
+                .into_response()
         }
     }
 }

@@ -159,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-authentication"
-version = "0.3.20"
+version = "0.3.21"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -284,7 +284,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-resolver-cache-server"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
