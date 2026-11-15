@@ -1,5 +1,31 @@
 # Changelog — `affinidi-tdk-common`
 
+## 0.7.2 — `AuthenticationCache` authenticates concurrently
+
+Requires `affinidi-did-authentication` 0.3.17.
+
+### Changed — BEHAVIOUR (R3.6)
+
+- **Authentications run concurrently** (#1049). The background task used to
+  run one handshake at a time, inline, so one slow service stalled every
+  other profile's `authenticate`, every `authenticated()` probe (which then
+  answered `None` after 2 s) and every `invalidate`. Each authentication now
+  runs in its own task; the cheap commands are answered by the loop at once.
+- **Concurrent requests for the same pair share one handshake** (per pair,
+  and separately for forced refreshes); every waiter gets its result.
+- **A handshake that outlives its timeout is cancelled.** It used to be
+  detached and kept retrying in the background, its tokens thrown away. The
+  handshake is bounded by the timeout of the request that started it.
+- **The caller's timeout covers the whole request**, enqueueing included:
+  callers wait for room on the command channel instead of failing at once with
+  "Authentication Task channel full".
+- **Distinct errors:** a timeout is `DIDAuthError::Timeout` (was
+  `AuthenticationAbort("Timeout reached")`), and a task that is not running is
+  `DIDAuthError::TaskUnavailable` (was `AuthenticationAbort("… channel
+  closed …")`). Code that matched those `AuthenticationAbort` strings must
+  match the new variants. `terminate()` cancels authentications in progress;
+  their callers get `TaskUnavailable`.
+
 ## 0.7.1 — environment file written safely; HTTP timeouts; DID-document endpoints checked before credentials are sent
 
 ### Environment file

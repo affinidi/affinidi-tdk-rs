@@ -1,5 +1,49 @@
 # Affinidi DID Resolver Cache Server
 
+## Unreleased (0.11.0) — concurrent WebSocket requests; strict config values; HTTP statuses
+
+Breaking: unused public modules removed, response codes and config parsing
+changed (R3.6).
+
+- **Changed — WebSocket requests on one connection are resolved concurrently**
+  (#1048). Each runs in its own task and its response is sent as soon as it is
+  ready, through one writer per connection, so a slow or blackholed DID host no
+  longer holds up every request behind it. Responses can now arrive out of
+  order (the SDK has always matched them by hash). New config key
+  `ws_max_inflight_per_connection` (default 32): past it, the server stops
+  reading the connection until a request finishes. `WsLimits` gains the
+  `max_inflight_per_connection` field and `with_max_inflight_per_connection`;
+  `Config` gains `ws_max_inflight_per_connection`.
+- **Behaviour (stricter) — a config value that does not parse fails startup**
+  with an error naming the key and the value (#1051). Before, every value fell
+  back to a default silently: `enable_http_endpoint = "False"` or `"no"`
+  *enabled* the endpoint, and a typo in a timeout, cache size or rate limit
+  went unnoticed. Booleans accept `true`/`false`/`yes`/`no`/`on`/`off`/`1`/`0`
+  in any case; `log_level` must be one of trace/debug/info/warn/error. `0`
+  still keeps the default for the ceilings (`ws_max_connections`,
+  `ws_max_connections_per_ip`, `ws_idle_timeout`, `ws_send_timeout`,
+  `agent_name_concurrency`) and still disables rate limiting. A deployment
+  that relied on a typo being ignored now fails to start.
+- **Fixed:** a read or UTF-8 error in the config file fails the load (naming
+  the line) instead of silently truncating the file; two `${VAR:default}`
+  references on one line expand separately (the default no longer runs to the
+  last `}` on the line).
+- **Changed — `GET /did/v1/resolve/{did}` answers with a status that says whose
+  fault a failure is** (#1053): `400` for a malformed DID or unsupported
+  method, `404` when the DID's host answered 404/410, `502` for any other
+  upstream failure, `504` for a resolution timeout, `500` only for this
+  server's own faults. Every failure was `500`, logged at `error`; client
+  errors now log at `debug`, server-side ones at `warn`.
+- **Removed (breaking):** the unused `session` module (`Session`,
+  `SessionError`), and from `errors`: `AppError`, `ErrorResponse`,
+  `SuccessResponse` and the `CacheError::{ErrorHandlingError, ParseError,
+  DIDError}` variants; `common::GenericDataStruct`. None was used by any
+  handler. `SharedData`'s extractor rejection is now `Infallible`.
+- Docs: `conf/cache-conf.toml` says what each endpoint key enables (the WS
+  route is `/did/v1/ws`), the `statistics_interval` default matches the
+  shipped value, and the comments say an unparseable value fails startup.
+  README documents the HTTP statuses and the WebSocket concurrency.
+
 ## Unreleased (0.10.0) — config keys read where written; WebSocket limits
 
 Breaking (R3.6): the config file is checked strictly, and `SharedData` and

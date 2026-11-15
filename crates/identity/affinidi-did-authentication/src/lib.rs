@@ -271,6 +271,9 @@ impl DIDAuthentication {
     /// * `client` - The HTTP Client to use for requests
     /// * `retry_limit` - The number of times to retry authentication (-1 = unlimited)
     ///
+    /// Only errors for which [`DIDAuthError::is_retryable`] holds are retried;
+    /// any other is returned at once, from the attempt that hit it.
+    ///
     /// # Returns
     /// Ok if successful, Err if failed
     /// AuthorizationTokens are contained in self
@@ -320,8 +323,17 @@ impl DIDAuthentication {
                 Ok(_) => {
                     return Ok(());
                 }
-                Err(DIDAuthError::ACLDenied(err)) => {
-                    return Err(DIDAuthError::ACLDenied(err));
+                // Trying again will fail the same way: report the cause now
+                // rather than after the backoff (or, with an unlimited retry
+                // limit, never).
+                Err(err) if !err.is_retryable() => {
+                    debug!(
+                        "DID ({}): Attempt #{}. Not retryable: {}",
+                        profile_did,
+                        retry_count + 1,
+                        err
+                    );
+                    return Err(err);
                 }
                 Err(err) => {
                     retry_count += 1;
@@ -800,7 +812,7 @@ where
     let sender_doc = did_resolver
         .resolve(sender_did)
         .await
-        .map_err(|e| DIDAuthError::DIDResolver(format!("{e}")))?;
+        .map_err(DIDAuthError::from)?;
     let sender_ka_kids = sender_doc.doc.find_key_agreement(None);
 
     let mut sender_keys: Vec<(&str, PrivateKeyAgreement, Curve)> = Vec::new();
@@ -827,7 +839,7 @@ where
     let recipient_doc = did_resolver
         .resolve(recipient_did)
         .await
-        .map_err(|e| DIDAuthError::DIDResolver(format!("{e}")))?;
+        .map_err(DIDAuthError::from)?;
     let recipient_ka_kids = recipient_doc.doc.find_key_agreement(None);
 
     let pairing = negotiate_authcrypt(
@@ -1455,6 +1467,76 @@ mod tests {
             let body = request.split("\r\n\r\n").nth(1).unwrap();
             let body: serde_json::Value = serde_json::from_str(body).unwrap();
             assert_eq!(body, serde_json::json!({ "did": "did:example:alice" }));
+        }
+
+        /// A 4xx other than 408/429 will not change on retry: it is
+        /// returned at once, from the first attempt, even with no retry limit.
+        #[tokio::test]
+        async fn a_client_error_is_returned_without_retrying() {
+            let (url, served) = serve(
+                "HTTP/1.1 400 Bad Request\r\ncontent-length: 3\r\nconnection: close\r\n\r\nbad",
+            )
+            .await;
+            let started = Instant::now();
+            let err = authenticate(&url, -1).await;
+            assert!(started.elapsed() < Duration::from_secs(1));
+            assert_eq!(served.load(Ordering::SeqCst), 1);
+            assert_eq!(err.http_status().unwrap().status, 400);
+            assert!(matches!(err, DIDAuthError::HttpStatus(_)), "{err:?}");
+        }
+
+        /// A target DID without an `#auth` service is a hard abort, returned
+        /// at once rather than retried (forever, with no retry limit).
+        #[tokio::test]
+        async fn a_did_without_an_auth_service_is_not_retried() {
+            let started = Instant::now();
+            let err = tokio::time::timeout(
+                Duration::from_secs(5),
+                authenticate(
+                    "did:key:z6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv",
+                    -1,
+                ),
+            )
+            .await
+            .expect("returns without retrying");
+            assert!(
+                matches!(err, DIDAuthError::AuthenticationAbort(_)),
+                "{err:?}"
+            );
+            assert!(started.elapsed() < Duration::from_secs(1));
+        }
+
+        /// A malformed target DID is not retried either.
+        #[tokio::test]
+        async fn an_unresolvable_did_is_not_retried() {
+            let err = tokio::time::timeout(
+                Duration::from_secs(5),
+                authenticate("did:nosuchmethod:abc", -1),
+            )
+            .await
+            .expect("returns without retrying");
+            assert!(matches!(err, DIDAuthError::UnresolvableDID(_)), "{err:?}");
+        }
+
+        #[test]
+        fn retryable_errors_are_classified() {
+            use affinidi_did_resolver_cache_sdk::errors::DIDCacheError;
+            let status = |code| DIDAuthError::from(HttpStatusError::new("x", code));
+            for code in [408, 429, 500, 502, 503] {
+                assert!(status(code).is_retryable(), "{code}");
+            }
+            for code in [400, 403, 404, 409] {
+                assert!(!status(code).is_retryable(), "{code}");
+            }
+            assert!(DIDAuthError::Authentication("connect".into()).is_retryable());
+            assert!(!DIDAuthError::AuthenticationAbort("x".into()).is_retryable());
+            assert!(!DIDAuthError::DIDComm("no key".into()).is_retryable());
+            assert!(!DIDAuthError::Secrets("x".into()).is_retryable());
+            assert!(DIDAuthError::from(DIDCacheError::NetworkTimeout).is_retryable());
+            assert!(
+                !DIDAuthError::from(DIDCacheError::UnsupportedMethod("x".into())).is_retryable()
+            );
+            assert!(!DIDAuthError::from(DIDCacheError::DIDError("x".into())).is_retryable());
         }
 
         /// A 401 is still an ACL denial, returned without retrying.

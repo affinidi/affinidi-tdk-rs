@@ -1,4 +1,4 @@
-use crate::errors::CacheError;
+use crate::{errors::CacheError, limits::DEFAULT_MAX_INFLIGHT_PER_CONNECTION};
 use affinidi_rate_limit::{ClientIpExtractor, IpNet};
 use regex::{Captures, Regex};
 use serde::{Deserialize, Serialize};
@@ -17,9 +17,9 @@ use tracing_subscriber::{Registry, reload::Handle};
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CacheConfig {
-    #[serde(default)]
+    #[serde(default = "default_capacity_count")]
     pub capacity_count: String,
-    #[serde(default)]
+    #[serde(default = "default_expire")]
     pub expire: String,
     /// TTL in seconds for cached raw `did:webvh` logs. `0` disables the cache,
     /// which re-fetches `did.jsonl` on every resolution.
@@ -37,11 +37,19 @@ fn default_webvh_log_expire() -> String {
     "0".into()
 }
 
+fn default_capacity_count() -> String {
+    "1000".into()
+}
+
+fn default_expire() -> String {
+    "300".into()
+}
+
 impl Default for CacheConfig {
     fn default() -> Self {
         CacheConfig {
-            capacity_count: "1000".into(),
-            expire: "300".into(),
+            capacity_count: default_capacity_count(),
+            expire: default_expire(),
             webvh_log_expire: default_webvh_log_expire(),
         }
     }
@@ -89,6 +97,8 @@ struct ConfigRaw {
     /// `0` (the default) derives the limit from `max_did_size`.
     #[serde(default = "default_ws_max_message_size")]
     pub ws_max_message_size: String,
+    #[serde(default = "default_ws_max_inflight_per_connection")]
+    pub ws_max_inflight_per_connection: String,
     pub statistics_interval: String,
     #[serde(default = "default_resolve_timeout")]
     pub resolve_timeout: String,
@@ -190,6 +200,11 @@ fn default_ws_max_message_size() -> String {
     "0".into()
 }
 
+/// Requests one WebSocket connection may have in progress at once.
+fn default_ws_max_inflight_per_connection() -> String {
+    DEFAULT_MAX_INFLIGHT_PER_CONNECTION.to_string()
+}
+
 /// The WebSocket message size used when `ws_max_message_size` is `0`: room for
 /// a request carrying a name of `max_did_size` bytes twice (`did` and
 /// `agent_name`) plus the JSON envelope.
@@ -218,17 +233,6 @@ fn parse_trusted_proxies(value: &str) -> Result<Vec<IpNet>, CacheError> {
         .collect()
 }
 
-/// A positive count, or `default` when the value is `0` or unparseable: these
-/// settings are ceilings, and neither a typo nor `0` may remove one.
-fn positive_or<T: std::str::FromStr + PartialEq + Default>(value: &str, default: T) -> T {
-    value
-        .trim()
-        .parse()
-        .ok()
-        .filter(|n: &T| *n != T::default())
-        .unwrap_or(default)
-}
-
 pub struct Config {
     pub log_level: LevelFilter,
     pub listen_address: String,
@@ -252,6 +256,8 @@ pub struct Config {
     pub ws_send_timeout: Duration,
     /// Largest WebSocket message (and frame) accepted, in bytes.
     pub ws_max_message_size: usize,
+    /// Requests one WebSocket connection may have in progress at once.
+    pub ws_max_inflight_per_connection: usize,
     pub statistics_interval: Duration,
     /// Maximum time a single upstream DID resolution may take before the
     /// request path gives up and returns an error instead of blocking.
@@ -291,6 +297,10 @@ impl fmt::Debug for Config {
             .field(
                 "ws_max_message_size",
                 &format!("{} bytes", self.ws_max_message_size),
+            )
+            .field(
+                "ws_max_inflight_per_connection",
+                &self.ws_max_inflight_per_connection,
             )
             .field(
                 "statistics_interval",
@@ -333,14 +343,12 @@ impl Default for Config {
             ws_idle_timeout: Duration::from_secs(DEFAULT_WS_IDLE_TIMEOUT_SECS),
             ws_send_timeout: Duration::from_secs(DEFAULT_WS_SEND_TIMEOUT_SECS),
             ws_max_message_size: derived_ws_max_message_size(1024),
+            ws_max_inflight_per_connection: DEFAULT_MAX_INFLIGHT_PER_CONNECTION,
             statistics_interval: Duration::from_secs(60),
             resolve_timeout: Duration::from_secs(30),
             max_did_size: 1024,
-            cache_capacity_count: CacheConfig::default()
-                .capacity_count
-                .parse()
-                .unwrap_or(1000),
-            cache_expire: CacheConfig::default().expire.parse().unwrap_or(300),
+            cache_capacity_count: 1000,
+            cache_expire: 300,
             webvh_log_expire: 0,
         }
     }
@@ -364,19 +372,70 @@ impl Config {
     }
 }
 
+/// A config error naming the key and the value it could not use.
+fn invalid(key: &str, value: &str, expected: &str) -> CacheError {
+    CacheError::ConfigError("NA".into(), format!("{key}: ({value}) is not {expected}"))
+}
+
+/// Parse a number, or fail naming the key and value.
+fn number<T: std::str::FromStr>(key: &str, value: &str) -> Result<T, CacheError> {
+    value
+        .trim()
+        .parse()
+        .map_err(|_| invalid(key, value, "a number"))
+}
+
+/// A ceiling: a positive count, where `0` keeps `default` (neither a typo nor
+/// `0` may remove one). An unparseable value is an error.
+fn ceiling<T: std::str::FromStr + PartialEq + Default>(
+    key: &str,
+    value: &str,
+    default: T,
+) -> Result<T, CacheError> {
+    let n: T = number(key, value)?;
+    Ok(if n == T::default() { default } else { n })
+}
+
+/// Parse a boolean: `true`/`false`, `yes`/`no`, `on`/`off` or `1`/`0`, in any
+/// case. Anything else is an error rather than a default: before, `"False"`
+/// or `"no"` failed to parse and so *enabled* an endpoint.
+fn boolean(key: &str, value: &str) -> Result<bool, CacheError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" | "1" => Ok(true),
+        "false" | "no" | "off" | "0" => Ok(false),
+        _ => Err(invalid(key, value, "true or false")),
+    }
+}
+
+/// Parse `log_level`: trace, debug, info, warn or error, in any case.
+fn log_level(value: &str) -> Result<LevelFilter, CacheError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "trace" => Ok(LevelFilter::TRACE),
+        "debug" => Ok(LevelFilter::DEBUG),
+        "info" => Ok(LevelFilter::INFO),
+        "warn" => Ok(LevelFilter::WARN),
+        "error" => Ok(LevelFilter::ERROR),
+        _ => Err(invalid(
+            "log_level",
+            value,
+            "one of trace, debug, info, warn, error",
+        )),
+    }
+}
+
 impl TryFrom<ConfigRaw> for Config {
     type Error = CacheError;
 
+    /// Every value must parse: an unreadable value fails with an error naming
+    /// the key and the value, rather than silently taking a default.
     fn try_from(raw: ConfigRaw) -> Result<Self, Self::Error> {
-        let max_did_size = raw.max_did_size.parse().unwrap_or(1024);
+        let max_did_size = number("max_did_size", &raw.max_did_size)?;
         let trusted_proxies = parse_trusted_proxies(&raw.trusted_proxies)?;
         let client_ipv6_prefix: u8 = raw.client_ipv6_prefix.trim().parse().map_err(|_| {
-            CacheError::ConfigError(
-                "NA".into(),
-                format!(
-                    "client_ipv6_prefix: ({}) is not a prefix length (1-128)",
-                    raw.client_ipv6_prefix
-                ),
+            invalid(
+                "client_ipv6_prefix",
+                &raw.client_ipv6_prefix,
+                "a prefix length (1-128)",
             )
         })?;
         // Validate both now, so a bad value fails startup rather than the
@@ -386,66 +445,70 @@ impl TryFrom<ConfigRaw> for Config {
             Ok(0) => derived_ws_max_message_size(max_did_size),
             Ok(size) => size,
             Err(_) => {
-                return Err(CacheError::ConfigError(
-                    "NA".into(),
-                    format!(
-                        "ws_max_message_size: ({}) is not a byte count",
-                        raw.ws_max_message_size
-                    ),
+                return Err(invalid(
+                    "ws_max_message_size",
+                    &raw.ws_max_message_size,
+                    "a byte count",
                 ));
             }
         };
 
         Ok(Config {
-            log_level: match raw.log_level.as_str() {
-                "trace" => LevelFilter::TRACE,
-                "debug" => LevelFilter::DEBUG,
-                "info" => LevelFilter::INFO,
-                "warn" => LevelFilter::WARN,
-                "error" => LevelFilter::ERROR,
-                _ => LevelFilter::INFO,
-            },
+            log_level: log_level(&raw.log_level)?,
             listen_address: raw.listen_address,
-            enable_http_endpoint: raw.enable_http_endpoint.parse().unwrap_or(true),
-            enable_websocket_endpoint: raw.enable_websocket_endpoint.parse().unwrap_or(true),
-            // Defaults to false on a parse failure too: an unreadable value must
-            // not silently turn on a network-facing fetch.
-            enable_agent_names: raw.enable_agent_names.parse().unwrap_or(false),
-            // A zero or unparseable cap would mean "no limit", which is the
-            // opposite of what this setting is for; fall back to the default.
-            agent_name_concurrency: raw
-                .agent_name_concurrency
-                .parse()
-                .ok()
-                .filter(|n: &usize| *n > 0)
-                .unwrap_or(16),
-            // An unparseable value falls back to the default rather than to 0:
-            // 0 means "disabled", and a typo must not silently remove limiting.
-            // An explicit "0" still disables, which is the documented way to.
-            rate_limit_per_ip: raw.rate_limit_per_ip.parse().unwrap_or(100),
-            rate_limit_burst: raw.rate_limit_burst.parse().unwrap_or(50),
+            enable_http_endpoint: boolean("enable_http_endpoint", &raw.enable_http_endpoint)?,
+            enable_websocket_endpoint: boolean(
+                "enable_websocket_endpoint",
+                &raw.enable_websocket_endpoint,
+            )?,
+            enable_agent_names: boolean("enable_agent_names", &raw.enable_agent_names)?,
+            // A zero cap would mean "no limit", which is the opposite of what
+            // this setting is for; it keeps the default.
+            agent_name_concurrency: ceiling(
+                "agent_name_concurrency",
+                &raw.agent_name_concurrency,
+                16,
+            )?,
+            // "0" disables limiting, which is the documented way to.
+            rate_limit_per_ip: number("rate_limit_per_ip", &raw.rate_limit_per_ip)?,
+            rate_limit_burst: number("rate_limit_burst", &raw.rate_limit_burst)?,
             trusted_proxies,
             client_ipv6_prefix,
-            ws_max_connections: positive_or(&raw.ws_max_connections, DEFAULT_WS_MAX_CONNECTIONS),
-            ws_max_connections_per_ip: positive_or(
+            ws_max_connections: ceiling(
+                "ws_max_connections",
+                &raw.ws_max_connections,
+                DEFAULT_WS_MAX_CONNECTIONS,
+            )?,
+            ws_max_connections_per_ip: ceiling(
+                "ws_max_connections_per_ip",
                 &raw.ws_max_connections_per_ip,
                 DEFAULT_WS_MAX_CONNECTIONS_PER_IP,
-            ),
-            ws_idle_timeout: Duration::from_secs(positive_or(
+            )?,
+            ws_idle_timeout: Duration::from_secs(ceiling(
+                "ws_idle_timeout",
                 &raw.ws_idle_timeout,
                 DEFAULT_WS_IDLE_TIMEOUT_SECS,
-            )),
-            ws_send_timeout: Duration::from_secs(positive_or(
+            )?),
+            ws_send_timeout: Duration::from_secs(ceiling(
+                "ws_send_timeout",
                 &raw.ws_send_timeout,
                 DEFAULT_WS_SEND_TIMEOUT_SECS,
-            )),
+            )?),
             ws_max_message_size,
-            statistics_interval: Duration::from_secs(raw.statistics_interval.parse().unwrap_or(60)),
-            resolve_timeout: Duration::from_secs(raw.resolve_timeout.parse().unwrap_or(30)),
+            ws_max_inflight_per_connection: ceiling(
+                "ws_max_inflight_per_connection",
+                &raw.ws_max_inflight_per_connection,
+                DEFAULT_MAX_INFLIGHT_PER_CONNECTION,
+            )?,
+            statistics_interval: Duration::from_secs(number(
+                "statistics_interval",
+                &raw.statistics_interval,
+            )?),
+            resolve_timeout: Duration::from_secs(number("resolve_timeout", &raw.resolve_timeout)?),
             max_did_size,
-            cache_capacity_count: raw.cache.capacity_count.parse().unwrap_or(1000),
-            cache_expire: raw.cache.expire.parse().unwrap_or(300),
-            webvh_log_expire: raw.cache.webvh_log_expire.parse().unwrap_or(0),
+            cache_capacity_count: number("cache.capacity_count", &raw.cache.capacity_count)?,
+            cache_expire: number("cache.expire", &raw.cache.expire)?,
+            webvh_log_expire: number("cache.webvh_log_expire", &raw.cache.webvh_log_expire)?,
         })
     }
 }
@@ -527,7 +590,20 @@ where
     })?;
 
     let mut lines = Vec::new();
-    for line in io::BufReader::new(file).lines().map_while(Result::ok) {
+    for (number, line) in io::BufReader::new(file).lines().enumerate() {
+        // A read or UTF-8 error fails the load: stopping at it would silently
+        // drop the rest of the file.
+        let line = line.map_err(|err| {
+            CacheError::ConfigError(
+                "NA".into(),
+                format!(
+                    "Could not read file({}) at line {}: {}",
+                    file_name.as_ref().display(),
+                    number + 1,
+                    err
+                ),
+            )
+        })?;
         // Strip comments out
         if !line.starts_with('#') {
             lines.push(line);
@@ -540,8 +616,12 @@ where
 /// Replaces all strings ${VAR_NAME:default_value}
 /// with the corresponding environment variables (e.g. value of ${VAR_NAME})
 /// or with `default_value` if the variable is not defined.
+///
+/// The default runs to the first `}`, so several references on one line expand
+/// separately; a default cannot itself contain `}`.
 fn expand_env_vars(raw_config: &[String]) -> Vec<String> {
-    let re = Regex::new(r"\$\{(?P<env_var>[A-Z_]{1,}[0-9A-Z_]*):(?P<default_value>.*)\}").unwrap();
+    let re =
+        Regex::new(r"\$\{(?P<env_var>[A-Z_]{1,}[0-9A-Z_]*):(?P<default_value>[^}]*)\}").unwrap();
     let mut result: Vec<String> = Vec::new();
     for line in raw_config {
         result.push(
@@ -562,43 +642,25 @@ pub fn init(
     config_path: &str,
     reload_handle: Option<Handle<LevelFilter, Registry>>,
 ) -> Result<Config, CacheError> {
-    // Read configuration file parameters
-    let config = read_config_file(config_path)?;
+    // Read configuration file parameters, and check every value before
+    // acting on any of them.
+    let config = Config::try_from(read_config_file(config_path)?)?;
 
     // Setup logging
     if let Some(reload_handle) = &reload_handle {
-        let level: LevelFilter = match config.log_level.as_str() {
-            "trace" => LevelFilter::TRACE,
-            "debug" => LevelFilter::DEBUG,
-            "info" => LevelFilter::INFO,
-            "warn" => LevelFilter::WARN,
-            "error" => LevelFilter::ERROR,
-            _ => {
-                event!(
-                    Level::WARN,
-                    "log_level({}) is unknown in config file. Defaults to INFO",
-                    config.log_level
-                );
-                LevelFilter::INFO
-            }
-        };
+        let level = config.log_level;
         reload_handle
             .modify(|filter| *filter = level)
             .map_err(|e| CacheError::InternalError("NA".into(), e.to_string()))?;
-        event!(Level::INFO, "Log level set to ({})", config.log_level);
+        event!(Level::INFO, "Log level set to ({})", level);
     }
 
-    match Config::try_from(config) {
-        Ok(config) => {
-            event!(
-                Level::INFO,
-                "Configuration settings parsed successfully.\n{:#?}",
-                config
-            );
-            Ok(config)
-        }
-        Err(err) => Err(err),
-    }
+    event!(
+        Level::INFO,
+        "Configuration settings parsed successfully.\n{:#?}",
+        config
+    );
+    Ok(config)
 }
 
 #[cfg(test)]
@@ -719,11 +781,102 @@ mod tests {
     }
 
     #[test]
-    fn zero_or_unparseable_ceilings_keep_their_defaults() {
+    fn zero_ceilings_keep_their_defaults() {
         let config = parse_config_str(&shipped_with("${WS_MAX_CONNECTIONS:4096}", "0")).unwrap();
         assert_eq!(config.ws_max_connections, DEFAULT_WS_MAX_CONNECTIONS);
-        let config = parse_config_str(&shipped_with("${WS_IDLE_TIMEOUT:120}", "soon")).unwrap();
+        let config = parse_config_str(&shipped_with("${WS_IDLE_TIMEOUT:120}", "0")).unwrap();
         assert_eq!(config.ws_idle_timeout, Duration::from_secs(120));
+        let config =
+            parse_config_str(&shipped_with("${WS_MAX_INFLIGHT_PER_CONNECTION:32}", "0")).unwrap();
+        assert_eq!(
+            config.ws_max_inflight_per_connection,
+            DEFAULT_MAX_INFLIGHT_PER_CONNECTION
+        );
+    }
+
+    /// A value that does not parse fails startup, naming the key and the
+    /// value, instead of silently taking a default.
+    #[test]
+    fn an_unparseable_value_fails_naming_key_and_value() {
+        for (reference, value, key) in [
+            ("${WS_IDLE_TIMEOUT:120}", "soon", "ws_idle_timeout"),
+            ("${WS_MAX_CONNECTIONS:4096}", "lots", "ws_max_connections"),
+            ("${RATE_LIMIT_PER_IP:100}", "1OO", "rate_limit_per_ip"),
+            ("${RATE_LIMIT_BURST:50}", "-5", "rate_limit_burst"),
+            ("${RESOLVE_TIMEOUT:30}", "30s", "resolve_timeout"),
+            ("${MAX_DID_SIZE:1024}", "1k", "max_did_size"),
+            ("${STATISTICS_INTERVAL:10}", "ten", "statistics_interval"),
+            (
+                "${AGENT_NAME_CONCURRENCY:16}",
+                "x",
+                "agent_name_concurrency",
+            ),
+            (
+                "${CACHE_CAPACITY_COUNT:1000}",
+                "1e3",
+                "cache.capacity_count",
+            ),
+            ("${EXPIRE:300}", "5m", "cache.expire"),
+            ("${WEBVH_LOG_EXPIRE:0}", "off", "cache.webvh_log_expire"),
+            (
+                "${ENABLE_HTTP_ENDPOINT:true}",
+                "Flase",
+                "enable_http_endpoint",
+            ),
+            (
+                "${ENABLE_WEBSOCKET_ENDPOINT:true}",
+                "disabled",
+                "enable_websocket_endpoint",
+            ),
+            ("${ENABLE_AGENT_NAMES:false}", "nope", "enable_agent_names"),
+        ] {
+            let err = parse_config_str(&shipped_with(reference, value))
+                .err()
+                .unwrap_or_else(|| panic!("{key} = {value} must fail"))
+                .to_string();
+            assert!(err.contains(key) && err.contains(value), "{err}");
+        }
+        let text = SHIPPED.replace("log_level = \"info\"", "log_level = \"verbose\"");
+        let err = parse_config_str(&text).err().unwrap().to_string();
+        assert!(
+            err.contains("log_level") && err.contains("verbose"),
+            "{err}"
+        );
+    }
+
+    /// The spellings of false all disable an endpoint; before, anything but
+    /// `false` failed to parse and enabled it.
+    #[test]
+    fn booleans_parse_their_usual_spellings() {
+        for value in ["false", "False", "FALSE", "no", "off", "0"] {
+            let config =
+                parse_config_str(&shipped_with("${ENABLE_HTTP_ENDPOINT:true}", value)).unwrap();
+            assert!(!config.enable_http_endpoint, "{value}");
+        }
+        for value in ["true", "True", "yes", "on", "1"] {
+            let config =
+                parse_config_str(&shipped_with("${ENABLE_WEBSOCKET_ENDPOINT:true}", value))
+                    .unwrap();
+            assert!(config.enable_websocket_endpoint, "{value}");
+        }
+    }
+
+    /// Two references on one line expand separately.
+    #[test]
+    fn env_references_expand_one_at_a_time() {
+        let lines = vec!["a = \"${CACHE_TEST_UNSET_ONE:x}-${CACHE_TEST_UNSET_TWO:y}\"".to_string()];
+        assert_eq!(expand_env_vars(&lines), vec!["a = \"x-y\"".to_string()]);
+    }
+
+    #[test]
+    fn a_read_error_fails_the_load() {
+        let dir = std::env::temp_dir().join(format!("cache-conf-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("invalid-utf8.toml");
+        std::fs::write(&path, b"log_level = \"info\"\n\xff\xfe = 1\n").unwrap();
+        let err = read_file_lines(&path).unwrap_err().to_string();
+        assert!(err.contains("line 2"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -1,5 +1,70 @@
 # Affinidi DID Resolver Cache SDK
 
+## Unreleased (0.8.54) — network mode: connection state observable, requests bounded, no wedge after reconnects
+
+### Fixed
+
+- **The network task no longer wedges after ~32 reconnects** (#1046). Every
+  (re)connect queued a `Connected` message on a 32-slot channel that was read
+  once, at construction; the 33rd reconnect blocked the task for good, after
+  which `resolve()` hung and `network_health()` still said `Running`. The
+  readiness latch is now a `tokio::sync::watch` value, overwritten on every
+  change.
+- **A full request list no longer stops the task reading commands** (#1047).
+  The task always reads the SDK channel, so the `TimeOut`s that free the list
+  are always seen. A request that would take the list over
+  `network_cache_limit_count` is answered at once with a transport error
+  ("too many requests in flight"), after dropping requests whose callers have
+  already given up.
+- **Fragmented WebSocket messages are reassembled** instead of dropped (up to
+  16 MiB). The socket is read by its own task per connection, so a frame is
+  never half-read and lost when another event wins the task's `select!`.
+- A failed or stalled write (bounded by `network_timeout`) is treated as a lost
+  connection (before, it was ignored and the caller waited out its timeout).
+- A message from the server that cannot be parsed (e.g. a newer server's
+  answer) is not a connection fault: the request it names by `hash` fails at
+  once with a `TransportError`; one naming no request is ignored. Logged at
+  `warn` for the first three and every hundredth, `debug` otherwise. Before,
+  the waiter was left to time out.
+
+### Added
+
+- `DIDCacheClient::connection_state() -> Option<watch::Receiver<ConnectionState>>`
+  and `ConnectionState { Connecting, Connected { epoch }, Disconnected { reason }, Stopped }`
+  (re-exported at the crate root). Every drop, reconnect and stop is
+  published; `epoch` counts connections, so a watcher can tell a connection
+  was replaced even when it missed the drop (R6.2).
+
+### Changed — BEHAVIOUR (R3.6)
+
+Network mode only. No signature changes; patch bump per
+[ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md) point 3.
+
+- **While the client is not connected, a request that needs the server fails
+  at once** with `DIDCacheError::TransportError("not connected …")`. Before,
+  the reconnect loop ran inside the task and nothing was answered until the
+  connection came back (or, past 32 queued commands, callers blocked for the
+  whole outage).
+- **Requests in flight when the connection drops fail at once** with a
+  `TransportError` ("connection … lost"), rather than waiting out
+  `network_timeout`. They are not re-sent; the caller decides.
+- **`network_timeout` bounds the whole request** — handing it to the network
+  task included. A busy task gives `NetworkTimeout`, never a hang.
+- `DIDCacheClient::new` waits for the first connection attempt to *finish*
+  (still at most `network_timeout`): an unreachable server now returns in
+  degraded mode as soon as the attempt fails, instead of after the timeout.
+- Reconnect backoff: 100 ms after a drop; after failed attempts 1, 2, 4, …
+  seconds, at most 60 (was 6, 11, 16, … seconds).
+- did:key and did:peer (and the other methods resolved locally in network
+  mode since 0.8.52) never reach the server, so they are unaffected by any of
+  this.
+
+### Docs
+
+- README: network-mode example uses `wss://` and the real builder name
+  (`DIDCacheConfigBuilder`); the cache table lists did:ebsi, did:webs and
+  custom-resolver methods as mutable, as the code treats them (#1053).
+
 ## Unreleased (0.8.53) — affinidi-crypto 0.3
 
 - **Changed:** requires `affinidi-crypto` 0.3. No code change and no

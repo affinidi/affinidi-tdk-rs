@@ -1,5 +1,30 @@
 # Affinidi DID Authentication
 
+## Unreleased (0.3.17) — only retryable errors are retried
+
+### Changed — BEHAVIOUR (R3.6)
+
+- `DIDAuthentication::authenticate` retries only errors that can pass (#1052):
+  transport failures (`Authentication`, `DIDResolver`), timeouts, and HTTP
+  408, 429 and 5xx. Every other error is returned at once from the attempt
+  that hit it — an abort (e.g. a target DID with no `#auth` service), an ACL
+  denial, a DIDComm or secrets problem (e.g. "sender has no usable key
+  agreement key"), a DID that cannot be resolved, and any other 4xx. Before,
+  only `ACLDenied` was; the rest slept and retried, forever with
+  `retry_limit = -1`, and otherwise surfaced as `RetriesExhausted` or a bare
+  timeout. Callers that relied on retries masking misconfiguration see the
+  failure sooner, and not wrapped in `RetriesExhausted`.
+- A resolver error for a malformed DID or an unsupported method is now
+  `DIDAuthError::UnresolvableDID` (was `DIDResolver`). Display is unchanged.
+
+### Added
+
+- `DIDAuthError::is_retryable()`.
+- `DIDAuthError::UnresolvableDID(String)`, `Timeout(String)` (the caller's
+  time ran out) and `TaskUnavailable(String)` (the authentication task is not
+  running); the enum is `#[non_exhaustive]`, so these are additive.
+- `DIDAuthError` is `Clone`, so one result can be handed to several waiters.
+
 ## Unreleased (0.3.16) — affinidi-crypto 0.3
 
 - **Changed:** requires `affinidi-crypto` 0.3. No code change and no

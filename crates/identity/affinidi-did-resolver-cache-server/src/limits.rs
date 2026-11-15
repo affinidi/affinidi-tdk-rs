@@ -39,6 +39,9 @@ struct Connections {
     max_per_client: usize,
 }
 
+/// Default for [`WsLimits::max_inflight_per_connection`].
+pub const DEFAULT_MAX_INFLIGHT_PER_CONNECTION: usize = 32;
+
 /// WebSocket limits shared by every connection.
 pub struct WsLimits {
     /// A connection that receives nothing for this long is closed.
@@ -47,6 +50,10 @@ pub struct WsLimits {
     pub send_timeout: Duration,
     /// Largest message (and frame) accepted, in bytes.
     pub max_message_size: usize,
+    /// Requests one connection may have in progress at once. Requests are
+    /// resolved concurrently up to this many; the connection is not read
+    /// further until one finishes.
+    pub max_inflight_per_connection: usize,
     max_connections: usize,
     connections: Arc<Connections>,
 }
@@ -57,6 +64,10 @@ impl fmt::Debug for WsLimits {
             .field("idle_timeout", &self.idle_timeout)
             .field("send_timeout", &self.send_timeout)
             .field("max_message_size", &self.max_message_size)
+            .field(
+                "max_inflight_per_connection",
+                &self.max_inflight_per_connection,
+            )
             .field("max_connections", &self.max_connections)
             .field(
                 "max_connections_per_client",
@@ -82,6 +93,7 @@ impl WsLimits {
             idle_timeout,
             send_timeout,
             max_message_size,
+            max_inflight_per_connection: DEFAULT_MAX_INFLIGHT_PER_CONNECTION,
             max_connections,
             connections: Arc::new(Connections {
                 total: Arc::new(Semaphore::new(max_connections)),
@@ -99,6 +111,14 @@ impl WsLimits {
             config.ws_send_timeout,
             config.ws_max_message_size,
         )
+        .with_max_inflight_per_connection(config.ws_max_inflight_per_connection)
+    }
+
+    /// Set [`WsLimits::max_inflight_per_connection`] (default
+    /// [`DEFAULT_MAX_INFLIGHT_PER_CONNECTION`]); `0` is raised to 1.
+    pub fn with_max_inflight_per_connection(mut self, max: usize) -> Self {
+        self.max_inflight_per_connection = max.clamp(1, Semaphore::MAX_PERMITS);
+        self
     }
 
     /// Admit a connection from `client`, or refuse it if either limit is

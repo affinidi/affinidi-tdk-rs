@@ -25,16 +25,18 @@ use moka::{Expiry, future::Cache};
 #[cfg(feature = "network")]
 use networking::{
     WSRequest,
-    network::{NetworkTask, WSCommands},
+    network::{ConnectionSignal, NetworkTask, WSCommands},
 };
 
 #[cfg(feature = "network")]
 pub use affinidi_task_utils::{ComponentHealth, ComponentState};
+#[cfg(feature = "network")]
+pub use networking::ConnectionState;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::{fmt, time::Duration};
 #[cfg(feature = "network")]
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, watch};
 use tracing::debug;
 #[cfg(feature = "network")]
 use tracing::warn;
@@ -333,8 +335,10 @@ pub struct DIDCacheClient {
     cache: Cache<[u64; 2], Document>,
     #[cfg(feature = "network")]
     network_task_tx: Option<mpsc::Sender<WSCommands>>,
+    /// The connection state the network task publishes (see
+    /// [`DIDCacheClient::connection_state`]).
     #[cfg(feature = "network")]
-    network_task_rx: Option<Arc<Mutex<mpsc::Receiver<WSCommands>>>>,
+    network_signal: Option<Arc<ConnectionSignal>>,
     /// Shutdown token for the supervised network task; cancelling it stops
     /// the task (see [`DIDCacheClient::stop`]).
     #[cfg(feature = "network")]
@@ -385,7 +389,7 @@ impl Clone for DIDCacheClient {
             #[cfg(feature = "network")]
             network_task_tx: self.network_task_tx.clone(),
             #[cfg(feature = "network")]
-            network_task_rx: self.network_task_rx.clone(),
+            network_signal: self.network_signal.clone(),
             #[cfg(feature = "network")]
             network_shutdown: self.network_shutdown.clone(),
             #[cfg(feature = "network")]
@@ -841,6 +845,30 @@ impl DIDCacheClient {
         if let Some(shutdown) = self.network_shutdown.as_ref() {
             shutdown.cancel();
         }
+        // The supervisor may abort the task before it publishes this itself.
+        if let Some(signal) = self.network_signal.as_ref() {
+            signal.set(ConnectionState::Stopped);
+        }
+    }
+
+    /// The connection to the cache server, or `None` when the SDK is running
+    /// in local mode.
+    ///
+    /// The returned receiver sees every change of state: each drop
+    /// ([`ConnectionState::Disconnected`]), each reconnect
+    /// ([`ConnectionState::Connected`], with a new `epoch`) and the end
+    /// ([`ConnectionState::Stopped`]). Use
+    /// [`watch::Receiver::changed`] to wait for the next change, or
+    /// [`watch::Receiver::borrow`] to read the current one. Each call returns
+    /// a new receiver.
+    ///
+    /// [`Self::network_health`] reports whether the network *task* is running;
+    /// this reports whether it is *connected*.
+    #[cfg(feature = "network")]
+    pub fn connection_state(&self) -> Option<watch::Receiver<ConnectionState>> {
+        self.network_signal
+            .as_ref()
+            .map(|signal| signal.subscribe())
     }
 
     /// Current health of the supervised network task, or `None` when the SDK
@@ -1010,7 +1038,7 @@ impl DIDCacheClient {
             config,
             cache,
             network_task_tx: None,
-            network_task_rx: None,
+            network_signal: None,
             network_shutdown: None,
             network_health: None,
             #[cfg(feature = "did_example")]
@@ -1054,11 +1082,12 @@ impl DIDCacheClient {
 
                 // Channel to communicate from SDK to network task
                 let (sdk_tx, task_rx) = mpsc::channel(32);
-                // Channel to communicate from network task to SDK
-                let (task_tx, sdk_rx) = mpsc::channel(32);
+                // The connection state the task publishes on every change
+                let signal = Arc::new(ConnectionSignal::new());
+                let mut state = signal.subscribe();
 
                 client.network_task_tx = Some(sdk_tx);
-                client.network_task_rx = Some(Arc::new(Mutex::new(sdk_rx)));
+                client.network_signal = Some(signal.clone());
 
                 // Start the network task under the shared TaskSupervisor. The
                 // task reconnects internally on transient drops; the
@@ -1079,48 +1108,53 @@ impl DIDCacheClient {
                 let task_shutdown = network_shutdown.clone();
                 supervisor.spawn("did_cache_network", false, move || {
                     let task_rx = task_rx.clone();
-                    let task_tx = task_tx.clone();
+                    let signal = signal.clone();
                     let task_config = task_config.clone();
                     let shutdown = task_shutdown.clone();
                     async move {
                         let mut rx = task_rx.lock().await;
-                        NetworkTask::run(task_config, &mut rx, &task_tx, shutdown).await
+                        NetworkTask::run(task_config, &mut rx, signal, shutdown).await
                     }
                 });
                 client.network_shutdown = Some(network_shutdown);
 
-                if let Some(arc_rx) = client.network_task_rx.as_ref() {
-                    // Wait for the network task to signal it's connected — but
-                    // bounded, and never via `unwrap()`:
-                    // - Connected: ready.
-                    // - timeout (server unreachable): proceed in degraded mode;
-                    //   the task keeps reconnecting with backoff, and resolution
-                    //   falls back to local for deterministic methods.
-                    // - channel closed (task died/panicked before signalling):
-                    //   return an error rather than panicking the caller.
-                    let mut rx = arc_rx.lock().await;
-                    match tokio::time::timeout(client.config.network_timeout, rx.recv()).await {
-                        Ok(Some(WSCommands::Connected)) => {
-                            debug!("Network task connected");
-                        }
-                        Ok(Some(other)) => {
-                            warn!(
-                                "Unexpected first message from network task ({other:?}); \
-                                 continuing — will reconnect in the background"
-                            );
-                        }
-                        Ok(None) => {
-                            return Err(DIDCacheError::TransportError(
-                                "Network task terminated before signalling readiness".to_string(),
-                            ));
-                        }
-                        Err(_elapsed) => {
-                            warn!(
-                                "Cache server not reachable at startup; continuing in degraded \
-                                 mode (local resolution for did:key/did:peer). The network task \
-                                 will keep retrying with backoff."
-                            );
-                        }
+                // Wait, once and bounded, for the first connection attempt to
+                // finish:
+                // - connected: ready.
+                // - failed, or still trying at the timeout (server
+                //   unreachable): proceed in degraded mode; the task keeps
+                //   reconnecting with backoff, and `connection_state()`
+                //   reports when it succeeds.
+                // - stopped: return an error rather than a client that can
+                //   never reach the server.
+                let first = tokio::time::timeout(
+                    client.config.network_timeout,
+                    state.wait_for(|state| !matches!(state, ConnectionState::Connecting)),
+                )
+                .await;
+                match first
+                    .as_ref()
+                    .map(|state| state.as_ref().map(|s| (**s).clone()))
+                {
+                    Ok(Ok(ConnectionState::Connected { .. })) => {
+                        debug!("Network task connected");
+                    }
+                    Ok(Ok(ConnectionState::Stopped)) | Ok(Err(_)) => {
+                        return Err(DIDCacheError::TransportError(
+                            "Network task terminated before connecting".to_string(),
+                        ));
+                    }
+                    Ok(Ok(other)) => {
+                        warn!(
+                            "Cache server not reachable at startup ({other:?}); continuing in \
+                             degraded mode. The network task will keep retrying with backoff."
+                        );
+                    }
+                    Err(_elapsed) => {
+                        warn!(
+                            "Cache server not reachable at startup; continuing in degraded \
+                             mode. The network task will keep retrying with backoff."
+                        );
                     }
                 }
             }

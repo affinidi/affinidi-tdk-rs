@@ -3,8 +3,13 @@
  *
  * Enables a TDK Profile to authenticate using its DID and secrets to other
  * services that accept DID Auth. The cache is shared across all profiles in
- * the host process and runs as a single background task driven by an MPSC
+ * the host process and is driven by a background task reading an MPSC
  * command channel.
+ *
+ * The task answers cheap commands (is this pair authenticated? forget this
+ * pair) itself, and runs each authentication in a task of its own, so one
+ * slow service does not hold up the others. Concurrent requests for the same
+ * pair share one authentication.
  *
  * Cached entries expire when their refresh token expires; expired-token
  * authentication kicks off a fresh DID Auth handshake.
@@ -23,22 +28,20 @@ use moka::{
 };
 use reqwest::Client;
 use std::{
+    collections::HashMap,
     hash::Hasher,
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    sync::{
-        mpsc::{self, error::TrySendError},
-        oneshot,
-    },
-    task::JoinHandle,
+    sync::{mpsc, oneshot},
+    task::{JoinHandle, JoinSet},
 };
 use tracing::{debug, warn};
 
-/// MPSC channel buffer size for [`AuthenticationCommand`]. Sized for short
-/// burst tolerance — sustained backpressure shows up as `TrySendError::Full`
-/// warnings and should be addressed at the call site.
+/// MPSC channel buffer size for [`AuthenticationCommand`]. The task reads the
+/// channel without waiting on any authentication, so it drains quickly; a
+/// caller that finds it full waits for room within its own timeout.
 const COMMAND_CHANNEL_CAPACITY: usize = 32;
 
 /// Default retries for [`AuthenticationCache::authenticate_default`].
@@ -69,14 +72,26 @@ pub struct AuthenticationCache {
 
 /// Inner state owned by the background task.
 struct AuthenticationCacheInner {
-    cache: Cache<u64, AuthenticationRecord, RandomState>,
     channel_rx: mpsc::Receiver<AuthenticationCommand>,
+    authenticator: Arc<Authenticator>,
+}
+
+/// What an authentication needs, shared by the task and every authentication
+/// it runs.
+struct Authenticator {
+    cache: Cache<u64, AuthenticationRecord, RandomState>,
     did_resolver: DIDCacheClient,
     secrets_resolver: ThreadedSecretsResolver,
     client: Client,
     custom_handlers: Option<CustomAuthHandlers>,
     allow_insecure_http_endpoints: bool,
 }
+
+type AuthResponder = oneshot::Sender<Result<AuthorizationTokens, DIDAuthError>>;
+
+/// Authentications in progress, by (pair, forced refresh), with every caller
+/// waiting on each.
+type Inflight = Arc<Mutex<HashMap<(u64, bool), Vec<AuthResponder>>>>;
 
 /// MPSC commands consumed by the background authentication task.
 ///
@@ -106,7 +121,7 @@ pub(crate) enum AuthenticationCommand {
         /// expiry). Falls back to a full handshake only if the refresh token
         /// has itself expired.
         force_refresh: bool,
-        tx: oneshot::Sender<Result<AuthorizationTokens, DIDAuthError>>,
+        tx: AuthResponder,
     },
 
     /// Invalidate (remove) an authentication entry.
@@ -139,6 +154,12 @@ impl Expiry<u64, AuthenticationRecord> for AuthenticationRecord {
             .unwrap_or(Duration::ZERO);
         Some(refresh_at.saturating_sub(now))
     }
+}
+
+fn task_unavailable() -> DIDAuthError {
+    DIDAuthError::TaskUnavailable(
+        "the authentication task is not running (terminated, or never started)".to_string(),
+    )
 }
 
 impl AuthenticationCache {
@@ -194,13 +215,15 @@ impl AuthenticationCache {
             .build_with_hasher(ahash::RandomState::default());
 
         let inner = AuthenticationCacheInner {
-            cache,
             channel_rx: rx,
-            did_resolver: did_resolver.clone(),
-            secrets_resolver,
-            client: client.clone(),
-            custom_handlers,
-            allow_insecure_http_endpoints,
+            authenticator: Arc::new(Authenticator {
+                cache,
+                did_resolver: did_resolver.clone(),
+                secrets_resolver,
+                client: client.clone(),
+                custom_handlers,
+                allow_insecure_http_endpoints,
+            }),
         };
 
         AuthenticationCache {
@@ -226,6 +249,8 @@ impl AuthenticationCache {
     }
 
     /// Send a Terminate command and wait for the background task to exit.
+    /// Authentications still in progress are cancelled; their callers get
+    /// [`DIDAuthError::TaskUnavailable`].
     pub async fn terminate(&self) {
         let _ = self.tx.send(AuthenticationCommand::Terminate).await;
         let handle = self.handle.lock().ok().and_then(|mut slot| slot.take());
@@ -236,46 +261,34 @@ impl AuthenticationCache {
 
     /// Check whether `(profile_did, service_endpoint_did)` is currently
     /// authenticated. Does not initiate a fresh handshake.
+    ///
+    /// `None` when the pair is not authenticated, and also when the task does
+    /// not answer within [`AUTHENTICATED_QUERY_TIMEOUT`] (logged).
     pub async fn authenticated(
         &self,
         profile_did: String,
         service_endpoint_did: String,
     ) -> Option<AuthorizationTokens> {
         let (tx, rx) = oneshot::channel();
-        match self.tx.try_send(AuthenticationCommand::Authenticated {
+        let command = AuthenticationCommand::Authenticated {
             profile_did: Arc::new(profile_did),
             service_endpoint_did: Arc::new(service_endpoint_did),
             tx,
-        }) {
-            Ok(_) => {}
-            Err(TrySendError::Closed(_)) => {
-                warn!("Authentication task channel closed unexpectedly");
-                return None;
+        };
+        let exchange = async {
+            self.tx.send(command).await.ok()?;
+            rx.await.ok()
+        };
+        match tokio::time::timeout(AUTHENTICATED_QUERY_TIMEOUT, exchange).await {
+            Ok(Some(tokens)) => tokens,
+            Ok(None) => {
+                warn!("Authentication task is not running; authenticated() answers None");
+                None
             }
-            Err(TrySendError::Full(_)) => {
-                warn!(
-                    "Authentication task channel full (capacity {})",
-                    COMMAND_CHANNEL_CAPACITY
-                );
-                return None;
-            }
-        }
-
-        let timeout = tokio::time::sleep(AUTHENTICATED_QUERY_TIMEOUT);
-        tokio::pin!(timeout);
-
-        tokio::select! {
-            _ = &mut timeout => {
+            Err(_) => {
                 warn!("Timeout reached during authenticated() check");
                 None
             }
-            value = rx => match value {
-                Ok(tokens) => tokens,
-                Err(_) => {
-                    warn!("Authentication task closed the response channel");
-                    None
-                }
-            },
         }
     }
 
@@ -284,11 +297,21 @@ impl AuthenticationCache {
     /// Otherwise runs a fresh DID Auth handshake (or a refresh if the access
     /// token has expired but the refresh token is still valid).
     ///
+    /// Concurrent calls for the same pair share one handshake; calls for
+    /// different pairs run concurrently. The handshake is bounded by the
+    /// `timeout` of the call that started it, and cancelled when it runs out.
+    ///
     /// # Arguments
     /// * `profile_did` — DID of the Profile.
     /// * `service_endpoint_did` — DID of the Service Endpoint.
     /// * `retry_limit` — How many times to retry the authentication.
     /// * `timeout` — Optional override; defaults to [`DEFAULT_AUTH_TIMEOUT`].
+    ///
+    /// # Errors
+    /// [`DIDAuthError::Timeout`] when no result arrives within `timeout`
+    /// (from handing the request to the task to its answer);
+    /// [`DIDAuthError::TaskUnavailable`] when the task is not running; or the
+    /// authentication's own error.
     pub async fn authenticate(
         &self,
         profile_did: String,
@@ -296,49 +319,14 @@ impl AuthenticationCache {
         retry_limit: u8,
         timeout: Option<Duration>,
     ) -> Result<AuthorizationTokens, DIDAuthError> {
-        let timeout = timeout.unwrap_or(DEFAULT_AUTH_TIMEOUT);
-        let (tx, rx) = oneshot::channel();
-        match self.tx.try_send(AuthenticationCommand::Authenticate {
-            profile_did: Arc::new(profile_did),
-            service_endpoint_did: Arc::new(service_endpoint_did),
+        self.request_authentication(
+            profile_did,
+            service_endpoint_did,
             retry_limit,
-            timeout,
-            force_refresh: false,
-            tx,
-        }) {
-            Ok(_) => {}
-            Err(TrySendError::Closed(_)) => {
-                warn!("Authentication task channel closed unexpectedly");
-                return Err(DIDAuthError::AuthenticationAbort(
-                    "Authentication Task channel closed unexpectedly".to_string(),
-                ));
-            }
-            Err(TrySendError::Full(_)) => {
-                warn!(
-                    "Authentication task channel full (capacity {})",
-                    COMMAND_CHANNEL_CAPACITY
-                );
-                return Err(DIDAuthError::AuthenticationAbort(
-                    "Authentication Task channel full".to_string(),
-                ));
-            }
-        }
-
-        let sleep = tokio::time::sleep(timeout);
-        tokio::pin!(sleep);
-
-        tokio::select! {
-            value = rx => match value {
-                Ok(tokens) => tokens,
-                Err(_) => Err(DIDAuthError::AuthenticationAbort(
-                    "Authentication Task channel closed unexpectedly".to_string(),
-                )),
-            },
-            _ = &mut sleep => {
-                warn!("Timeout reached during authenticate()");
-                Err(DIDAuthError::AuthenticationAbort("Timeout reached".to_string()))
-            }
-        }
+            timeout.unwrap_or(DEFAULT_AUTH_TIMEOUT),
+            false,
+        )
+        .await
     }
 
     /// Convenience helper using [`DEFAULT_AUTH_RETRIES`] and the default
@@ -374,47 +362,53 @@ impl AuthenticationCache {
         profile_did: String,
         service_endpoint_did: String,
     ) -> Result<AuthorizationTokens, DIDAuthError> {
-        let timeout = DEFAULT_AUTH_TIMEOUT;
+        self.request_authentication(
+            profile_did,
+            service_endpoint_did,
+            DEFAULT_AUTH_RETRIES,
+            DEFAULT_AUTH_TIMEOUT,
+            true,
+        )
+        .await
+    }
+
+    /// Hand an authentication to the task and wait for its result, all within
+    /// `timeout`.
+    async fn request_authentication(
+        &self,
+        profile_did: String,
+        service_endpoint_did: String,
+        retry_limit: u8,
+        timeout: Duration,
+        force_refresh: bool,
+    ) -> Result<AuthorizationTokens, DIDAuthError> {
         let (tx, rx) = oneshot::channel();
-        match self.tx.try_send(AuthenticationCommand::Authenticate {
-            profile_did: Arc::new(profile_did),
-            service_endpoint_did: Arc::new(service_endpoint_did),
-            retry_limit: DEFAULT_AUTH_RETRIES,
+        let command = AuthenticationCommand::Authenticate {
+            profile_did: Arc::new(profile_did.clone()),
+            service_endpoint_did: Arc::new(service_endpoint_did.clone()),
+            retry_limit,
             timeout,
-            force_refresh: true,
+            force_refresh,
             tx,
-        }) {
-            Ok(_) => {}
-            Err(TrySendError::Closed(_)) => {
-                warn!("Authentication task channel closed unexpectedly");
-                return Err(DIDAuthError::AuthenticationAbort(
-                    "Authentication Task channel closed unexpectedly".to_string(),
-                ));
-            }
-            Err(TrySendError::Full(_)) => {
+        };
+        let exchange = async {
+            self.tx
+                .send(command)
+                .await
+                .map_err(|_| task_unavailable())?;
+            rx.await.map_err(|_| task_unavailable())?
+        };
+        match tokio::time::timeout(timeout, exchange).await {
+            Ok(result) => result,
+            Err(_) => {
                 warn!(
-                    "Authentication task channel full (capacity {})",
-                    COMMAND_CHANNEL_CAPACITY
+                    profile = %profile_did,
+                    service = %service_endpoint_did,
+                    "Timeout reached during authentication"
                 );
-                return Err(DIDAuthError::AuthenticationAbort(
-                    "Authentication Task channel full".to_string(),
-                ));
-            }
-        }
-
-        let sleep = tokio::time::sleep(timeout);
-        tokio::pin!(sleep);
-
-        tokio::select! {
-            value = rx => match value {
-                Ok(tokens) => tokens,
-                Err(_) => Err(DIDAuthError::AuthenticationAbort(
-                    "Authentication Task channel closed unexpectedly".to_string(),
-                )),
-            },
-            _ = &mut sleep => {
-                warn!("Timeout reached during refresh()");
-                Err(DIDAuthError::AuthenticationAbort("Timeout reached".to_string()))
+                Err(DIDAuthError::Timeout(format!(
+                    "{profile_did} to {service_endpoint_did}: no result within {timeout:?}"
+                )))
             }
         }
     }
@@ -436,24 +430,38 @@ impl AuthenticationCache {
 }
 
 /// Background task entry point. Owns `inner` for its lifetime — when this
-/// future completes, the task exits.
+/// future completes, the task exits, cancelling the authentications still in
+/// progress.
 async fn run(mut inner: AuthenticationCacheInner) {
+    let inflight: Inflight = Arc::default();
+    let mut authentications = JoinSet::new();
     loop {
         tokio::select! {
-            msg = inner.channel_rx.recv() => {
-                if inner.handle_channel(msg).await {
+            command = inner.channel_rx.recv() => {
+                if inner.handle_command(command, &inflight, &mut authentications).await {
                     break;
+                }
+            }
+            Some(finished) = authentications.join_next(), if !authentications.is_empty() => {
+                if let Err(e) = finished {
+                    warn!(error = %e, "authentication task failed");
                 }
             }
         }
     }
+    authentications.shutdown().await;
     debug!("Exiting Authentication Task");
 }
 
 impl AuthenticationCacheInner {
     /// Returns `true` when the task should exit.
-    async fn handle_channel(&self, cmd: Option<AuthenticationCommand>) -> bool {
-        match cmd {
+    async fn handle_command(
+        &self,
+        command: Option<AuthenticationCommand>,
+        inflight: &Inflight,
+        authentications: &mut JoinSet<()>,
+    ) -> bool {
+        match command {
             Some(AuthenticationCommand::Terminate) => {
                 debug!("Terminating Authentication Task");
                 true
@@ -464,7 +472,7 @@ impl AuthenticationCacheInner {
                 tx,
             }) => {
                 let key = hash(&profile_did, &service_endpoint_did);
-                let result = self.cache.get(&key).await.map(|r| r.tokens);
+                let result = self.authenticator.cache.get(&key).await.map(|r| r.tokens);
                 debug!(
                     profile = %profile_did,
                     service = %service_endpoint_did,
@@ -482,15 +490,64 @@ impl AuthenticationCacheInner {
                 timeout,
                 force_refresh,
             }) => {
-                self.handle_authenticate(
-                    profile_did,
-                    service_endpoint_did,
-                    retry_limit,
-                    timeout,
-                    force_refresh,
-                    tx,
-                )
-                .await;
+                let key = hash(&profile_did, &service_endpoint_did);
+                let flight = (key, force_refresh);
+                {
+                    let Ok(mut waiting) = inflight.lock() else {
+                        let _ = tx.send(Err(task_unavailable()));
+                        return false;
+                    };
+                    if let Some(waiters) = waiting.get_mut(&flight) {
+                        debug!(
+                            profile = %profile_did,
+                            service = %service_endpoint_did,
+                            "joining the authentication in progress"
+                        );
+                        waiters.push(tx);
+                        return false;
+                    }
+                    waiting.insert(flight, vec![tx]);
+                }
+
+                let authenticator = self.authenticator.clone();
+                let inflight = inflight.clone();
+                authentications.spawn(async move {
+                    // Dropping the authentication on timeout cancels it: it
+                    // does not go on retrying in the background.
+                    let result = match tokio::time::timeout(
+                        timeout,
+                        authenticator.authenticate(
+                            key,
+                            &profile_did,
+                            &service_endpoint_did,
+                            retry_limit,
+                            force_refresh,
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(_) => {
+                            warn!(
+                                profile = %profile_did,
+                                service = %service_endpoint_did,
+                                "authentication did not finish within {timeout:?}; cancelled"
+                            );
+                            Err(DIDAuthError::Timeout(format!(
+                                "{profile_did} to {service_endpoint_did}: authentication did \
+                                 not finish within {timeout:?}"
+                            )))
+                        }
+                    };
+                    let waiters = inflight
+                        .lock()
+                        .ok()
+                        .and_then(|mut waiting| waiting.remove(&flight))
+                        .unwrap_or_default();
+                    for waiter in waiters {
+                        let _ = waiter.send(result.clone());
+                    }
+                });
                 false
             }
             Some(AuthenticationCommand::Invalidate {
@@ -504,7 +561,7 @@ impl AuthenticationCacheInner {
                     %key,
                     "invalidating authentication record"
                 );
-                self.cache.invalidate(&key).await;
+                self.authenticator.cache.invalidate(&key).await;
                 false
             }
             None => {
@@ -513,17 +570,19 @@ impl AuthenticationCacheInner {
             }
         }
     }
+}
 
-    async fn handle_authenticate(
+impl Authenticator {
+    /// Authenticate the pair: the cached tokens when still good, else a
+    /// refresh or a full handshake, whose tokens are cached.
+    async fn authenticate(
         &self,
-        profile_did: Arc<String>,
-        service_endpoint_did: Arc<String>,
+        key: u64,
+        profile_did: &str,
+        service_endpoint_did: &str,
         retry_limit: u8,
-        timeout: Duration,
         force_refresh: bool,
-        tx: oneshot::Sender<Result<AuthorizationTokens, DIDAuthError>>,
-    ) {
-        let key = hash(&profile_did, &service_endpoint_did);
+    ) -> Result<AuthorizationTokens, DIDAuthError> {
         debug!(
             profile = %profile_did,
             service = %service_endpoint_did,
@@ -546,8 +605,7 @@ impl AuthenticationCacheInner {
             match check {
                 RefreshCheck::Ok => {
                     debug!("Cached tokens valid; returning");
-                    let _ = tx.send(Ok(record.tokens));
-                    return;
+                    return Ok(record.tokens);
                 }
                 RefreshCheck::Refresh => {
                     debug!("Refresh needed");
@@ -567,97 +625,66 @@ impl AuthenticationCacheInner {
             DIDAuthentication::new().with_custom_handlers(self.custom_handlers.clone())
         };
 
-        let did_resolver = self.did_resolver.clone();
-        let secrets_resolver = self.secrets_resolver.clone();
-        let client = self.client.clone();
-        let profile_copy = profile_did.clone();
-        let service_copy = service_endpoint_did.clone();
-        let allow_insecure_http = self.allow_insecure_http_endpoints;
+        check_auth_endpoint(
+            service_endpoint_did,
+            &self.did_resolver,
+            self.allow_insecure_http_endpoints,
+        )
+        .await?;
 
-        let handle = tokio::spawn(async move {
-            check_auth_endpoint(&service_copy, &did_resolver, allow_insecure_http).await?;
-
-            // A forced refresh has to say so. `authenticate` re-derives the
-            // decision from the token's expiry and refreshes only inside the
-            // last five seconds of its life — which is never true of a
-            // *proactive* refresh, whose whole point is to run while the token
-            // is still good. Asking through `authenticate` therefore returned
-            // the same token, and the caller acted on a refresh that had not
-            // happened; a transport that rebuilds its connection to carry the
-            // new token then rebuilt it onto the old one, over and over, until
-            // the token actually expired.
-            //
-            // A failure here is not fatal: fall through to the full handshake
-            // below, which is what an expired refresh token needs anyway.
-            if force_refresh
-                && auth
-                    .refresh_tokens(
-                        &profile_copy,
-                        &service_copy,
-                        &did_resolver,
-                        &secrets_resolver,
-                        &client,
-                    )
-                    .await
-                    .is_ok()
-            {
-                return Ok(auth);
-            }
-
-            match auth
+        // A forced refresh has to say so. `authenticate` re-derives the
+        // decision from the token's expiry and refreshes only inside the last
+        // five seconds of its life — which is never true of a *proactive*
+        // refresh, whose whole point is to run while the token is still good.
+        // Asking through `authenticate` therefore returned the same token, and
+        // the caller acted on a refresh that had not happened; a transport
+        // that rebuilds its connection to carry the new token then rebuilt it
+        // onto the old one, over and over, until the token actually expired.
+        //
+        // A failure here is not fatal: fall through to the full handshake
+        // below, which is what an expired refresh token needs anyway.
+        let refreshed = force_refresh
+            && auth
+                .refresh_tokens(
+                    profile_did,
+                    service_endpoint_did,
+                    &self.did_resolver,
+                    &self.secrets_resolver,
+                    &self.client,
+                )
+                .await
+                .is_ok();
+        if !refreshed
+            && let Err(e) = auth
                 .authenticate(
-                    &profile_copy,
-                    &service_copy,
-                    &did_resolver,
-                    &secrets_resolver,
-                    &client,
+                    profile_did,
+                    service_endpoint_did,
+                    &self.did_resolver,
+                    &self.secrets_resolver,
+                    &self.client,
                     retry_limit as i32,
                 )
                 .await
-            {
-                Ok(_) => Ok(auth),
-                Err(e) => Err(e),
-            }
-        });
-
-        let sleep = tokio::time::sleep(timeout);
-        tokio::pin!(sleep);
-
-        tokio::select! {
-            value = handle => {
-                match value {
-                    Ok(Ok(auth)) => {
-                        if let Some(tokens) = &auth.tokens {
-                            self.cache
-                                .insert(
-                                    key,
-                                    AuthenticationRecord { tokens: tokens.clone(), type_: auth.type_ },
-                                )
-                                .await;
-                            let _ = tx.send(Ok(tokens.clone()));
-                        } else {
-                            let _ = tx.send(Err(DIDAuthError::AuthenticationAbort(
-                                "Internal Error: Authenticated ok, but no tokens".to_string(),
-                            )));
-                        }
-                    }
-                    Ok(Err(e)) => {
-                        warn!(profile = %profile_did, service = %service_endpoint_did, error = %e, "authentication failed");
-                        let _ = tx.send(Err(e));
-                    }
-                    Err(e) => {
-                        warn!(profile = %profile_did, service = %service_endpoint_did, error = %e, "join error on authentication task");
-                        let _ = tx.send(Err(DIDAuthError::AuthenticationAbort(format!(
-                            "JoinHandle error on spawned authentication task: {e}"
-                        ))));
-                    }
-                }
-            }
-            _ = &mut sleep => {
-                warn!("Timeout reached during authentication");
-                let _ = tx.send(Err(DIDAuthError::AuthenticationAbort("Timeout reached".to_string())));
-            }
+        {
+            warn!(profile = %profile_did, service = %service_endpoint_did, error = %e, "authentication failed");
+            return Err(e);
         }
+
+        let Some(tokens) = auth.tokens else {
+            return Err(DIDAuthError::AuthenticationAbort(
+                "Internal Error: Authenticated ok, but no tokens".to_string(),
+            ));
+        };
+        self.cache
+            .insert(
+                key,
+                AuthenticationRecord {
+                    tokens: tokens.clone(),
+                    type_: auth.type_,
+                },
+            )
+            .await;
+        Ok(tokens)
     }
 }
 
@@ -779,5 +806,204 @@ mod tests {
         let h_ab_c = hash("ab", "c");
         let h_a_bc = hash("a", "bc");
         assert_ne!(h_ab_c, h_a_bc);
+    }
+
+    /// The task side of the cache, driven by a custom authentication handler
+    /// so no service is needed: a target ending in `slow` takes `SLOW`, one
+    /// ending in `hang` never finishes, anything else answers at once.
+    mod concurrency {
+        use super::super::*;
+        use affinidi_did_authentication::{CustomAuthHandler, CustomAuthHandlers};
+        use affinidi_did_resolver_cache_sdk::config::DIDCacheConfigBuilder;
+        use std::{
+            future::Future,
+            pin::Pin,
+            sync::atomic::{AtomicUsize, Ordering},
+        };
+
+        const SLOW: Duration = Duration::from_secs(3);
+
+        #[derive(Default)]
+        struct Handler {
+            calls: AtomicUsize,
+            cancelled: Arc<AtomicUsize>,
+        }
+
+        /// Counts a handshake dropped before it finished.
+        struct CancelGuard(Arc<AtomicUsize>);
+
+        impl Drop for CancelGuard {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        fn tokens() -> AuthorizationTokens {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            AuthorizationTokens {
+                access_token: "access".into(),
+                access_expires_at: now + 3600,
+                refresh_token: "refresh".into(),
+                refresh_expires_at: now + 7200,
+            }
+        }
+
+        impl CustomAuthHandler for Handler {
+            fn authenticate<'a>(
+                &'a self,
+                _profile_did: &'a str,
+                endpoint_did: &'a str,
+                _did_resolver: &'a DIDCacheClient,
+                _client: &'a Client,
+            ) -> Pin<Box<dyn Future<Output = Result<AuthorizationTokens, DIDAuthError>> + Send + 'a>>
+            {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                let cancelled = self.cancelled.clone();
+                Box::pin(async move {
+                    if endpoint_did.ends_with("hang") {
+                        let guard = CancelGuard(cancelled);
+                        std::future::pending::<()>().await;
+                        std::mem::forget(guard);
+                    } else if endpoint_did.ends_with("slow") {
+                        tokio::time::sleep(SLOW).await;
+                    }
+                    Ok(tokens())
+                })
+            }
+        }
+
+        async fn cache(handler: Arc<Handler>) -> AuthenticationCache {
+            let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+                .await
+                .unwrap();
+            let (secrets, _task) = ThreadedSecretsResolver::new(None).await;
+            let cache = AuthenticationCache::new(
+                100,
+                &resolver,
+                secrets,
+                &Client::new(),
+                Some(CustomAuthHandlers::new().with_auth_handler(handler)),
+            );
+            cache.start();
+            cache
+        }
+
+        /// One slow service no longer holds up authentication to the others,
+        /// nor the `authenticated()` probe.
+        #[tokio::test]
+        async fn a_slow_authentication_does_not_hold_up_the_others() {
+            let handler = Arc::new(Handler::default());
+            let cache = cache(handler.clone()).await;
+
+            let slow = {
+                let cache = cache.clone();
+                tokio::spawn(async move {
+                    cache
+                        .authenticate(
+                            "did:example:alice".into(),
+                            "https://slow".into(),
+                            1,
+                            Some(Duration::from_secs(10)),
+                        )
+                        .await
+                })
+            };
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            let started = std::time::Instant::now();
+            cache
+                .authenticate_default("did:example:alice".into(), "https://fast".into())
+                .await
+                .expect("the fast service authenticates");
+            assert!(
+                cache
+                    .authenticated("did:example:alice".into(), "https://fast".into())
+                    .await
+                    .is_some()
+            );
+            assert!(started.elapsed() < SLOW / 2, "{:?}", started.elapsed());
+
+            slow.await
+                .unwrap()
+                .expect("the slow service authenticates too");
+        }
+
+        /// Concurrent requests for one pair share one handshake.
+        #[tokio::test]
+        async fn concurrent_requests_for_one_pair_share_one_handshake() {
+            let handler = Arc::new(Handler::default());
+            let cache = cache(handler.clone()).await;
+
+            let mut requests = Vec::new();
+            for _ in 0..10 {
+                let cache = cache.clone();
+                requests.push(tokio::spawn(async move {
+                    cache
+                        .authenticate(
+                            "did:example:alice".into(),
+                            "https://slow".into(),
+                            1,
+                            Some(Duration::from_secs(10)),
+                        )
+                        .await
+                }));
+            }
+            for request in requests {
+                request.await.unwrap().expect("authenticated");
+            }
+            assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
+
+            // And the result is cached.
+            cache
+                .authenticate_default("did:example:alice".into(), "https://slow".into())
+                .await
+                .unwrap();
+            assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
+        }
+
+        /// A handshake that outlives its timeout is cancelled, not left to
+        /// run on, and the caller is told it timed out.
+        #[tokio::test]
+        async fn a_timed_out_authentication_is_cancelled() {
+            let handler = Arc::new(Handler::default());
+            let cancelled = handler.cancelled.clone();
+            let cache = cache(handler.clone()).await;
+
+            let err = cache
+                .authenticate(
+                    "did:example:alice".into(),
+                    "https://hang".into(),
+                    1,
+                    Some(Duration::from_millis(200)),
+                )
+                .await
+                .expect_err("never finishes");
+            assert!(matches!(err, DIDAuthError::Timeout(_)), "{err:?}");
+            assert!(err.is_retryable());
+
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while cancelled.load(Ordering::SeqCst) == 0 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the handshake was not cancelled"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+
+        /// After `terminate`, a request is told the task is gone.
+        #[tokio::test]
+        async fn a_terminated_cache_reports_the_task_unavailable() {
+            let cache = cache(Arc::new(Handler::default())).await;
+            cache.terminate().await;
+            let err = cache
+                .authenticate_default("did:example:alice".into(), "https://fast".into())
+                .await
+                .expect_err("terminated");
+            assert!(matches!(err, DIDAuthError::TaskUnavailable(_)), "{err:?}");
+        }
     }
 }

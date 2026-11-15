@@ -9,15 +9,13 @@ use tracing::debug;
 /// List of lookups that are in progress. Note the list is not in any order.
 /// NOTE: HighwayHash128 of the DID is used as the key for the list
 /// - list: The list of requests waiting for a response from the server (key: DID Hash, value: Vec[(Unique ID, Responder Channel)]
-/// - list_full: Is the list full based on limits?
-/// - limit_count: The maximum number of items to store in the request list
+/// - limit_count: The maximum number of distinct requests in flight
 /// - total_count: The total number of items in the list
 ///
 /// NOTE: Handles duplicate DID resolver requests, by matching them in the list by the DID hash, adds elements using
 ///       the unique ID as an identifier.
 pub(crate) struct RequestList {
     list: HashMap<[u64; 2], Vec<(String, Responder)>>,
-    list_full: bool,
     limit_count: u32,
     total_count: u32,
 }
@@ -31,7 +29,6 @@ impl RequestList {
         );
         Self {
             list: HashMap::new(),
-            list_full: false,
             limit_count: config.network_cache_limit_count,
             total_count: 0,
         }
@@ -53,10 +50,6 @@ impl RequestList {
             self.list.insert(key, vec![(uid.to_string(), channel)]);
 
             self.total_count += 1;
-
-            if self.total_count > self.limit_count {
-                self.list_full = true;
-            }
 
             debug!(
                 "Request inserted: id({:#?}) list_count({})",
@@ -105,7 +98,6 @@ impl RequestList {
             {
                 self.list.remove(key);
                 self.total_count -= 1;
-                self.list_full = false;
             }
 
             response
@@ -113,7 +105,6 @@ impl RequestList {
             // Remove all channels for the key
             if let Some(channels) = self.list.remove(key) {
                 self.total_count -= 1;
-                self.list_full = false;
 
                 debug!(
                     "Request removed: hash({:#?}) channels_waiting({}) remaining_list_count({})",
@@ -130,9 +121,36 @@ impl RequestList {
         }
     }
 
-    /// Is the list full based on limits?
+    /// Is the list full: may no further distinct request be added?
+    ///
+    /// A request for a DID already in the list joins it and is always
+    /// accepted (see [`Self::contains`]).
     pub(crate) fn is_full(&self) -> bool {
-        self.list_full
+        self.total_count >= self.limit_count
+    }
+
+    /// Is a request for `key` already waiting?
+    pub(crate) fn contains(&self, key: &[u64; 2]) -> bool {
+        self.list.contains_key(key)
+    }
+
+    /// Drop the waiters that are no longer listening (their caller timed out
+    /// or was cancelled), and every request left with none.
+    pub(crate) fn prune_closed(&mut self) {
+        self.list.retain(|_, channels| {
+            channels.retain(|(_, channel)| !channel.is_closed());
+            !channels.is_empty()
+        });
+        self.total_count = self.list.len() as u32;
+    }
+
+    /// Remove every request, returning all their waiters.
+    pub(crate) fn drain(&mut self) -> Vec<Responder> {
+        self.total_count = 0;
+        self.list
+            .drain()
+            .flat_map(|(_, channels)| channels.into_iter().map(|(_, channel)| channel))
+            .collect()
     }
 }
 #[cfg(test)]
@@ -153,7 +171,7 @@ mod tests {
         let config = config::DIDCacheConfigBuilder::default().build();
         let request_list = RequestList::new(&config);
 
-        assert!(!request_list.list_full);
+        assert!(!request_list.is_full());
         assert_eq!(request_list.total_count, 0);
     }
 
@@ -210,10 +228,41 @@ mod tests {
         let insert_result2 = request_list.insert(did_hash_2, &unique_id_2, tx2);
 
         assert!(insert_result);
+        assert!(request_list.is_full());
+        // The list itself does not refuse; the network task checks `is_full`
+        // before inserting a new request.
         assert!(insert_result2);
-        assert!(request_list.list_full);
-
         assert_eq!(request_list.total_count, 2);
+    }
+
+    #[tokio::test]
+    async fn prune_closed_frees_requests_whose_callers_left() {
+        let config = config::DIDCacheConfigBuilder::default()
+            .with_network_cache_limit_count(2)
+            .build();
+        let mut request_list = RequestList::new(&config);
+
+        let (gone, gone_rx) = oneshot::channel::<WSCommands>();
+        let (waiting, _waiting_rx) = oneshot::channel::<WSCommands>();
+        request_list.insert(DIDCacheClient::hash_did(DID_KEY), &_unique_id(), gone);
+        request_list.insert(DIDCacheClient::hash_did(DID_KEY_2), &_unique_id(), waiting);
+        assert!(request_list.is_full());
+
+        drop(gone_rx);
+        request_list.prune_closed();
+        assert!(!request_list.is_full());
+        assert!(!request_list.contains(&DIDCacheClient::hash_did(DID_KEY)));
+        assert!(request_list.contains(&DIDCacheClient::hash_did(DID_KEY_2)));
+        assert_eq!(request_list.total_count, 1);
+    }
+
+    #[tokio::test]
+    async fn drain_returns_every_waiter() {
+        let (mut request_list, _) =
+            _fill_request_list([DID_KEY, DID_KEY_2].to_vec(), true, Some(2));
+        assert_eq!(request_list.drain().len(), 6);
+        assert_eq!(request_list.total_count, 0);
+        assert!(!request_list.contains(&DIDCacheClient::hash_did(DID_KEY)));
     }
 
     #[tokio::test]

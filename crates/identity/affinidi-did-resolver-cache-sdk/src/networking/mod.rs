@@ -8,7 +8,7 @@ use affinidi_did_common::{DID, Document};
 use network::WSCommands;
 use rand::{RngExt, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
-use tokio::{select, sync::oneshot};
+use tokio::sync::oneshot;
 use tracing::{Instrument, Level, debug, span, warn};
 
 use crate::{DIDCacheClient, MethodName, errors::DIDCacheError};
@@ -164,11 +164,11 @@ impl WSResponseError {
 /// `#[non_exhaustive]` here records a Rust-level rule, but the **wire**-level one
 /// is stricter and matters more: this is an externally-tagged enum, so a new
 /// variant serializes as an unrecognised key. An older client fails to
-/// deserialize it, and `ws_recv` in `network.rs` logs the parse failure and
-/// *drops the frame* — leaving the caller waiting out its full `network_timeout`
-/// with no error to report.
+/// deserialize it, and `ws_recv` in `network.rs` can at best fail the request
+/// the frame names (by its `hash`) with a transport error that says nothing
+/// about the real answer, and otherwise ignores the frame.
 ///
-/// A silent hang is a far worse failure than a clean error, so protocol growth
+/// That is a far worse failure than a clean error, so protocol growth
 /// belongs in **additive optional fields** on [`WSResponse`] and
 /// [`WSResponseError`] (as `did_log` does), never in a new variant here.
 #[derive(Debug, Deserialize, Serialize)]
@@ -178,6 +178,43 @@ pub enum WSResponseType {
     Response(Box<WSResponse>),
     /// A failure attributable to a specific request.
     Error(WSResponseError),
+}
+
+/// The state of a network-mode client's connection to the cache server, as
+/// published by [`DIDCacheClient::connection_state`].
+///
+/// The value is overwritten on every change — it is a current state, not a
+/// queue of events — so a watcher that is slow to look can miss a short drop.
+/// [`ConnectionState::Connected::epoch`] makes that visible: it counts the
+/// connections established since the client was built, so a larger epoch than
+/// the one last seen means the connection was replaced in between.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ConnectionState {
+    /// The first connection attempt is in progress.
+    Connecting,
+    /// Connected to the cache server.
+    Connected {
+        /// 1 for the first connection, and one more for each reconnect.
+        epoch: u64,
+    },
+    /// Not connected: the connection was lost, or the last attempt to make one
+    /// failed. The client keeps reconnecting with backoff; meanwhile requests
+    /// to the server fail at once with a [`DIDCacheError::TransportError`].
+    Disconnected {
+        /// Why the connection was lost, or why the last attempt failed.
+        reason: String,
+    },
+    /// The network task has stopped ([`DIDCacheClient::stop`], or every
+    /// handle on the client was dropped). It does not reconnect.
+    Stopped,
+}
+
+impl ConnectionState {
+    /// Is the client connected to the cache server?
+    pub fn is_connected(&self) -> bool {
+        matches!(self, ConnectionState::Connected { .. })
+    }
 }
 
 impl DIDCacheClient {
@@ -209,65 +246,19 @@ impl DIDCacheClient {
     ) -> Result<WSResponse, DIDCacheError> {
         let _span = span!(Level::DEBUG, "network_resolve_agent_name");
         async move {
-            let name_hash = DIDCacheClient::hash_did(canonical_name);
             debug!("resolving agent name ({canonical_name}) via network");
 
-            let network_task_tx = self.network_task_tx.clone().unwrap();
-            let (tx, rx) = oneshot::channel::<WSCommands>();
-            let unique_id: String = rand::rng()
-                .sample_iter(&Alphanumeric)
-                .take(8)
-                .map(char::from)
-                .collect();
-
-            network_task_tx
-                .send(WSCommands::Send(
-                    tx,
-                    unique_id.clone(),
-                    WSRequest::for_agent_name(canonical_name),
-                ))
+            // The server reports the DID it resolved the name to;
+            // `response.did` is that DID, not the name we sent. Unchecked: the
+            // caller verifies it only once the name's backends confirm that
+            // DID.
+            self.network_request(WSRequest::for_agent_name(canonical_name))
                 .await
-                .map_err(|e| {
-                    DIDCacheError::TransportError(format!(
-                        "Couldn't send request to network_task. Reason: {e}",
-                    ))
-                })?;
-
-            let sleep = tokio::time::sleep(self.config.network_timeout);
-            tokio::pin!(sleep);
-
-            select! {
-                _ = &mut sleep => {
-                    warn!("Timeout resolving agent name ({canonical_name})");
-                    network_task_tx
-                        .send(WSCommands::TimeOut(unique_id, name_hash))
-                        .await
-                        .map_err(|err| {
-                            DIDCacheError::TransportError(format!(
-                                "Could not send timeout message to ws_handler: {err:?}"
-                            ))
-                        })?;
-                    Err(DIDCacheError::NetworkTimeout)
-                }
-                value = rx => {
-                    match value {
-                        // The server reports the DID it resolved the name to;
-                        // `response.did` is that DID, not the name we sent.
-                        // Unchecked: the caller verifies it only once the
-                        // name's backends confirm that DID.
-                        Ok(WSCommands::ResponseReceived(response)) => Ok(*response),
-                        Ok(WSCommands::ErrorReceived(msg)) => {
-                            Err(DIDCacheError::TransportError(msg))
-                        }
-                        Ok(_) => Err(DIDCacheError::TransportError(
-                            "Unexpected response from network task".into(),
-                        )),
-                        Err(e) => Err(DIDCacheError::TransportError(format!(
-                            "Error receiving response from network task: {e:?}"
-                        ))),
+                .inspect_err(|e| {
+                    if matches!(e, DIDCacheError::NetworkTimeout) {
+                        warn!("Timeout resolving agent name ({canonical_name})");
                     }
-                }
-            }
+                })
         }
         .instrument(_span)
         .await
@@ -288,75 +279,86 @@ impl DIDCacheClient {
         async move {
             debug!("resolving did ({}) via network hash ({:#?})", did, did_hash);
 
-            let network_task_tx = self.network_task_tx
-            .clone()
-            .unwrap();
+            let response = self
+                .network_request(WSRequest::new(did))
+                .await
+                .inspect_err(|e| {
+                    if matches!(e, DIDCacheError::NetworkTimeout) {
+                        warn!(
+                            "Timeout reached, no message received did_hash ({:#?})",
+                            did_hash
+                        );
+                    }
+                })?;
+            debug!("Received response from network task ({:#?})", did_hash);
+            self.verify_network_response(
+                did,
+                response.document,
+                response.did_log,
+                response.did_witness_log,
+            )
+            .await
+        }
+        .instrument(_span)
+        .await
+    }
 
-            // Set up a oneshot channel to receive the response
-            let (tx, rx) = oneshot::channel::<WSCommands>();
-
-            // create a 8-char unique-id for this request
-            let unique_id: String = rand::rng()
+    /// Send `request` to the cache server through the network task and wait
+    /// for its answer.
+    ///
+    /// The whole exchange — handing the request to the network task and
+    /// waiting for the reply — is bounded by `network_timeout`, so a busy or
+    /// wedged task gives [`DIDCacheError::NetworkTimeout`] rather than a hang.
+    /// While the client is not connected, the network task answers at once
+    /// with a [`DIDCacheError::TransportError`].
+    async fn network_request(&self, request: WSRequest) -> Result<WSResponse, DIDCacheError> {
+        let Some(network_task_tx) = self.network_task_tx.as_ref() else {
+            return Err(DIDCacheError::ConfigError(
+                "network mode is not enabled for this client".into(),
+            ));
+        };
+        // The network task files the request under this hash, and the server
+        // answers under it.
+        let hash = DIDCacheClient::hash_did(&request.did);
+        let (tx, rx) = oneshot::channel::<WSCommands>();
+        // create a 8-char unique-id for this request
+        let unique_id: String = rand::rng()
             .sample_iter(&Alphanumeric)
             .take(8)
             .map(char::from)
             .collect();
 
-            // 1. Send the request to the network task, which will then send via websocket to the remote server
+        let exchange = async {
             network_task_tx
-                .send(WSCommands::Send(tx, unique_id.clone(), WSRequest::new(did)))
+                .send(WSCommands::Send(tx, unique_id.clone(), request))
                 .await
-                .map_err(|e| {
-                    DIDCacheError::TransportError(format!(
-                        "Couldn't send request to network_task. Reason: {e}",
-                    ))
+                .map_err(|_| {
+                    DIDCacheError::TransportError("the network task is not running".into())
                 })?;
-
-            // 2. Wait for the response from the network task
-
-            // Setup the timer for the wait, doesn't do anything till `await` is called in the select! macro
-            let sleep = tokio::time::sleep(self.config.network_timeout);
-            tokio::pin!(sleep);
-
-                select! {
-                    _ = &mut sleep => {
-                        warn!("Timeout reached, no message received did_hash ({:#?})", did_hash);
-                        network_task_tx.send(WSCommands::TimeOut(unique_id, did_hash)).await.map_err(|err| {
-                            DIDCacheError::TransportError(format!("Could not send timeout message to ws_handler: {err:?}"))
-                        })?;
-                         Err(DIDCacheError::NetworkTimeout)
-                    }
-                    value = rx => {
-                        match value {
-                            Ok(WSCommands::ResponseReceived(response)) => {
-                                debug!("Received response from network task ({:#?})", did_hash);
-                                let response = *response;
-                                self.verify_network_response(
-                                    did,
-                                    response.document,
-                                    response.did_log,
-                                    response.did_witness_log,
-                                )
-                                .await
-                            }
-                            Ok(WSCommands::ErrorReceived(msg)) => {
-                                warn!("Received error response from network task");
-                                 Err(DIDCacheError::TransportError(msg))
-                            }
-                            Ok(_) => {
-                                debug!("Received unexpected response from network task");
-                                 Err(DIDCacheError::TransportError("Unexpected response from network task".into()))
-                            }
-                            Err(e) => {
-                                debug!("Error receiving response from network task: {:?}", e);
-                                 Err(DIDCacheError::TransportError(format!("Error receiving response from network task: {e:?}")))
-                            }
-                        }
-                    }
+            match rx.await {
+                Ok(WSCommands::ResponseReceived(response)) => Ok(*response),
+                Ok(WSCommands::ErrorReceived(msg)) | Ok(WSCommands::TransportFailed(msg)) => {
+                    Err(DIDCacheError::TransportError(msg))
                 }
+                Ok(_) => Err(DIDCacheError::TransportError(
+                    "Unexpected response from network task".into(),
+                )),
+                Err(_) => Err(DIDCacheError::TransportError(
+                    "the network task dropped the request".into(),
+                )),
+            }
+        };
+
+        match tokio::time::timeout(self.config.network_timeout, exchange).await {
+            Ok(result) => result,
+            Err(_elapsed) => {
+                // Best effort: if the command channel is full, the network
+                // task still drops the request once it sees this caller has
+                // gone (see `RequestList::prune_closed`).
+                let _ = network_task_tx.try_send(WSCommands::TimeOut(unique_id, hash));
+                Err(DIDCacheError::NetworkTimeout)
+            }
         }
-        .instrument(_span)
-        .await
     }
 
     /// Check a DID document received from the cache server against the DID it
@@ -1479,5 +1481,440 @@ mod network_answer_tests {
             assert_eq!(response.doc, document);
             assert_eq!(server.requests(), 1);
         }
+    }
+}
+
+/// The network task's transport behaviour: reconnects, requests while
+/// disconnected or after a drop, timeouts, a full request list, out-of-order
+/// and fragmented replies. Each test runs a loopback stand-in server whose
+/// behaviour is chosen per connection.
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+    use crate::{ConnectionState, config::DIDCacheConfigBuilder};
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::{Duration, Instant},
+    };
+    use tokio::{
+        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+        net::TcpListener,
+        task::JoinHandle,
+    };
+    use web_socket::{CloseCode, DataType, Event, Frame, WebSocket};
+
+    const WEB_A: &str = "did:web:a.example";
+    const WEB_B: &str = "did:web:b.example";
+    const WEB_C: &str = "did:web:c.example";
+
+    #[derive(Clone, Copy, Debug)]
+    enum Mode {
+        /// Close the connection right after the upgrade.
+        CloseAtOnce,
+        /// Read requests and never answer.
+        Silent,
+        /// Close the connection when the first request arrives.
+        CloseOnRequest,
+        /// Answer each request with its own document.
+        Answer,
+        /// Answer each request in three fragments.
+        AnswerFragmented,
+        /// Answer only once two requests are in, the later one first.
+        AnswerReversed,
+        /// Answer `did:web:a.example` in an unknown shape carrying its hash,
+        /// `did:web:b.example` in an unknown shape without a hash first, then
+        /// properly; answer anything else properly.
+        AnswerUnknownShape,
+    }
+
+    struct Server {
+        address: String,
+        connections: Arc<AtomicUsize>,
+        accept_task: JoinHandle<()>,
+    }
+
+    impl Drop for Server {
+        fn drop(&mut self) {
+            self.accept_task.abort();
+        }
+    }
+
+    impl Server {
+        /// `mode` picks the behaviour for the nth connection (from 0).
+        async fn start(mode: impl Fn(usize) -> Mode + Send + Sync + 'static) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let connections = Arc::new(AtomicUsize::new(0));
+            let counter = connections.clone();
+            let accept_task = tokio::spawn(async move {
+                while let Ok((stream, _)) = listener.accept().await {
+                    let n = counter.fetch_add(1, Ordering::SeqCst);
+                    tokio::spawn(serve(stream, mode(n)));
+                }
+            });
+            Server {
+                address: format!("ws://127.0.0.1:{port}/did/v1/ws"),
+                connections,
+                accept_task,
+            }
+        }
+
+        fn connections(&self) -> usize {
+            self.connections.load(Ordering::SeqCst)
+        }
+    }
+
+    fn answer(request: &WSRequest) -> String {
+        serde_json::to_string(&WSResponseType::Response(Box::new(WSResponse::new(
+            request.did.clone(),
+            DIDCacheClient::hash_did(&request.did),
+            Document::new(&request.did).unwrap(),
+        ))))
+        .unwrap()
+    }
+
+    async fn serve(stream: tokio::net::TcpStream, mode: Mode) {
+        let mut stream = BufReader::new(stream);
+        let mut sec_key = None;
+        loop {
+            let mut line = String::new();
+            if stream.read_line(&mut line).await.unwrap_or(0) == 0 {
+                return;
+            }
+            let line = line.trim_end();
+            if line.is_empty() {
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':')
+                && name.eq_ignore_ascii_case("sec-websocket-key")
+            {
+                sec_key = Some(value.trim().to_string());
+            }
+        }
+        let Some(sec_key) = sec_key else { return };
+        let upgrade = format!(
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+             Sec-WebSocket-Accept: {}\r\n\r\n",
+            handshake::accept_key_from(sec_key)
+        );
+        if stream.write_all(upgrade.as_bytes()).await.is_err() {
+            return;
+        }
+
+        let mut socket = WebSocket::server(stream);
+        if let Mode::CloseAtOnce = mode {
+            let _ = socket.close(CloseCode::Normal).await;
+            return;
+        }
+        let mut received: Vec<WSRequest> = Vec::new();
+        while let Ok(event) = socket.recv().await {
+            match event {
+                Event::Data {
+                    ty: DataType::Complete(_),
+                    data,
+                } => {
+                    let Ok(request) = serde_json::from_slice::<WSRequest>(&data) else {
+                        continue;
+                    };
+                    match mode {
+                        Mode::CloseAtOnce | Mode::Silent => {}
+                        Mode::CloseOnRequest => return,
+                        Mode::Answer => {
+                            if socket.send(answer(&request).as_str()).await.is_err() {
+                                return;
+                            }
+                        }
+                        Mode::AnswerFragmented => {
+                            let reply = answer(&request);
+                            let bytes = reply.as_bytes();
+                            let (a, rest) = bytes.split_at(bytes.len() / 3);
+                            let (b, c) = rest.split_at(rest.len() / 2);
+                            for (fin, opcode, data) in [(false, 1, a), (false, 0, b), (true, 0, c)]
+                            {
+                                if socket.send_raw(Frame { fin, opcode, data }).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        Mode::AnswerUnknownShape => {
+                            let hash = DIDCacheClient::hash_did(&request.did);
+                            let frames = match request.did.as_str() {
+                                WEB_A => vec![format!(
+                                    r#"{{"NewVariant":{{"did":"{}","hash":[{},{}]}}}}"#,
+                                    request.did, hash[0], hash[1]
+                                )],
+                                WEB_B => vec![
+                                    r#"{"NewVariant":{"note":"no hash"}}"#.to_string(),
+                                    answer(&request),
+                                ],
+                                _ => vec![answer(&request)],
+                            };
+                            for frame in frames {
+                                if socket.send(frame.as_str()).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        Mode::AnswerReversed => {
+                            received.push(request);
+                            if received.len() == 2 {
+                                for request in received.iter().rev() {
+                                    if socket.send(answer(request).as_str()).await.is_err() {
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Event::Ping(data) => {
+                    let _ = socket.send_pong(data).await;
+                }
+                Event::Close { .. } => return,
+                _ => {}
+            }
+        }
+    }
+
+    async fn client(address: &str, timeout_ms: u32) -> DIDCacheClient {
+        DIDCacheClient::new(
+            DIDCacheConfigBuilder::default()
+                .with_network_mode(address)
+                .with_network_timeout(timeout_ms)
+                .build(),
+        )
+        .await
+        .unwrap()
+    }
+
+    /// Wait until the client's connection state satisfies `ready`.
+    async fn wait_for_state(
+        client: &DIDCacheClient,
+        within: Duration,
+        ready: impl FnMut(&ConnectionState) -> bool,
+    ) -> ConnectionState {
+        let mut state = client.connection_state().expect("network mode");
+        tokio::time::timeout(within, state.wait_for(ready))
+            .await
+            .expect("the connection state is reached in time")
+            .expect("the connection state is still published")
+            .clone()
+    }
+
+    /// Every reconnect used to queue a message on a 32-slot channel that was
+    /// read once, so the 33rd reconnect blocked the network task for good.
+    #[tokio::test]
+    async fn many_reconnects_do_not_wedge_the_client() {
+        const DROPS: usize = 40;
+        let server = Server::start(|n| {
+            if n < DROPS {
+                Mode::CloseAtOnce
+            } else {
+                Mode::Answer
+            }
+        })
+        .await;
+        let client = client(&server.address, 5000).await;
+
+        let state = wait_for_state(
+            &client,
+            Duration::from_secs(60),
+            |state| matches!(state, ConnectionState::Connected { epoch } if *epoch > DROPS as u64),
+        )
+        .await;
+        assert_eq!(
+            state,
+            ConnectionState::Connected {
+                epoch: DROPS as u64 + 1
+            }
+        );
+        assert_eq!(server.connections(), DROPS + 1);
+
+        let response = tokio::time::timeout(Duration::from_secs(10), client.resolve(WEB_A))
+            .await
+            .expect("resolution does not hang")
+            .expect("resolves once connected");
+        assert_eq!(response.doc.id.as_str(), WEB_A);
+    }
+
+    /// While the server is unreachable, a request fails at once instead of
+    /// waiting out the timeout, however many there are.
+    #[tokio::test]
+    async fn requests_fail_at_once_while_disconnected() {
+        let client = client("ws://127.0.0.1:9", 5000).await;
+        let state = wait_for_state(&client, Duration::from_secs(5), |state| {
+            matches!(state, ConnectionState::Disconnected { .. })
+        })
+        .await;
+        assert!(!state.is_connected());
+
+        let started = Instant::now();
+        let mut requests = Vec::new();
+        for i in 0..200 {
+            let client = client.clone();
+            requests.push(tokio::spawn(async move {
+                client.resolve(&format!("did:web:host{i}.example")).await
+            }));
+        }
+        for request in requests {
+            let error = request.await.unwrap().expect_err("not connected");
+            assert!(
+                matches!(&error, DIDCacheError::TransportError(msg) if msg.contains("not connected")),
+                "{error:?}"
+            );
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// A request in flight when the connection drops is answered with an
+    /// error at once, and the state shows the drop and the reconnect.
+    #[tokio::test]
+    async fn a_request_in_flight_fails_when_the_connection_drops() {
+        let server = Server::start(|n| {
+            if n == 0 {
+                Mode::CloseOnRequest
+            } else {
+                Mode::Answer
+            }
+        })
+        .await;
+        let client = client(&server.address, 10_000).await;
+        let mut state = client.connection_state().unwrap();
+        assert_eq!(
+            *state.borrow_and_update(),
+            ConnectionState::Connected { epoch: 1 }
+        );
+
+        let started = Instant::now();
+        let error = client
+            .resolve(WEB_A)
+            .await
+            .expect_err("the connection dropped");
+        assert!(
+            matches!(&error, DIDCacheError::TransportError(msg) if msg.contains("lost")),
+            "{error:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+
+        let state = wait_for_state(&client, Duration::from_secs(10), |state| {
+            matches!(state, ConnectionState::Connected { epoch: 2 })
+        })
+        .await;
+        assert!(state.is_connected());
+        let response = client
+            .resolve(WEB_A)
+            .await
+            .expect("resolves after reconnecting");
+        assert_eq!(response.doc.id.as_str(), WEB_A);
+    }
+
+    /// A silent server gives `NetworkTimeout` after `network_timeout`; a full
+    /// request list refuses at once; and the list frees up once its callers
+    /// have timed out.
+    #[tokio::test]
+    async fn timeouts_and_a_full_request_list() {
+        let server = Server::start(|_| Mode::Silent).await;
+        let client = DIDCacheClient::new(
+            DIDCacheConfigBuilder::default()
+                .with_network_mode(&server.address)
+                .with_network_timeout(500)
+                .with_network_cache_limit_count(1)
+                .build(),
+        )
+        .await
+        .unwrap();
+
+        let first = {
+            let client = client.clone();
+            tokio::spawn(async move { client.resolve(WEB_A).await })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let started = Instant::now();
+        let error = client.resolve(WEB_B).await.expect_err("the list is full");
+        assert!(
+            matches!(&error, DIDCacheError::TransportError(msg) if msg.contains("too many")),
+            "{error:?}"
+        );
+        assert!(started.elapsed() < Duration::from_millis(400));
+
+        let error = first.await.unwrap().expect_err("the server never answers");
+        assert!(matches!(error, DIDCacheError::NetworkTimeout), "{error:?}");
+
+        // The first caller has gone, so the list has room again.
+        let error = client.resolve(WEB_C).await.expect_err("still silent");
+        assert!(matches!(error, DIDCacheError::NetworkTimeout), "{error:?}");
+    }
+
+    /// Replies are matched to requests by hash, in whatever order they come.
+    #[tokio::test]
+    async fn out_of_order_replies_reach_their_callers() {
+        let server = Server::start(|_| Mode::AnswerReversed).await;
+        let client = client(&server.address, 5000).await;
+
+        let (a, b) = tokio::join!(client.resolve(WEB_A), client.resolve(WEB_B));
+        assert_eq!(a.unwrap().doc.id.as_str(), WEB_A);
+        assert_eq!(b.unwrap().doc.id.as_str(), WEB_B);
+    }
+
+    /// A reply split into fragments is reassembled, not dropped.
+    #[tokio::test]
+    async fn a_fragmented_reply_is_reassembled() {
+        let server = Server::start(|_| Mode::AnswerFragmented).await;
+        let client = client(&server.address, 5000).await;
+
+        let response = client.resolve(WEB_A).await.expect("fragments reassembled");
+        assert_eq!(response.doc.id.as_str(), WEB_A);
+    }
+
+    /// An answer this client cannot parse is not a connection fault (the
+    /// server may be newer): the connection stays up, the request it names
+    /// fails, and other requests in flight complete.
+    #[tokio::test]
+    async fn an_unparseable_answer_does_not_drop_the_connection() {
+        let server = Server::start(|_| Mode::AnswerUnknownShape).await;
+        let client = client(&server.address, 5000).await;
+        let mut state = client.connection_state().unwrap();
+        assert_eq!(
+            *state.borrow_and_update(),
+            ConnectionState::Connected { epoch: 1 }
+        );
+
+        let started = Instant::now();
+        let (a, b, c) = tokio::join!(
+            client.resolve(WEB_A),
+            client.resolve(WEB_B),
+            client.resolve(WEB_C)
+        );
+        let error = a.expect_err("an answer in an unknown shape");
+        assert!(
+            matches!(&error, DIDCacheError::TransportError(msg) if msg.contains("could not be parsed")),
+            "{error:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(4), "failed at once");
+        assert_eq!(b.unwrap().doc.id.as_str(), WEB_B);
+        assert_eq!(c.unwrap().doc.id.as_str(), WEB_C);
+
+        assert!(!state.has_changed().unwrap(), "{:?}", *state.borrow());
+        assert_eq!(server.connections(), 1);
+    }
+
+    /// `stop()` is published.
+    #[tokio::test]
+    async fn stop_is_published() {
+        let server = Server::start(|_| Mode::Answer).await;
+        let client = client(&server.address, 5000).await;
+        client.stop();
+        wait_for_state(&client, Duration::from_secs(5), |state| {
+            *state == ConnectionState::Stopped
+        })
+        .await;
     }
 }
