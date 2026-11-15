@@ -503,6 +503,7 @@ dependencies = [
  "futures-util",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -534,7 +535,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm-service"
-version = "0.36.1"
+version = "0.37.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-messaging-core",

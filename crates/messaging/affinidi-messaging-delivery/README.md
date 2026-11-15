@@ -34,9 +34,12 @@ re-queues a settled `Unconfirmed` or `Failed` entry.
 
 On the receiving side an unsolicited application message from an
 authenticated sender is recorded in an `InboxStore` before it is acked or
-receipted, keyed by the sender and its idempotency key (delivery id) or
-message id. A re-sent copy of a recorded message is acked and receipted again
-but not handed to subscribers a second time. The default `InMemoryInboxStore`
+receipted, keyed by the sender, its idempotency key (delivery id) or message
+id, and the payload digest. A re-sent copy of a recorded message is acked and
+receipted again but not handed to subscribers a second time; an id reused for
+different content is delivered as a message of its own. The inbox is bounded
+per sender and in total (a message it refuses stays unacked at the mediator),
+and the service applies its retention itself. The default `InMemoryInboxStore`
 lasts as long as the process; supply a durable store with
 `MessagingService::with_inbox` and call `redeliver_pending` after subscribing
 at startup so a receipt means the message survives a restart.

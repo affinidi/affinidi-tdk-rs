@@ -30,7 +30,8 @@
 //!   already recorded is acked and receipted without reaching subscribers
 //!   again. [`InMemoryInboxStore`] is the default; back it with a durable
 //!   store ([`MessagingService::with_inbox`]) for a receipt to mean the
-//!   message survives a restart.
+//!   message survives a restart. Bounded per sender and in total, with
+//!   retention the service applies itself.
 //!
 //! # Wiring
 //!
@@ -93,7 +94,7 @@
 //!
 //! - **Deduplicate everything inbound.** The [`inbox`] dedups application
 //!   messages from an authenticated sender, by the sender's idempotency key or
-//!   message id. A message without an authenticated sender, a relationship
+//!   message id and the payload digest, within its retention window. A message without an authenticated sender, a relationship
 //!   control message, a reply handed to a `request` waiter, and a message that
 //!   reached only some subscribers before being offered again can still reach
 //!   the application twice (see [`MessagingService::subscribe`]).
@@ -136,7 +137,8 @@ pub use confirm::{
 };
 pub use drain::{DrainReport, drain_loop, drain_loop_via, drain_once, drain_once_via};
 pub use inbox::{
-    InMemoryInboxStore, InboxError, InboxKey, InboxRecord, InboxState, InboxStore, Recorded,
+    INBOX_REAP_INTERVAL, InMemoryInboxStore, InboxError, InboxKey, InboxLimits, InboxReapReport,
+    InboxRecord, InboxRefusal, InboxRetention, InboxState, InboxStore, Recorded, payload_digest,
 };
 pub use outbox::{
     InMemoryOutboxStore, Key, OutboxEntry, OutboxError, OutboxState, OutboxStore, Transition,

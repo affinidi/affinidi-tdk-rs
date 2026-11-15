@@ -4,6 +4,10 @@
 
 TSP receive runs the shared `affinidi-tsp` receive path (#1141)
 
+New: `ATM::report_unprocessable(attachment_id, raw, reason)` puts a message a
+consumer is about to drop or dead-letter on the same unprocessable-message
+channel the SDK's own drain uses (additive).
+
 `TspOps::unpack`, `unpack_bytes`, `unpack_message`, `unpack_control` and the
 TSP-multiplexed socket's event opener now open a message through
 `affinidi_tsp::receive::receive`, the same code `TspAgent::receive` runs. The

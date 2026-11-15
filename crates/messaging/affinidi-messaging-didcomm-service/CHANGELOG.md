@@ -1,20 +1,46 @@
 # Changelog
 
-## [0.36.1] - 2026-11-15
+## [0.37.0] - 2026-11-15
 
-A TSP frame that fails to unpack for a reason that may clear is left queued, not acked (#1141)
+Poison frames are dead-lettered; a TSP frame that fails transiently is left queued, not acked (#1141)
 
-**Behaviour (R3.6):** when unpacking an inbound TSP frame fails transiently —
-the sender's (or our own) DID did not resolve, or the sender's key state is
-not confirmed after a silence because a refresh failed or is in progress
-(Rev 3 §7.4.2, `affinidi-messaging-sdk` 0.49.3) — the frame is no longer acked
-on either path. On the live stream its claim is released unacked, and the
-offline drain does not ack it either, so it stays at the mediator and a later
-sync offers it again. A frame that fails for good (malformed, wrong
-recipient, a signature that does not verify against confirmed key state, the
-§7.2.2 relationship gate) is still acked, as before. Uses
-`ATMError::is_transient_unpack_failure`, public from SDK 0.49.3, which this
-release requires.
+Breaking: `ListenerConfig` gains two public fields (a struct literal that
+names every field no longer compiles; `ListenerConfig::new`/`Default` users
+are unaffected), and `ConfigError` a variant (it is `#[non_exhaustive]`).
+Requires `affinidi-messaging-sdk` 0.49.3.
+
+- **New `ListenerConfig::handler_timeout`** (default
+  `DEFAULT_HANDLER_TIMEOUT`, 60 s; zero is refused with
+  `ConfigError::ZeroHandlerTimeout`) **and `max_handler_failures`** (default
+  `DEFAULT_MAX_HANDLER_FAILURES`, 5).
+
+**Behaviour (R3.6):**
+
+- **Poison frames are bounded.** Since the ack follows the handler, a frame
+  whose handler panicked or hung was never acked and came back on every
+  redelivery, holding a handler permit each time. Every handler — live stream
+  (DIDComm-only and multiplexed) and offline drain — now runs under
+  `handler_timeout` with its panic caught. A panic or timeout leaves the frame
+  queued and counts a failure against its mediator message id (a bounded
+  count, shared by both paths); at `max_handler_failures` the frame is
+  dead-lettered: **acked whatever `auto_delete` says**, reported on the SDK's
+  unprocessable-message channel, and logged at error. A timed-out handler is
+  aborted. Before, the offline drain acked a batch even when a handler in it
+  had panicked; it now leaves that message queued like the live path.
+- **A TSP frame that fails to unpack for a reason that may clear is left
+  queued.** The sender's (or our own) DID did not resolve, or the sender's key
+  state is not confirmed after a silence because a refresh failed or is in
+  progress (Rev 3 §7.4.2, SDK 0.49.3): the frame is no longer acked on either
+  path. On the live stream its claim is released unacked, and the offline
+  drain does not ack it either, so a later sync offers it again. A frame that
+  fails for good (malformed, wrong recipient, a signature that does not verify
+  against confirmed key state, the §7.2.2 relationship gate) is still acked.
+  Uses `ATMError::is_transient_unpack_failure`, public from SDK 0.49.3.
+- **A TSP frame that does not decode is reported.** Decoding is base64url and
+  a magic-byte check — a pure function of the stored bytes, so a failure is
+  permanent and the frame is still acked; it is now also reported on the
+  unprocessable-message channel with its raw body (`ATM::report_unprocessable`,
+  SDK 0.49.3), not only logged.
 
 ## [0.36.0] - 2026-11-15
 

@@ -1,6 +1,7 @@
 mod inflight;
 mod listener;
 mod mediator;
+mod poison;
 mod restart;
 
 use std::collections::{HashMap, HashSet};
