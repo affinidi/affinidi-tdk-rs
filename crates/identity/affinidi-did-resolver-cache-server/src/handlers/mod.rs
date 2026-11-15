@@ -1,6 +1,6 @@
 use crate::{SharedData, WebvhLogCache, WebvhLogs, config::Config};
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, ResolveResponse, errors::DIDCacheError};
-use axum::{Json, Router, extract::State, response::IntoResponse, routing::get};
+use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 use std::future::Future;
 use std::time::Duration;
 use tracing::{info, warn};
@@ -26,6 +26,35 @@ impl std::fmt::Display for ResolveError {
         match self {
             ResolveError::Resolver(e) => write!(f, "{e}"),
             ResolveError::Timeout(secs) => write!(f, "resolution timed out after {secs}s"),
+        }
+    }
+}
+
+impl ResolveError {
+    /// The HTTP status for this failure, as the agent name endpoint answers:
+    ///
+    /// - `400` — the request is at fault: a malformed DID, an unsupported
+    ///   method, or a DID that cannot be resolved as given.
+    /// - `404` — the DID's host answered 404 or 410.
+    /// - `502` — the DID's host failed (any other status, or no answer), or a
+    ///   transport to it failed.
+    /// - `504` — resolution timed out.
+    /// - `500` — this server is at fault.
+    pub(crate) fn status_code(&self) -> StatusCode {
+        match self {
+            ResolveError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
+            ResolveError::Resolver(error) => match error {
+                DIDCacheError::DIDError(_)
+                | DIDCacheError::UnsupportedMethod(_)
+                | DIDCacheError::ParsingError(_) => StatusCode::BAD_REQUEST,
+                DIDCacheError::NetworkFetch(fetch) => match fetch.status {
+                    Some(404 | 410) => StatusCode::NOT_FOUND,
+                    _ => StatusCode::BAD_GATEWAY,
+                },
+                DIDCacheError::TransportError(_) => StatusCode::BAD_GATEWAY,
+                DIDCacheError::NetworkTimeout => StatusCode::GATEWAY_TIMEOUT,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            },
         }
     }
 }
@@ -294,6 +323,54 @@ mod tests {
         let fut = std::future::ready(Err::<(), _>(DIDCacheError::DIDError("bad".into())));
         let res = apply_timeout(Duration::from_secs(5), fut).await;
         assert!(matches!(res, Err(ResolveError::Resolver(_))));
+    }
+
+    #[test]
+    fn resolution_failures_map_to_http_statuses() {
+        use affinidi_did_resolver_cache_sdk::errors::NetworkFetchError;
+        let resolver = |e| ResolveError::Resolver(e).status_code();
+        assert_eq!(
+            ResolveError::Timeout(30).status_code(),
+            StatusCode::GATEWAY_TIMEOUT
+        );
+        assert_eq!(
+            resolver(DIDCacheError::DIDError("bad".into())),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            resolver(DIDCacheError::UnsupportedMethod("foo".into())),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            resolver(DIDCacheError::NetworkFetch(
+                NetworkFetchError::new("gone").with_status(404)
+            )),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            resolver(DIDCacheError::NetworkFetch(
+                NetworkFetchError::new("slow down").with_status(429)
+            )),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            resolver(DIDCacheError::NetworkFetch(NetworkFetchError::new(
+                "no answer"
+            ))),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            resolver(DIDCacheError::TransportError("x".into())),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            resolver(DIDCacheError::NetworkTimeout),
+            StatusCode::GATEWAY_TIMEOUT
+        );
+        assert_eq!(
+            resolver(DIDCacheError::ConfigError("x".into())),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 
     #[test]

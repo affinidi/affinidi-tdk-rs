@@ -5,18 +5,15 @@ use axum::{
     http::request::Parts,
 };
 use chrono::{DateTime, Utc};
-use session::SessionError;
 use statistics::Statistics;
-use std::{fmt::Debug, sync::Arc, time::Duration};
+use std::{convert::Infallible, fmt::Debug, sync::Arc, time::Duration};
 use tokio::sync::{Mutex, MutexGuard, Semaphore};
 
-pub(crate) mod common;
 pub mod config;
 pub mod errors;
 pub mod handlers;
 pub mod limits;
 pub mod server;
-pub mod session;
 pub mod statistics;
 
 /// Cached `did:webvh` side-files for one DID: `(did.jsonl, did-witness.json)`.
@@ -73,7 +70,7 @@ where
     Self: FromRef<S>,
     S: Send + Sync + Debug,
 {
-    type Rejection = SessionError;
+    type Rejection = Infallible;
 
     async fn from_request_parts(_parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         Ok(Self::from_ref(state))

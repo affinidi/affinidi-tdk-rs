@@ -51,7 +51,31 @@ referenced from `cache-conf.toml` (see the default config for the full list).
 Every setting except `capacity_count`, `expire` and `webvh_log_expire` is a
 top-level key and must appear **above** the `[cache]` header: TOML puts every
 key after a table header into that table. An unknown key, at the top level or
-under `[cache]`, fails startup with an error naming it.
+under `[cache]`, fails startup with an error naming it. So does a value that
+does not parse (a number with a typo, a boolean other than
+`true`/`false`/`yes`/`no`/`on`/`off`/`1`/`0`, an unknown `log_level`): the error
+names the key and the value.
+
+## HTTP resolver responses
+
+`GET /did/v1/resolve/{did}` answers `200` with the document, or an error
+`{"error": "..."}` with a status that says whose fault it is:
+
+| Status | When |
+|---|---|
+| `400` | The DID is malformed, too long, of an unsupported method, or cannot be resolved as given. |
+| `404` | The DID's host answered 404 or 410. |
+| `502` | The DID's host failed otherwise (another status, rate limiting, no answer). |
+| `504` | Resolution took longer than `resolve_timeout`. |
+| `500` | A fault in this server. |
+
+## WebSocket requests
+
+Requests on one WebSocket connection are resolved concurrently, and each
+response is sent as soon as it is ready: responses can arrive in a different
+order from the requests, and the client matches them by hash. At most
+`ws_max_inflight_per_connection` requests per connection are in progress at
+once; past that, the server stops reading the connection until one finishes.
 
 ## Client limits
 
@@ -66,6 +90,7 @@ under `[cache]`, fails startup with an error naming it.
 | `ws_idle_timeout` (`WS_IDLE_TIMEOUT`) | `120` s | A WebSocket that receives nothing (pings included) for this long is closed. |
 | `ws_send_timeout` (`WS_SEND_TIMEOUT`) | `10` s | A response send that takes longer closes the connection. |
 | `ws_max_message_size` (`WS_MAX_MESSAGE_SIZE`) | `0` | Largest WebSocket message in bytes; `0` means `2 * max_did_size + 1024`. |
+| `ws_max_inflight_per_connection` (`WS_MAX_INFLIGHT_PER_CONNECTION`) | `32` | Requests one WebSocket connection may have in progress at once. |
 
 Behind a load balancer, list it in `trusted_proxies`; otherwise every client
 is charged and counted as the load balancer's address.

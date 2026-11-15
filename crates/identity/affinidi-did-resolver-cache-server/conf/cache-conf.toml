@@ -1,3 +1,7 @@
+### Every value must parse: a value that does not (a typo in a number, a
+### boolean other than true/false/yes/no/on/off/1/0, an unknown log level)
+### fails startup with an error naming the key and the value.
+
 ### log_level: trace debug info warn error
 ### default: info
 log_level = "info"
@@ -7,7 +11,7 @@ log_level = "info"
 listen_address = "${LISTEN_ADDRESS:0.0.0.0:8080}"
 
 ### statistics_interval: # of seconds between statistics logging
-### Default: 60 second
+### Default: 10 seconds (as shipped here; the key is required)
 statistics_interval = "${STATISTICS_INTERVAL:10}"
 
 ### resolve_timeout: max seconds a single upstream DID resolution may take
@@ -25,14 +29,14 @@ max_did_size = "${MAX_DID_SIZE:1024}"
 
 ### enable_http_endpoint: true/false
 ### Default: true
-### If true, the server will make available /resolve endpoint for HTTP GET requests
-### that will resolve a DID Document from the cache.
+### If true, the server will make available the /did/v1/resolve/{did} endpoint
+### for HTTP GET requests that will resolve a DID Document from the cache.
 enable_http_endpoint = "${ENABLE_HTTP_ENDPOINT:true}"
 
 ### enable_websocket_endpoint: true/false
 ### Default: true
-### If true, the server will make available /resolve endpoint for websocket requests
-### that will resolve a DID Document from the cache.
+### If true, the server will make available the /did/v1/ws WebSocket endpoint
+### that the resolver SDK uses in network mode.
 enable_websocket_endpoint = "${ENABLE_WEBSOCKET_ENDPOINT:true}"
 
 # Agent name (DID shortcut) lookup: GET /did/v1/resolve-name/{*name}
@@ -67,8 +71,8 @@ agent_name_concurrency = "${AGENT_NAME_CONCURRENCY:16}"
 # and shares one bucket: list the proxies in `trusted_proxies` below so each
 # client is charged by the address the proxy reports.
 #
-# An unparseable value falls back to the default rather than to 0, so a typo
-# cannot silently disable limiting. Set "0" explicitly to disable.
+# An unparseable value fails startup, so a typo cannot silently disable (or
+# change) limiting. Set "0" explicitly to disable.
 rate_limit_per_ip = "${RATE_LIMIT_PER_IP:100}"
 
 # Token-bucket depth above the sustained per-address rate: how large a burst
@@ -93,26 +97,24 @@ trusted_proxies = "${TRUSTED_PROXIES:}"
 client_ipv6_prefix = "${CLIENT_IPV6_PREFIX:64}"
 
 # Open WebSocket connections across all clients. A new connection over the
-# limit is refused with 503 before the upgrade. 0 or an unparseable value
-# keeps the default.
+# limit is refused with 503 before the upgrade. 0 keeps the default.
 # Default: 4096
 ws_max_connections = "${WS_MAX_CONNECTIONS:4096}"
 
 # Open WebSocket connections per client address (see client_ipv6_prefix).
 # A new connection over the limit is refused with 429 before the upgrade.
-# 0 or an unparseable value keeps the default.
+# 0 keeps the default.
 # Default: 64
 ws_max_connections_per_ip = "${WS_MAX_CONNECTIONS_PER_IP:64}"
 
 # Seconds a WebSocket may go without receiving any frame (requests, pings)
 # before the server closes it. The resolver SDK pings every 20 seconds.
-# 0 or an unparseable value keeps the default.
+# 0 keeps the default.
 # Default: 120
 ws_idle_timeout = "${WS_IDLE_TIMEOUT:120}"
 
 # Seconds a single WebSocket send may take; a client that does not read its
-# responses within it is disconnected. 0 or an unparseable value keeps the
-# default.
+# responses within it is disconnected. 0 keeps the default.
 # Default: 10
 ws_send_timeout = "${WS_SEND_TIMEOUT:10}"
 
@@ -121,6 +123,13 @@ ws_send_timeout = "${WS_SEND_TIMEOUT:10}"
 # 2 * max_did_size + 1024 (3072 with the default max_did_size).
 # Default: 0
 ws_max_message_size = "${WS_MAX_MESSAGE_SIZE:0}"
+
+# Requests one WebSocket connection may have in progress at once. They are
+# resolved concurrently and answered as each finishes, so a slow DID does not
+# hold up the others on the connection. Past the limit the server stops
+# reading the connection until one finishes. 0 keeps the default.
+# Default: 32
+ws_max_inflight_per_connection = "${WS_MAX_INFLIGHT_PER_CONNECTION:32}"
 
 [cache]
 ### capacity_count: Approx how many items to cache in memory

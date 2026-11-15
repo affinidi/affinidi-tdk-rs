@@ -88,9 +88,9 @@ client.append_resolver(MethodName::Cheqd, Box::new(MyCheqdResolver));
 ### Local Mode (default)
 
 ```rust
-use affinidi_did_resolver_cache_sdk::{config::ClientConfigBuilder, DIDCacheClient};
+use affinidi_did_resolver_cache_sdk::{config::DIDCacheConfigBuilder, DIDCacheClient};
 
-let config = ClientConfigBuilder::default().build();
+let config = DIDCacheConfigBuilder::default().build();
 let resolver = DIDCacheClient::new(config).await?;
 
 match resolver.resolve("did:key:z6Mkr...").await {
@@ -104,8 +104,9 @@ match resolver.resolve("did:key:z6Mkr...").await {
 Enable the `network` feature, then point to a running cache server:
 
 ```rust
-let config = ClientConfigBuilder::default()
-    .with_network_mode("ws://127.0.0.1:8080/did/v1/ws")
+let config = DIDCacheConfigBuilder::default()
+    // wss:// for anything but a cache server on this machine (see below)
+    .with_network_mode("wss://did-cache.example.com/did/v1/ws")
     .with_cache_ttl(60)            // Cache TTL in seconds
     .with_network_timeout(20_000)  // Timeout in milliseconds
     .build();
@@ -113,6 +114,15 @@ let resolver = DIDCacheClient::new(config).await?;
 ```
 
 Network mode still caches locally to reduce remote calls.
+
+The client keeps one WebSocket to the server and reconnects with backoff when
+it drops. `connection_state()` returns a `tokio::sync::watch::Receiver` that
+reports every drop (`Disconnected`), every reconnect (`Connected`, with an
+`epoch` that counts connections) and the end (`Stopped`). While the client is
+disconnected, a request that needs the server fails at once with a transport
+error; a request in flight when the connection drops fails then, rather than
+waiting out `network_timeout`. Every request is bounded by `network_timeout`
+as a whole.
 
 What the server answers is checked against the DID asked for, as local
 resolution would check it:
@@ -196,7 +206,7 @@ The cache uses **per-method TTL** to avoid unnecessary re-resolution:
 | Category | Methods | TTL | Rationale |
 |---|---|---|---|
 | **Immutable** | `did:key`, `did:peer`, `did:jwk`, `did:ethr`, `did:pkh` (last three feature-gated) | None (capacity-evicted only) | Document is derived deterministically from the DID string |
-| **Mutable** | `did:web`, `did:webvh`, `did:cheqd`, `did:scid` | Configurable (`cache_ttl`, default 300s) | Document is fetched from external infrastructure and can change |
+| **Mutable** | `did:web`, `did:webvh`, `did:scid`, `did:ebsi`, `did:webs`, `did:cheqd` (retired), and any method handled by a custom resolver | Configurable (`cache_ttl`, default 300s) | Document is fetched from external infrastructure and can change |
 
 The `cache_ttl` configuration option only applies to mutable DID methods.
 Immutable DIDs stay cached until evicted by capacity pressure, since their

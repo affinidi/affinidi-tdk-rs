@@ -9,7 +9,7 @@ use axum::{
 };
 use http::StatusCode;
 use serde_json::{Value, json};
-use tracing::error;
+use tracing::{debug, error, warn};
 
 pub async fn resolver_handler(
     State(state): State<SharedData>,
@@ -76,11 +76,13 @@ pub async fn resolver_handler(
         }
         Err(e) => {
             state.stats.lock().await.increment_resolver_error();
-            error!("Error resolving DID ({}): {:?}", did, e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            )
+            let status = e.status_code();
+            if status.is_server_error() {
+                warn!("Error resolving DID ({did}): {e}");
+            } else {
+                debug!("Refused DID ({did}): {e}");
+            }
+            (status, Json(json!({ "error": e.to_string() })))
         }
     }
 }

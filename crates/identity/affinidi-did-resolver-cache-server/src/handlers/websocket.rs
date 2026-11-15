@@ -13,7 +13,17 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use std::net::{IpAddr, SocketAddr};
+use futures_util::{SinkExt, StreamExt, stream::SplitSink};
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
+use tokio::{
+    select,
+    sync::{Semaphore, mpsc},
+    task::JoinSet,
+};
 use tracing::{Instrument, debug, info, span, warn};
 
 use crate::{
@@ -40,53 +50,15 @@ async fn build_response(
     ))
 }
 
-/// Serialize and send a WS response. Returns `false` if the connection should
-/// be closed (serialization failure, send error, or a send that did not
-/// complete within the configured send timeout). Never panics.
-async fn send_response(
-    socket: &mut WebSocket,
-    state: &SharedData,
-    message: &WSResponseType,
-) -> bool {
-    let text = match serde_json::to_string(message) {
-        Ok(text) => text,
-        Err(e) => {
-            warn!("ws: failed to serialize response, closing connection: {e:?}");
-            return false;
-        }
-    };
-    let send_timeout = state.ws_limits.send_timeout;
-    match tokio::time::timeout(send_timeout, socket.send(Message::Text(text.into()))).await {
-        Ok(Ok(())) => {
-            debug!("Sent response: {message:?}");
-            true
-        }
-        Ok(Err(e)) => {
-            warn!("ws: Error sending response: {e:?}");
-            false
-        }
-        Err(_elapsed) => {
-            warn!(
-                "ws: response not sent within {}s, closing connection",
-                send_timeout.as_secs()
-            );
-            false
-        }
-    }
-}
-
-/// Resolve `did` (bounded by the configured timeout) and send the response, or
-/// an error response if resolution fails or times out. Returns `false` if the
-/// connection should be closed.
 /// Route a request to the DID path or the agent name path.
 ///
 /// An agent name request carries the name in `did` *and* in `agent_name`; a
 /// server without agent name support simply never sees the latter and treats the
 /// name as a DID, which fails cleanly.
-async fn dispatch_request(socket: &mut WebSocket, state: &SharedData, request: WSRequest) -> bool {
+async fn dispatch_request(state: &SharedData, request: WSRequest) -> WSResponseType {
     match request.agent_name {
-        Some(name) => resolve_agent_name_and_respond(socket, state, name).await,
-        None => resolve_and_respond(socket, state, request.did).await,
+        Some(name) => resolve_agent_name(state, name).await,
+        None => resolve_did(state, request.did).await,
     }
 }
 
@@ -99,43 +71,29 @@ async fn dispatch_request(socket: &mut WebSocket, state: &SharedData, request: W
 ///
 /// The client re-verifies `alsoKnownAs` against the document itself — this
 /// server is a cache, not a trust anchor — so no verification is claimed here.
-async fn resolve_agent_name_and_respond(
-    socket: &mut WebSocket,
-    state: &SharedData,
-    name: String,
-) -> bool {
+async fn resolve_agent_name(state: &SharedData, name: String) -> WSResponseType {
     let name_hash = DIDCacheClient::hash_did(&name);
 
     let fail = |error: String| WSResponseType::Error(WSResponseError::new(&name, name_hash, error));
 
     if name.len() > state.max_did_size {
         state.stats().await.increment_agent_name_error();
-        return send_response(
-            socket,
-            state,
-            &fail(format!(
-                "Agent name exceeds maximum length of {} bytes",
-                state.max_did_size
-            )),
-        )
-        .await;
+        return fail(format!(
+            "Agent name exceeds maximum length of {} bytes",
+            state.max_did_size
+        ));
     }
 
     let Some(resolver) = state.agent_name_resolver.as_ref() else {
         state.stats().await.increment_agent_name_error();
-        return send_response(
-            socket,
-            state,
-            &fail("Agent name resolution is not enabled on this server".to_string()),
-        )
-        .await;
+        return fail("Agent name resolution is not enabled on this server".to_string());
     };
 
     let parsed = match AgentName::parse(&name) {
         Ok(parsed) => parsed,
         Err(e) => {
             state.stats().await.increment_agent_name_error();
-            return send_response(socket, state, &fail(e.to_string())).await;
+            return fail(e.to_string());
         }
     };
 
@@ -143,37 +101,22 @@ async fn resolve_agent_name_and_respond(
     let Ok(_permit) = state.agent_name_permits.try_acquire() else {
         state.stats().await.increment_agent_name_error();
         warn!("ws: shedding agent name lookup '{parsed}': outbound fetch ceiling reached");
-        return send_response(
-            socket,
-            state,
-            &fail("Too many agent name lookups in flight; retry shortly".to_string()),
-        )
-        .await;
+        return fail("Too many agent name lookups in flight; retry shortly".to_string());
     };
 
     let did = match tokio::time::timeout(state.resolve_timeout, resolver.resolve(&parsed)).await {
         Ok(Some(Ok(did))) => did,
         Ok(Some(Err(e))) => {
             state.stats().await.increment_agent_name_error();
-            return send_response(socket, state, &fail(e.to_string())).await;
+            return fail(e.to_string());
         }
         Ok(None) => {
             state.stats().await.increment_agent_name_error();
-            return send_response(
-                socket,
-                state,
-                &fail(format!("No resolver could resolve '{parsed}'")),
-            )
-            .await;
+            return fail(format!("No resolver could resolve '{parsed}'"));
         }
         Err(_elapsed) => {
             state.stats().await.increment_agent_name_error();
-            return send_response(
-                socket,
-                state,
-                &fail("Timed out resolving agent name".to_string()),
-            )
-            .await;
+            return fail("Timed out resolving agent name".to_string());
         }
     };
 
@@ -200,31 +143,31 @@ async fn resolve_agent_name_and_respond(
             } else {
                 (None, None)
             };
-            let message = WSResponseType::Response(Box::new(
+            WSResponseType::Response(Box::new(
                 WSResponse::new(response.did.clone(), name_hash, response.doc)
                     .with_logs(did_log, did_witness_log)
                     .with_agent_name(Some(parsed.as_str().to_string())),
-            ));
-            send_response(socket, state, &message).await
+            ))
         }
         Err(e) => {
             state.stats().await.increment_agent_name_error();
-            send_response(socket, state, &fail(e.to_string())).await
+            fail(e.to_string())
         }
     }
 }
 
-async fn resolve_and_respond(socket: &mut WebSocket, state: &SharedData, did: String) -> bool {
+/// Resolve `did` (bounded by the configured timeout) into a response, or an
+/// error response if resolution fails or times out.
+async fn resolve_did(state: &SharedData, did: String) -> WSResponseType {
     if !did_within_size_limit(&did, state.max_did_size) {
         let hash = DIDCacheClient::hash_did(&did);
         warn!("ws: rejecting oversized DID ({} bytes)", did.len());
         state.stats().await.increment_resolver_error();
-        let message = WSResponseType::Error(WSResponseError::new(
+        return WSResponseType::Error(WSResponseError::new(
             did,
             hash,
             format!("DID exceeds maximum length of {} bytes", state.max_did_size),
         ));
-        return send_response(socket, state, &message).await;
     }
 
     match resolve_with_timeout(&state.resolver, state.resolve_timeout, &did).await {
@@ -241,48 +184,82 @@ async fn resolve_and_respond(socket: &mut WebSocket, state: &SharedData, did: St
                 "resolved DID: ({}) cache_hit?({})",
                 response.did, response.cache_hit
             );
-            let message = build_response(
+            build_response(
                 &state.webvh_client,
                 state.webvh_log_cache.as_deref(),
                 response,
             )
-            .await;
-            send_response(socket, state, &message).await
+            .await
         }
         Err(e) => {
             // Couldn't resolve the DID (or timed out), send an error back.
             let hash = DIDCacheClient::hash_did(&did);
             warn!("Couldn't resolve DID: ({did}) Reason: {e}");
             state.stats().await.increment_resolver_error();
-            let message = WSResponseType::Error(WSResponseError::new(did, hash, e.to_string()));
-            send_response(socket, state, &message).await
+            WSResponseType::Error(WSResponseError::new(did, hash, e.to_string()))
         }
     }
 }
 
 /// Charge a request message to `client`'s rate-limit bucket, the one its HTTP
-/// requests use, then handle it. A refused message is answered with an error
-/// for that request and the connection stays open. Returns `false` if the
-/// connection should be closed.
-async fn handle_request(
-    socket: &mut WebSocket,
-    state: &SharedData,
-    client: IpAddr,
-    request: WSRequest,
-) -> bool {
+/// requests use. A refused message gets an error response for that request,
+/// and the connection stays open.
+fn charge(state: &SharedData, client: IpAddr, request: &WSRequest) -> Result<(), WSResponseType> {
     if let Err(TooManyRequests { retry_after_secs }) = state.rate_limiter.charge(client) {
         if state.rate_limiter.first_refusal_in_window(&client) {
             warn!(client = %client, "ws: client over the rate limit; refusing its requests until its bucket refills");
         }
         let hash = DIDCacheClient::hash_did(&request.did);
-        let message = WSResponseType::Error(WSResponseError::new(
-            request.did,
+        return Err(WSResponseType::Error(WSResponseError::new(
+            request.did.clone(),
             hash,
             format!("Too many requests; retry after {retry_after_secs}s"),
-        ));
-        return send_response(socket, state, &message).await;
+        )));
     }
-    dispatch_request(socket, state, request).await
+    Ok(())
+}
+
+/// Serialize a response as a text message, or `None` (logged) if it cannot
+/// be.
+fn to_message(response: &WSResponseType) -> Option<Message> {
+    match serde_json::to_string(response) {
+        Ok(text) => Some(Message::Text(text.into())),
+        Err(e) => {
+            warn!("ws: failed to serialize response: {e:?}");
+            None
+        }
+    }
+}
+
+/// The single writer of a connection: sends what the request tasks queue, each
+/// send bounded by `send_timeout`. Returns when the queue closes, after a
+/// close message, or when a send fails or times out — the reader treats the
+/// last two as the end of the connection.
+async fn write_loop(
+    mut sink: SplitSink<WebSocket, Message>,
+    mut outbound: mpsc::Receiver<Message>,
+    send_timeout: Duration,
+) {
+    while let Some(message) = outbound.recv().await {
+        let closing = matches!(message, Message::Close(_));
+        match tokio::time::timeout(send_timeout, sink.send(message)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                warn!("ws: Error sending response, closing connection: {e:?}");
+                return;
+            }
+            Err(_elapsed) => {
+                warn!(
+                    "ws: response not sent within {}s, closing connection",
+                    send_timeout.as_secs()
+                );
+                return;
+            }
+        }
+        if closing {
+            return;
+        }
+    }
 }
 
 /// Admit a WebSocket connection and switch protocols.
@@ -334,8 +311,14 @@ pub async fn websocket_handler(
 
 /// WebSocket state machine. This is spawned per connection; `_slot` holds its
 /// place in the connection limits until the connection ends.
+///
+/// Requests on one connection are resolved concurrently, up to
+/// [`WsLimits::max_inflight_per_connection`](crate::limits::WsLimits::max_inflight_per_connection):
+/// each runs in its own task, and their responses go back through one writer
+/// in the order they finish. The client matches a response to its request by
+/// hash, so one slow resolution no longer holds up the others behind it.
 async fn handle_socket(
-    mut socket: WebSocket,
+    socket: WebSocket,
     state: SharedData,
     client: IpAddr,
     _slot: ConnectionSlot,
@@ -345,10 +328,30 @@ async fn handle_socket(
         state.stats().await.increment_ws_opened();
         info!("Websocket connection established");
 
+        let (sink, mut stream) = socket.split();
+        let max_inflight = state.ws_limits.max_inflight_per_connection;
+        let (outbound, outbound_rx) = mpsc::channel::<Message>(max_inflight);
+        let mut writer = tokio::spawn(write_loop(sink, outbound_rx, state.ws_limits.send_timeout));
+        let permits = Arc::new(Semaphore::new(max_inflight));
+        // Dropping the set when the connection ends aborts what is still in
+        // progress: nobody is left to answer.
+        let mut inflight = JoinSet::new();
+
         let idle_timeout = state.ws_limits.idle_timeout;
         loop {
+            // Reap finished requests so the set holds only those in progress.
+            while inflight.try_join_next().is_some() {}
+
             // Any frame from the client, a ping included, counts as activity.
-            let received = match tokio::time::timeout(idle_timeout, socket.recv()).await {
+            let received = select! {
+                biased;
+                _ = &mut writer => {
+                    debug!("ws: writer stopped, closing connection");
+                    break;
+                }
+                received = tokio::time::timeout(idle_timeout, stream.next()) => received,
+            };
+            let received = match received {
                 Ok(received) => received,
                 Err(_elapsed) => {
                     debug!(
@@ -359,8 +362,7 @@ async fn handle_socket(
                         code: close_code::AWAY,
                         reason: "idle".into(),
                     }));
-                    let _ = tokio::time::timeout(state.ws_limits.send_timeout, socket.send(close))
-                        .await;
+                    let _ = outbound.try_send(close);
                     break;
                 }
             };
@@ -403,10 +405,48 @@ async fn handle_socket(
                 }
             };
 
-            if !handle_request(&mut socket, &state, client, request).await {
-                break;
+            if let Err(refused) = charge(&state, client, &request) {
+                let Some(message) = to_message(&refused) else {
+                    continue;
+                };
+                select! {
+                    biased;
+                    _ = &mut writer => break,
+                    sent = outbound.send(message) => if sent.is_err() { break },
+                }
+                continue;
             }
+
+            // Wait for room before reading on: a client cannot queue more
+            // work than this.
+            let permit = select! {
+                biased;
+                _ = &mut writer => break,
+                permit = permits.clone().acquire_owned() => match permit {
+                    Ok(permit) => permit,
+                    Err(_closed) => break,
+                },
+            };
+            let state = state.clone();
+            let outbound = outbound.clone();
+            inflight.spawn(async move {
+                let response = dispatch_request(&state, request).await;
+                if let Some(message) = to_message(&response) {
+                    // Fails only once the connection is closing.
+                    let _ = outbound.send(message).await;
+                }
+                drop(permit);
+            });
         }
+
+        // Stop the requests still in progress, then let the writer finish
+        // what is queued (the close frame, for an idle connection).
+        drop(inflight);
+        drop(outbound);
+        if !writer.is_finished() {
+            let _ = tokio::time::timeout(state.ws_limits.send_timeout, &mut writer).await;
+        }
+        writer.abort();
 
         // We're done, close the connection
         state.stats().await.increment_ws_closed();

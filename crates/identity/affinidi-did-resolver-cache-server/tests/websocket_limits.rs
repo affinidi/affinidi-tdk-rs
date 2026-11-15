@@ -8,6 +8,8 @@
 
 #![cfg(feature = "network")]
 
+use affinidi_did_common::{DID, Document};
+use affinidi_did_resolver_cache_sdk::{AsyncResolver, MethodName, Resolution};
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 use affinidi_did_resolver_cache_server::{
     SharedData, config::Config, handlers::application_routes, limits::WsLimits,
@@ -15,7 +17,9 @@ use affinidi_did_resolver_cache_server::{
 };
 use affinidi_rate_limit::{ClientIpExtractor, RateLimitLayer, RateLimiterState};
 use std::{
+    future::Future,
     net::{IpAddr, SocketAddr},
+    pin::Pin,
     sync::Arc,
     time::Duration,
 };
@@ -53,6 +57,15 @@ async fn serve(ws_limits: WsLimits, rate_limiter: RateLimiterState) -> (SocketAd
     let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
         .await
         .unwrap();
+    serve_with(ws_limits, rate_limiter, resolver).await
+}
+
+/// [`serve`] with a given resolver.
+async fn serve_with(
+    ws_limits: WsLimits,
+    rate_limiter: RateLimiterState,
+    resolver: DIDCacheClient,
+) -> (SocketAddr, SharedData) {
     let state = SharedData {
         service_start_timestamp: chrono::Utc::now(),
         stats: Arc::new(Mutex::new(Statistics::default())),
@@ -370,4 +383,69 @@ async fn an_oversized_message_closes_the_connection() {
     ws.request(&oversized).await;
     ws.expect_closed().await;
     wait_for_open(&state, LOOPBACK, 0).await;
+}
+
+/// Resolves `did:slow:*` after [`SLOW`].
+struct SlowResolver;
+
+const SLOW: Duration = Duration::from_secs(2);
+
+impl AsyncResolver for SlowResolver {
+    fn name(&self) -> &str {
+        "SlowResolver"
+    }
+
+    fn resolve<'a>(
+        &'a self,
+        did: &'a DID,
+    ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+        Box::pin(async move {
+            tokio::time::sleep(SLOW).await;
+            Some(Ok(Document::new(&did.to_string()).unwrap()))
+        })
+    }
+}
+
+async fn serve_with_slow_method(ws_limits: WsLimits) -> SocketAddr {
+    let mut resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+        .await
+        .unwrap();
+    resolver.set_resolver(MethodName::Other("slow".into()), Box::new(SlowResolver));
+    serve_with(ws_limits, RateLimiterState::new(0, 0), resolver)
+        .await
+        .0
+}
+
+/// Requests on one connection are resolved concurrently: a quick answer is
+/// not held up behind a slow one, and comes back first.
+#[tokio::test]
+async fn a_slow_request_does_not_hold_up_the_others() {
+    let addr = serve_with_slow_method(default_limits()).await;
+    let mut ws = connect(addr).await.unwrap();
+
+    let started = std::time::Instant::now();
+    ws.request("did:slow:one").await;
+    ws.request(DID_KEY).await;
+
+    let first = ws.text().await;
+    assert!(
+        first.starts_with("{\"Response\"") && first.contains(DID_KEY),
+        "got {first}"
+    );
+    assert!(started.elapsed() < SLOW, "waited {:?}", started.elapsed());
+    let second = ws.text().await;
+    assert!(second.contains("did:slow:one"), "got {second}");
+}
+
+/// With one request allowed in progress, the connection is not read until it
+/// finishes: replies come back in request order.
+#[tokio::test]
+async fn the_in_flight_limit_bounds_a_connection() {
+    let addr = serve_with_slow_method(default_limits().with_max_inflight_per_connection(1)).await;
+    let mut ws = connect(addr).await.unwrap();
+
+    ws.request("did:slow:one").await;
+    ws.request(DID_KEY).await;
+    assert!(ws.text().await.contains("did:slow:one"));
+    assert!(ws.text().await.contains(DID_KEY));
 }

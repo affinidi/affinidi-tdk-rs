@@ -12,7 +12,14 @@ use thiserror::Error;
 ///
 /// This type is `#[non_exhaustive]`: callers must include a wildcard arm when
 /// matching, so future additions do not constitute breaking changes.
-#[derive(Error, Debug)]
+///
+/// [`DIDAuthError::is_retryable`] says whether trying again can help;
+/// [`DIDAuthentication::authenticate`](crate::DIDAuthentication::authenticate)
+/// retries only those errors.
+///
+/// `Clone` so that one failed authentication can be handed to every caller
+/// waiting on it.
+#[derive(Error, Debug, Clone)]
 #[non_exhaustive]
 pub enum DIDAuthError {
     /// Authentication error, can be retried
@@ -31,8 +38,15 @@ pub enum DIDAuthError {
     #[error("DIDComm error: {0}")]
     DIDComm(String),
 
+    /// Resolving a DID failed in a way that may pass: the resolver or its
+    /// network. Can be retried.
     #[error("DID Resolver error: {0}")]
     DIDResolver(String),
+
+    /// A DID cannot be resolved as given: it is malformed, or its method is
+    /// not supported. Cannot be retried.
+    #[error("DID Resolver error: {0}")]
+    UnresolvableDID(String),
 
     #[error("Secrets Error: {0}")]
     Secrets(String),
@@ -61,11 +75,46 @@ pub enum DIDAuthError {
         #[source]
         last: Box<DIDAuthError>,
     },
+
+    /// The authentication did not finish within the time the caller allowed.
+    /// Can be retried.
+    #[error("Authentication timed out: {0}")]
+    Timeout(String),
+
+    /// The background task that runs authentications is not running (it was
+    /// terminated, or never started). Cannot be retried until it is.
+    #[error("Authentication task unavailable: {0}")]
+    TaskUnavailable(String),
 }
 
 pub type Result<T> = std::result::Result<T, DIDAuthError>;
 
 impl DIDAuthError {
+    /// Can trying again succeed?
+    ///
+    /// Retryable: transport failures ([`DIDAuthError::Authentication`],
+    /// [`DIDAuthError::DIDResolver`]), timeouts, and HTTP 408, 429 and 5xx.
+    /// Not retryable: everything that will fail the same way again — an abort,
+    /// an ACL denial, a DIDComm or secrets problem (no usable key, say), a DID
+    /// that cannot be resolved, any other 4xx, and retries already exhausted.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            DIDAuthError::Authentication(_)
+            | DIDAuthError::DIDResolver(_)
+            | DIDAuthError::Timeout(_) => true,
+            DIDAuthError::HttpStatus(err) => {
+                err.status == 408 || err.status == 429 || err.status >= 500
+            }
+            DIDAuthError::AuthenticationAbort(_)
+            | DIDAuthError::ACLDenied(_)
+            | DIDAuthError::DIDComm(_)
+            | DIDAuthError::Secrets(_)
+            | DIDAuthError::UnresolvableDID(_)
+            | DIDAuthError::RetriesExhausted { .. }
+            | DIDAuthError::TaskUnavailable(_) => false,
+        }
+    }
+
     /// The HTTP status error behind this failure, when there is one — looking
     /// through [`DIDAuthError::RetriesExhausted`] to the last attempt.
     pub fn http_status(&self) -> Option<&HttpStatusError> {
@@ -97,8 +146,16 @@ impl From<DIDCommError> for DIDAuthError {
 }
 
 impl From<DIDCacheError> for DIDAuthError {
+    /// A malformed DID or an unsupported method is
+    /// [`DIDAuthError::UnresolvableDID`]; anything else from the resolver is
+    /// [`DIDAuthError::DIDResolver`].
     fn from(error: DIDCacheError) -> Self {
-        DIDAuthError::DIDResolver(error.to_string())
+        match error {
+            DIDCacheError::DIDError(_)
+            | DIDCacheError::UnsupportedMethod(_)
+            | DIDCacheError::ParsingError(_) => DIDAuthError::UnresolvableDID(error.to_string()),
+            _ => DIDAuthError::DIDResolver(error.to_string()),
+        }
     }
 }
 
