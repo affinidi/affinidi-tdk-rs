@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.15.15 — relays address the final recipient; sign-then-encrypt keeps its signature facts
+
+- **Fixed (#1031):** `DIDCommAdapter::wrap_for_relay` put the relay's own DID
+  in the forward's `next`, so the mediator was told to deliver the message to
+  itself, and ignored `final_recipient`. `next` is now the final recipient; the
+  forward is still encrypted to `next_hop`.
+- **Fixed:** `message::forward::unwrap_forward` failed with "missing
+  attachments in forward" on a forward that had been serialized and parsed —
+  that is, on any forward a relay actually receives — because the attachment
+  then sits in `Message::attachments`, not in `extra`. Both places are read.
+- **Fixed (#1035):** `UnpackMetadata::from_unpack_result` dropped
+  `non_repudiation` and `signer_kid` for an encrypted result, so a verified
+  sign-then-encrypt message reported `non_repudiation: false` and no
+  `sign_from`. Both are now carried.
+- **Fixed (#1035):** `DIDCommAgent::unpack` refused every sign-then-encrypt
+  JWE ("a signer key is required") because it passed no signer. With a
+  `sender_did` whose stored identity has a signing key, the inner JWS is now
+  verified against it. Without one the message is still refused.
+- **Behaviour note (R3.6):** policy code keyed on
+  `UnpackMetadata::non_repudiation` now sees `true` for signed-and-encrypted
+  messages, as it always should have.
+
+
 ## Unreleased (0.15.14) — affinidi-crypto 0.3
 
 - **Changed:** requires `affinidi-crypto` 0.3. The KEKs and CEKs it derives

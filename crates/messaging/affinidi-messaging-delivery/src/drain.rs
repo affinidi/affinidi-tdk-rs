@@ -4,10 +4,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use affinidi_messaging_core::{DeliveryScope, MessageTransport, MessagingError};
 
+use crate::clock::now_for_pass;
 use crate::outbox::{OutboxError, OutboxState, OutboxStore};
 
 /// First-retry backoff.
@@ -23,13 +24,19 @@ const BACKOFF_CAP_MS: u64 = 60_000;
 /// a operator would have to know about.
 const QUEUE_FULL_FALLBACK_MS: u64 = 30_000;
 
+/// The longest a queue-full `Retry-After` defers a destination, whatever the
+/// server asked for. A hint is the server's word and unbounded; an entry is
+/// also never deferred past its own `deliver_by_ms`.
+pub const QUEUE_FULL_MAX_WAIT: Duration = Duration::from_secs(10 * 60);
+
 /// How long one `transport.send` may take before the drain gives up on it.
 ///
 /// The drain sends one entry at a time, so without a bound a single stalled
 /// destination holds back every other destination for as long as its send
 /// hangs. A send that runs out of time is a failed attempt like any other: it
-/// is retried with backoff, and the receiver dedups on the idempotency key if
-/// the stalled attempt did arrive.
+/// is retried with backoff. If the stalled attempt did arrive, the recipient
+/// receives the message twice — the delivery layer does not deduplicate on the
+/// receiving side — and a receipt for either copy settles the entry.
 pub const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long the drain waits for [`MessageTransport::delivery_scope`] once an
@@ -60,6 +67,10 @@ pub struct DrainReport {
     /// `Queued`).
     pub retried: usize,
     /// Entries whose delivery window expired while still queued (→ `Failed`).
+    /// Expired entries the drain does not reach are failed by the confirmation
+    /// sweep instead ([`ConfirmReport::expired_queued`]).
+    ///
+    /// [`ConfirmReport::expired_queued`]: crate::ConfirmReport::expired_queued
     pub failed: usize,
     /// Entries deferred because their destination's queue at the mediator is
     /// full (stay `Queued`).
@@ -155,8 +166,11 @@ pub async fn drain_once(
 ///
 /// A pinned entry whose transport is not currently installed is simply not due
 /// for this drain; it waits rather than being re-routed, because re-routing it
-/// would send it from the wrong identity — the exact thing the pin prevents. Its
-/// `deliver_by_ms` still settles it visibly if the transport never returns.
+/// would send it from the wrong identity — the exact thing the pin prevents. If
+/// the transport never returns, the confirmation sweep settles it `Failed` once
+/// its `deliver_by_ms` passes ([`ConfirmReport::expired_queued`]).
+///
+/// [`ConfirmReport::expired_queued`]: crate::ConfirmReport::expired_queued
 pub async fn drain_once_via(
     store: &dyn OutboxStore,
     transport_id: &str,
@@ -197,20 +211,28 @@ async fn drain_filtered(
     let attempt_ended_ms =
         || now_ms.saturating_add(pass_started.elapsed().as_millis().min(u64::MAX as u128) as u64);
 
-    for mut entry in due {
+    for entry in due {
         if !claims(entry.via.as_deref()) {
             continue;
         }
+        let key = entry.idempotency_key.clone();
         if now_ms >= entry.deliver_by_ms {
-            tracing::warn!(
-                idempotency_key = %entry.idempotency_key,
-                dest = %entry.dest_did,
-                attempts = entry.attempts,
-                "delivery window closed before any send was accepted; the entry is Failed"
-            );
-            entry.state = OutboxState::Failed;
-            store.put(entry).await?;
-            report.failed += 1;
+            let failed = store
+                .transition(
+                    &key,
+                    &[OutboxState::Queued],
+                    Box::new(move |e| e.settle(OutboxState::Failed, Some(now_ms))),
+                )
+                .await?;
+            if failed {
+                tracing::warn!(
+                    idempotency_key = %key,
+                    dest = %entry.dest_did,
+                    attempts = entry.attempts,
+                    "delivery window closed before any send was accepted; the entry is Failed"
+                );
+                report.failed += 1;
+            }
             continue;
         }
 
@@ -220,8 +242,17 @@ async fn drain_filtered(
         // queue is doing, and reporting it as merely deferred would hide a
         // delivery that is never going to happen.
         if let Some(&(until, why)) = blocked.get(&entry.dest_did) {
-            entry.next_attempt_at_ms = until;
-            store.put(entry).await?;
+            // Never past the entry's own deadline: the next attempt then finds
+            // the window closed and settles it, rather than leaving it queued
+            // until whenever the server's hint runs out.
+            let until = until.min(entry.deliver_by_ms);
+            store
+                .transition(
+                    &key,
+                    &[OutboxState::Queued],
+                    Box::new(move |e| e.next_attempt_at_ms = until),
+                )
+                .await?;
             match why {
                 Blocked::QueueFull => report.backpressured += 1,
                 Blocked::TimedOut => report.deferred += 1,
@@ -247,14 +278,34 @@ async fn drain_filtered(
 
         match sent {
             Ok(receipt) => {
-                entry.state = OutboxState::Sent;
-                // Record the hop-id: the status poll asks about it, and a wake
-                // request names the queued message by it.
-                entry.hop_id = receipt.hop_id;
-                if entry.scope == DeliveryScope::Unknown {
-                    entry.scope = scope_of(transport, &entry.dest_did).await;
+                let scope = if entry.scope == DeliveryScope::Unknown {
+                    scope_of(transport, &entry.dest_did).await
+                } else {
+                    entry.scope
+                };
+                // Guarded on `Queued`: evidence for this send can arrive while
+                // it is still in flight and settle the entry `Delivered` first
+                // (`confirm_delivered` accepts a `Queued` entry). That outcome
+                // stands; the hop-accept adds nothing to it.
+                let recorded = store
+                    .transition(
+                        &key,
+                        &[OutboxState::Queued],
+                        Box::new(move |e| {
+                            e.state = OutboxState::Sent;
+                            // Record the hop-id: the status poll asks about it,
+                            // and a wake request names the queued message by it.
+                            e.hop_id = receipt.hop_id;
+                            e.scope = scope;
+                        }),
+                    )
+                    .await?;
+                if !recorded {
+                    tracing::debug!(
+                        idempotency_key = %key,
+                        "entry settled while its send was in flight; leaving it as recorded"
+                    );
                 }
-                store.put(entry).await?;
                 report.sent += 1;
             }
             Err(e) if e.queue_full().is_some() => {
@@ -262,7 +313,8 @@ async fn drain_filtered(
                 let wait_ms = e
                     .retry_after()
                     .map(|d| d.as_millis().min(u64::MAX as u128) as u64)
-                    .unwrap_or(QUEUE_FULL_FALLBACK_MS);
+                    .unwrap_or(QUEUE_FULL_FALLBACK_MS)
+                    .min(QUEUE_FULL_MAX_WAIT.as_millis() as u64);
                 let until = attempt_ended_ms().saturating_add(wait_ms);
 
                 // `attempts` is deliberately NOT incremented. It drives
@@ -270,25 +322,31 @@ async fn drain_filtered(
                 // would punish a message for a condition it did not cause and
                 // cannot fix — a relationship that clears in a minute would be
                 // waiting fifteen. The server's own pacing hint is the right
-                // clock, and `deliver_by_ms` remains the bound that stops this
+                // clock, capped at QUEUE_FULL_MAX_WAIT and at the entry's own
+                // `deliver_by_ms`, which remains the bound that stops this
                 // going on for ever.
-                entry.next_attempt_at_ms = until;
-                let dest = entry.dest_did.clone();
-                store.put(entry).await?;
+                let next = until.min(entry.deliver_by_ms);
+                store
+                    .transition(
+                        &key,
+                        &[OutboxState::Queued],
+                        Box::new(move |e| e.next_attempt_at_ms = next),
+                    )
+                    .await?;
                 report.backpressured += 1;
 
                 tracing::warn!(
-                    dest = %dest,
+                    dest = %entry.dest_did,
                     ?gate,
                     wait_ms,
                     "destination queue full at the mediator — deferring this destination \
                      for the rest of this pass"
                 );
-                blocked.insert(dest, (until, Blocked::QueueFull));
+                blocked.insert(entry.dest_did.clone(), (until, Blocked::QueueFull));
             }
             Err(e) => {
                 let failure = SendFailure {
-                    idempotency_key: entry.idempotency_key.clone(),
+                    idempotency_key: key.clone(),
                     dest_did: entry.dest_did.clone(),
                     error: e.to_string(),
                     permanent: is_permanent(&e),
@@ -300,19 +358,27 @@ async fn drain_filtered(
                         error = %failure.error,
                         "send refused in a way no retry can fix; the entry is Failed"
                     );
-                    entry.state = OutboxState::Failed;
-                    store.put(entry).await?;
-                    report.failed += 1;
+                    let ended = attempt_ended_ms();
+                    if store
+                        .transition(
+                            &key,
+                            &[OutboxState::Queued],
+                            Box::new(move |e| e.settle(OutboxState::Failed, Some(ended))),
+                        )
+                        .await?
+                    {
+                        report.failed += 1;
+                    }
                 } else {
-                    entry.attempts += 1;
-                    let mut wait_ms = backoff_ms(entry.attempts);
+                    let attempts = entry.attempts + 1;
+                    let mut wait_ms = backoff_ms(attempts);
                     if timed_out {
                         // A destination that just took the whole timeout is
                         // not asked again sooner than that.
                         wait_ms = wait_ms.max(SEND_TIMEOUT.as_millis() as u64);
                     }
-                    entry.next_attempt_at_ms = attempt_ended_ms().saturating_add(wait_ms);
-                    if entry.attempts == 1 {
+                    let next_attempt_at_ms = attempt_ended_ms().saturating_add(wait_ms);
+                    if attempts == 1 {
                         tracing::warn!(
                             idempotency_key = %failure.idempotency_key,
                             dest = %failure.dest_did,
@@ -323,7 +389,7 @@ async fn drain_filtered(
                         tracing::debug!(
                             idempotency_key = %failure.idempotency_key,
                             dest = %failure.dest_did,
-                            attempts = entry.attempts,
+                            attempts,
                             error = %failure.error,
                             "send failed again"
                         );
@@ -331,7 +397,7 @@ async fn drain_filtered(
                     if timed_out {
                         // An entry that timed out before as well may be what is
                         // stuck; let the destination's next entry try once.
-                        let repeat = entry.attempts > 1;
+                        let repeat = attempts > 1;
                         if repeat && second_chance.insert(entry.dest_did.clone()) {
                             tracing::debug!(
                                 dest = %entry.dest_did,
@@ -340,11 +406,20 @@ async fn drain_filtered(
                         } else {
                             blocked.insert(
                                 entry.dest_did.clone(),
-                                (entry.next_attempt_at_ms, Blocked::TimedOut),
+                                (next_attempt_at_ms, Blocked::TimedOut),
                             );
                         }
                     }
-                    store.put(entry).await?;
+                    store
+                        .transition(
+                            &key,
+                            &[OutboxState::Queued],
+                            Box::new(move |e| {
+                                e.attempts = attempts;
+                                e.next_attempt_at_ms = next_attempt_at_ms;
+                            }),
+                        )
+                        .await?;
                     report.retried += 1;
                 }
                 report.errors.push(failure);
@@ -382,7 +457,10 @@ pub async fn drain_loop(
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
-        match drain_once(store.as_ref(), transport.as_ref(), now_unix_ms()).await {
+        let Some(now_ms) = now_for_pass("outbox drain") else {
+            continue;
+        };
+        match drain_once(store.as_ref(), transport.as_ref(), now_ms).await {
             Ok(report) if report != DrainReport::default() => {
                 tracing::debug!(
                     sent = report.sent,
@@ -416,14 +494,10 @@ pub async fn drain_loop_via(
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
-        match drain_once_via(
-            store.as_ref(),
-            &transport_id,
-            transport.as_ref(),
-            now_unix_ms(),
-        )
-        .await
-        {
+        let Some(now_ms) = now_for_pass("outbox drain") else {
+            continue;
+        };
+        match drain_once_via(store.as_ref(), &transport_id, transport.as_ref(), now_ms).await {
             Ok(report) if report != DrainReport::default() => {
                 tracing::debug!(
                     transport = %transport_id,
@@ -443,15 +517,6 @@ pub async fn drain_loop_via(
             ),
         }
     }
-}
-
-/// Current wall-clock time in Unix milliseconds (`0` before the epoch, which
-/// cannot happen in practice).
-fn now_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -1130,5 +1195,91 @@ mod tests {
         assert_eq!((report.retried, report.deferred), (2, 1), "{report:?}");
         assert_eq!(store.get("next").await.unwrap().unwrap().attempts, 1);
         assert_eq!(store.get("third").await.unwrap().unwrap().attempts, 0);
+    }
+
+    /// #1023: a huge `Retry-After` never defers an entry past its own
+    /// deadline (or past `QUEUE_FULL_MAX_WAIT`).
+    #[tokio::test]
+    async fn a_retry_after_is_clamped_to_the_deadline_and_the_ceiling() {
+        let store = InMemoryOutboxStore::new();
+        // Deadline 600 s out; the server asks for a day.
+        store
+            .put(queued_to("k1", "did:example:bob", 1_000))
+            .await
+            .unwrap();
+        let transport = MockTransport::refusing("did:example:bob", Some(86_400));
+        drain_once(&store, &transport, 1_000).await.unwrap();
+        let entry = store.get("k1").await.unwrap().unwrap();
+        assert_eq!(entry.state, OutboxState::Queued);
+        assert!(entry.next_attempt_at_ms <= entry.deliver_by_ms);
+
+        // A long window: the ceiling applies instead.
+        let store = InMemoryOutboxStore::new();
+        store
+            .put(OutboxEntry::new(
+                "k2",
+                "did:example:bob",
+                vec![1],
+                1_000,
+                1_000 + 86_400_000,
+            ))
+            .await
+            .unwrap();
+        drain_once(&store, &transport, 1_000).await.unwrap();
+        let entry = store.get("k2").await.unwrap().unwrap();
+        assert!(
+            entry.next_attempt_at_ms <= 1_000 + QUEUE_FULL_MAX_WAIT.as_millis() as u64 + 1_000,
+            "deferred to {}",
+            entry.next_attempt_at_ms
+        );
+    }
+
+    /// #1022: evidence that arrives while the send is still in flight (the
+    /// entry is `Queued`) settles it, and the drain's own `Queued → Sent`
+    /// step then leaves the `Delivered` alone.
+    #[tokio::test]
+    async fn a_receipt_during_the_send_is_not_lost() {
+        struct ConfirmsWhileSending(Arc<InMemoryOutboxStore>);
+
+        #[async_trait::async_trait]
+        impl MessageTransport for ConfirmsWhileSending {
+            fn kind(&self) -> TransportKind {
+                TransportKind::Didcomm
+            }
+            async fn send(
+                &self,
+                _dest: &str,
+                _packed: Vec<u8>,
+            ) -> Result<SendReceipt, MessagingError> {
+                assert!(
+                    crate::confirm::confirm_delivered(self.0.as_ref(), "k1")
+                        .await
+                        .unwrap()
+                );
+                Ok(SendReceipt {
+                    via: TransportKind::Didcomm,
+                    hop_id: Some("hop".into()),
+                })
+            }
+            fn connection_state(&self) -> watch::Receiver<ConnState> {
+                watch::channel(ConnState::Connected).1
+            }
+            fn inbound(&self) -> BoxStream<'static, Inbound> {
+                Box::pin(stream::empty())
+            }
+            async fn ack(&self, _ack: InboundAck) -> Result<(), MessagingError> {
+                Ok(())
+            }
+        }
+
+        let store = Arc::new(InMemoryOutboxStore::new());
+        store.put(queued("k1", 1_000)).await.unwrap();
+        let transport = ConfirmsWhileSending(store.clone());
+        let report = drain_once(store.as_ref(), &transport, 1_000).await.unwrap();
+        assert_eq!(report.sent, 1);
+        assert_eq!(
+            store.get("k1").await.unwrap().unwrap().state,
+            OutboxState::Delivered
+        );
     }
 }

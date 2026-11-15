@@ -1,5 +1,14 @@
 # Changelog — `affinidi-tdk`
 
+## 0.46.0 — affinidi-messaging-sdk 0.48 and affinidi-tsp 0.4
+
+- **Changed (breaking):** requires `affinidi-messaging-sdk` 0.48 and
+  `affinidi-tsp` 0.4, whose types it re-exports. A TSP `ReceivedMessage` has a
+  new `confidential` field and `TspError::Cesr` is gone; see those crates'
+  changelogs. `affinidi-messaging-helpers` and `affinidi-messaging-text-client`
+  require this version.
+
+
 ## Unreleased (0.45.0) — affinidi-messaging-sdk 0.47 and trust-tasks 0.39
 
 - **Changed (breaking):** requires `affinidi-messaging-sdk` 0.47

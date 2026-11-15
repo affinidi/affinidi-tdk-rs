@@ -78,7 +78,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm"
-version = "0.15.14"
+version = "0.15.15"
 dependencies = [
  "affinidi-crypto",
  "arbitrary",

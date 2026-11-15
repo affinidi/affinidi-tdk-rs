@@ -53,7 +53,14 @@ pub struct ReapReport {
     pub skipped: usize,
 }
 
-/// Remove terminal entries older than `retention`.
+/// Remove terminal entries that settled more than `retention` ago.
+///
+/// Age is measured from [`OutboxEntry::settled_basis_ms`] — when the entry
+/// settled — so an outcome stays readable through
+/// `MessagingService::delivery_state` for the whole retention, however long
+/// the delivery window that produced it.
+///
+/// [`OutboxEntry::settled_basis_ms`]: crate::OutboxEntry::settled_basis_ms
 ///
 /// Only terminal entries are eligible: a `Queued` entry is unfinished work and
 /// a `Sent` one is still awaiting evidence, and reaping either would be losing
@@ -73,7 +80,7 @@ pub async fn reap_terminal(
         // delete below is conditional and evaluates the same test atomically at
         // the store. Both, not either: this one gives the wrong-filter case a
         // clear skip, and that one closes the race.
-        if !entry.state.is_terminal() || entry.created_at_ms > cutoff {
+        if !entry.state.is_terminal() || entry.settled_basis_ms() > cutoff {
             continue;
         }
         match store.remove_if_terminal(&entry.idempotency_key).await {
@@ -117,16 +124,8 @@ pub async fn reap_loop(store: Arc<dyn OutboxStore>, interval: Duration, retentio
         // mode — a cutoff derived from a wrong clock decides which records are
         // destroyed, and an operator has no way to know the decision was made
         // on a bad reading. Skipping loses nothing; the next tick retries.
-        let now_ms = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-            Ok(d) => d.as_millis() as u64,
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "outbox reap: system clock is before the unix epoch — skipping this pass \
-                     rather than reaping against a cutoff derived from an unreadable clock"
-                );
-                continue;
-            }
+        let Some(now_ms) = crate::clock::now_for_pass("outbox reap") else {
+            continue;
         };
         if let Err(e) = reap_terminal(store.as_ref(), now_ms, retention).await {
             tracing::warn!(error = %e, "outbox reap failed; retrying next tick");
@@ -316,5 +315,46 @@ mod tests {
             report.skipped, 1,
             "the incoherent pair is visible, not silent"
         );
+    }
+
+    /// #1025: an entry with a delivery window longer than the retention is
+    /// kept for the retention after it *settles*, not reaped the moment it
+    /// does because it was created long ago.
+    #[tokio::test]
+    async fn retention_runs_from_settlement_not_creation() {
+        let store = InMemoryOutboxStore::new();
+        let mut e = OutboxEntry::new("notice", "did:example:dest", vec![1], 0, 30 * DAY_MS);
+        e.settle(OutboxState::Unconfirmed, Some(30 * DAY_MS));
+        store.put(e).await.unwrap();
+
+        let report = reap_terminal(&store, 30 * DAY_MS + 1, TERMINAL_RETENTION)
+            .await
+            .unwrap();
+        assert_eq!(report.reaped, 0);
+        assert!(store.get("notice").await.unwrap().is_some());
+
+        let report = reap_terminal(&store, 37 * DAY_MS + 1, TERMINAL_RETENTION)
+            .await
+            .unwrap();
+        assert_eq!(report.reaped, 1);
+    }
+
+    /// An entry that settled before `settled_at_ms` existed ages from the
+    /// later of its creation and its deadline.
+    #[tokio::test]
+    async fn an_entry_without_a_settle_time_ages_from_its_deadline() {
+        let store = InMemoryOutboxStore::new();
+        let mut e = OutboxEntry::new("legacy", "did:example:dest", vec![1], 0, 30 * DAY_MS);
+        e.state = OutboxState::Failed;
+        store.put(e).await.unwrap();
+
+        let report = reap_terminal(&store, 31 * DAY_MS, TERMINAL_RETENTION)
+            .await
+            .unwrap();
+        assert_eq!(report.reaped, 0);
+        let report = reap_terminal(&store, 38 * DAY_MS, TERMINAL_RETENTION)
+            .await
+            .unwrap();
+        assert_eq!(report.reaped, 1);
     }
 }

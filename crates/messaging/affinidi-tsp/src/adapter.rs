@@ -6,7 +6,7 @@
 
 use affinidi_messaging_core::{
     IdentityResolver, MessagingError, MessagingProtocol, Protocol, ReceivedMessage,
-    RelationshipManager, RelationshipState, ResolvedIdentity,
+    RelationshipChange, RelationshipManager, RelationshipState, ResolvedIdentity,
 };
 
 use crate::TspAgent;
@@ -93,8 +93,11 @@ impl MessagingProtocol for TspAdapter {
             recipient: received.receiver,
             payload: received.payload,
             protocol: Protocol::TSP,
-            verified: true,  // TSP always verifies sender
-            encrypted: true, // TSP always encrypts
+            // `receive` refuses a message whose signature does not verify.
+            verified: true,
+            // Rev 3 §3.5 permits signed-only (non-confidential) messages, and
+            // `receive` accepts them, so this is reported, not assumed.
+            encrypted: received.confidential,
         })
     }
 
@@ -151,45 +154,93 @@ impl IdentityResolver for TspAdapter {
     }
 }
 
+/// The state-only methods refuse: they would move the local FSM and return
+/// nothing to transmit, leaving the peer never hearing of the change and the
+/// next call failing on an invalid transition. Use the `*_with_control`
+/// methods, which return the packed control message for the caller to send.
+fn state_only_refused(op: &str) -> MessagingError {
+    MessagingError::NotSupported(format!(
+        "TSP `{op}` must transmit a control message; use `{op}_with_control` and send the \
+         returned `control_message` to the peer"
+    ))
+}
+
 #[async_trait::async_trait]
 impl RelationshipManager for TspAdapter {
     async fn request_relationship(
         &self,
-        my_id: &str,
-        their_id: &str,
+        _my_id: &str,
+        _their_id: &str,
     ) -> Result<RelationshipState, MessagingError> {
-        self.agent
-            .send_relationship_invite(my_id, their_id)
-            .map_err(|e| MessagingError::Relationship(e.to_string()))?;
-
-        Ok(RelationshipState::Pending)
+        Err(state_only_refused("request_relationship"))
     }
 
     async fn accept_relationship(
         &self,
-        my_id: &str,
-        their_id: &str,
+        _my_id: &str,
+        _their_id: &str,
         _request_id: &[u8],
     ) -> Result<RelationshipState, MessagingError> {
-        // The TSP agent correlates the accept to the received invite via the
-        // thread digest it recorded on receipt, so `request_id` is unused here.
-        self.agent
-            .send_relationship_accept(my_id, their_id)
-            .map_err(|e| MessagingError::Relationship(e.to_string()))?;
-
-        Ok(RelationshipState::Bidirectional)
+        Err(state_only_refused("accept_relationship"))
     }
 
     async fn cancel_relationship(
         &self,
+        _my_id: &str,
+        _their_id: &str,
+    ) -> Result<RelationshipState, MessagingError> {
+        Err(state_only_refused("cancel_relationship"))
+    }
+
+    async fn request_relationship_with_control(
+        &self,
         my_id: &str,
         their_id: &str,
-    ) -> Result<RelationshipState, MessagingError> {
-        self.agent
+    ) -> Result<RelationshipChange, MessagingError> {
+        let invite = self
+            .agent
+            .send_relationship_invite(my_id, their_id)
+            .map_err(|e| MessagingError::Relationship(e.to_string()))?;
+
+        Ok(RelationshipChange::with_control_message(
+            self.agent.relationship_state(my_id, their_id).into(),
+            invite.bytes,
+        ))
+    }
+
+    async fn accept_relationship_with_control(
+        &self,
+        my_id: &str,
+        their_id: &str,
+        _request_id: &[u8],
+    ) -> Result<RelationshipChange, MessagingError> {
+        // The TSP agent correlates the accept to the received invite via the
+        // thread digest it recorded on receipt, so `request_id` is unused here.
+        let accept = self
+            .agent
+            .send_relationship_accept(my_id, their_id)
+            .map_err(|e| MessagingError::Relationship(e.to_string()))?;
+
+        Ok(RelationshipChange::with_control_message(
+            self.agent.relationship_state(my_id, their_id).into(),
+            accept.bytes,
+        ))
+    }
+
+    async fn cancel_relationship_with_control(
+        &self,
+        my_id: &str,
+        their_id: &str,
+    ) -> Result<RelationshipChange, MessagingError> {
+        let cancel = self
+            .agent
             .send_relationship_cancel(my_id, their_id)
             .map_err(|e| MessagingError::Relationship(e.to_string()))?;
 
-        Ok(RelationshipState::None)
+        Ok(RelationshipChange::with_control_message(
+            self.agent.relationship_state(my_id, their_id).into(),
+            cancel.bytes,
+        ))
     }
 
     async fn relationship_state(
@@ -197,13 +248,29 @@ impl RelationshipManager for TspAdapter {
         my_id: &str,
         their_id: &str,
     ) -> Result<RelationshipState, MessagingError> {
-        let state = self.agent.relationship_state(my_id, their_id);
-        Ok(match state {
+        Ok(self.agent.relationship_state(my_id, their_id).into())
+    }
+}
+
+impl From<crate::RelationshipState> for RelationshipState {
+    fn from(state: crate::RelationshipState) -> Self {
+        match state {
             crate::RelationshipState::None => RelationshipState::None,
             crate::RelationshipState::Pending => RelationshipState::Pending,
             crate::RelationshipState::InviteReceived => RelationshipState::InviteReceived,
             crate::RelationshipState::Bidirectional => RelationshipState::Bidirectional,
-        })
+        }
+    }
+}
+
+impl From<RelationshipState> for crate::RelationshipState {
+    fn from(state: RelationshipState) -> Self {
+        match state {
+            RelationshipState::None => crate::RelationshipState::None,
+            RelationshipState::Pending => crate::RelationshipState::Pending,
+            RelationshipState::InviteReceived => crate::RelationshipState::InviteReceived,
+            RelationshipState::Bidirectional => crate::RelationshipState::Bidirectional,
+        }
     }
 }
 
@@ -266,29 +333,133 @@ mod tests {
             .unwrap();
         assert_eq!(state, RelationshipState::None);
 
-        // Alice sends the RFI (via the agent so we can transport the wire bytes).
-        let rfi = alice
-            .agent()
-            .send_relationship_invite("did:example:alice", "did:example:bob")
+        // Alice requests a relationship: the trait hands back the RFI to send.
+        let invite = alice
+            .request_relationship_with_control("did:example:alice", "did:example:bob")
+            .await
             .unwrap();
+        assert_eq!(invite.state, RelationshipState::Pending);
+        let rfi = invite.control_message.expect("an invite to transmit");
+
+        // Bob receives the invite — this records the invite's thread digest so
+        // his accept can reference it.
+        bob.unpack(&rfi).await.unwrap();
+
+        // Bob accepts, and gets the RFA to send back.
+        let accept = bob
+            .accept_relationship_with_control("did:example:bob", "did:example:alice", b"unused")
+            .await
+            .unwrap();
+        assert_eq!(accept.state, RelationshipState::Bidirectional);
+        let rfa = accept.control_message.expect("an accept to transmit");
+
+        // Alice processes the accept and can now send.
+        alice.unpack(&rfa).await.unwrap();
         assert_eq!(
             alice
                 .relationship_state("did:example:alice", "did:example:bob")
                 .await
                 .unwrap(),
-            RelationshipState::Pending
+            RelationshipState::Bidirectional
         );
-
-        // Bob receives the invite — this records the invite's thread digest so
-        // his accept can reference it.
-        bob.agent().receive("did:example:bob", &rfi.bytes).unwrap();
-
-        // Now Bob can accept (the agent looks up the recorded invite digest).
-        let state = bob
-            .accept_relationship("did:example:bob", "did:example:alice", b"unused")
+        let packed = alice
+            .pack(b"hello", "did:example:alice", "did:example:bob")
             .await
             .unwrap();
-        assert_eq!(state, RelationshipState::Bidirectional);
+        let received = bob.unpack(&packed).await.unwrap();
+        assert!(received.encrypted);
+        assert!(received.verified);
+
+        // Cancelling hands back the cancel, which tears down Bob's side too.
+        let cancel = alice
+            .cancel_relationship_with_control("did:example:alice", "did:example:bob")
+            .await
+            .unwrap();
+        assert_eq!(cancel.state, RelationshipState::None);
+        bob.unpack(&cancel.control_message.unwrap()).await.unwrap();
+        assert_eq!(
+            bob.relationship_state("did:example:bob", "did:example:alice")
+                .await
+                .unwrap(),
+            RelationshipState::None
+        );
+    }
+
+    /// #1024: the state-only methods used to move the FSM and return nothing
+    /// to send. They now refuse, and leave the state untouched.
+    #[tokio::test]
+    async fn state_only_relationship_calls_refuse_without_changing_state() {
+        let (alice, _) = setup();
+        let err = alice
+            .request_relationship("did:example:alice", "did:example:bob")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MessagingError::NotSupported(_)), "{err:?}");
+        assert_eq!(
+            alice
+                .relationship_state("did:example:alice", "did:example:bob")
+                .await
+                .unwrap(),
+            RelationshipState::None
+        );
+        assert!(
+            alice
+                .cancel_relationship("did:example:alice", "did:example:bob")
+                .await
+                .is_err()
+        );
+        assert!(
+            alice
+                .accept_relationship("did:example:alice", "did:example:bob", b"")
+                .await
+                .is_err()
+        );
+    }
+
+    /// #1024: a signed-only (non-confidential) message verifies, and the
+    /// adapter now says it was not encrypted instead of asserting it was.
+    #[tokio::test]
+    async fn signed_only_message_is_reported_as_not_encrypted() {
+        let (alice, bob) = setup();
+        let rfi = alice
+            .request_relationship_with_control("did:example:alice", "did:example:bob")
+            .await
+            .unwrap()
+            .control_message
+            .unwrap();
+        bob.unpack(&rfi).await.unwrap();
+
+        let alice_private = alice
+            .agent()
+            .store
+            .get_private_vid("did:example:alice")
+            .unwrap();
+        let signed_only = crate::pack_signed_only(
+            b"in the clear",
+            crate::MessageType::Direct,
+            "did:example:alice",
+            "did:example:bob",
+            &alice_private.signing_key,
+        )
+        .unwrap();
+        let received = bob.unpack(&signed_only.bytes).await.unwrap();
+        assert_eq!(received.payload, b"in the clear");
+        assert!(received.verified);
+        assert!(!received.encrypted);
+    }
+
+    #[test]
+    fn relationship_state_round_trips_between_crates() {
+        for state in [
+            crate::RelationshipState::None,
+            crate::RelationshipState::Pending,
+            crate::RelationshipState::InviteReceived,
+            crate::RelationshipState::Bidirectional,
+        ] {
+            let core: RelationshipState = state.into();
+            assert_eq!(crate::RelationshipState::from(core), state);
+            assert_eq!(core.can_send(), state.can_send());
+        }
     }
 
     #[tokio::test]

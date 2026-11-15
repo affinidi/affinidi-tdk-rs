@@ -11,19 +11,25 @@
 //!   ([`sweep_confirmations`]) settles it `Unconfirmed`, a truthful "we can't
 //!   know", never a false "delivered".
 //!
-//! This module owns the state machine. The *evidence sources* — the receiver
-//! auto-emitting a layer receipt on durable persist, the mediator's receipts
-//! for collection, and re-sending over an alternate binding on expiry — layer
-//! on top and call [`confirm_delivered`] / drive the sweep. A message merely
+//! This module owns the state machine. The *evidence sources* — a receipt the
+//! recipient's delivery layer sends once it has handed the message off (see
+//! [`crate::receipt`]), the mediator's receipts for collection, and re-sending
+//! over an alternate binding on expiry — layer on top and call
+//! [`confirm_delivered`] / drive the sweep.
+//!
+//! Every state change here goes through [`OutboxStore::transition`], guarded on
+//! the state the change expects, so a sweep or poll that held a snapshot across
+//! a slow call cannot overwrite what a receipt recorded meanwhile. A message merely
 //! gone from the mediator's outbox listing is not one of them: it may have
 //! been collected or may have expired, and the listing cannot say which.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use affinidi_messaging_core::{DeliveryScope, MessageTransport, OutboxStatus};
 
+use crate::clock::{now_for_pass, now_unix_ms};
 use crate::outbox::{OutboxEntry, OutboxError, OutboxState, OutboxStore, UnconfirmedReason};
 use crate::reach::ReceiptReach;
 
@@ -46,6 +52,16 @@ pub struct ConfirmReport {
     /// (VTI-TRN-042, VTI-TRN-064). Not a failure. Also counted in
     /// [`unconfirmed`](Self::unconfirmed).
     pub unconfirmable: usize,
+    /// `Queued` entries whose window closed before any send was accepted,
+    /// settled `Failed` here because the drain never reached them: pinned to a
+    /// transport that is gone, deferred past their deadline, or waiting behind
+    /// an ordered head. **Surface these** like [`failed`](Self::failed), which
+    /// does not include them.
+    pub expired_queued: usize,
+    /// Expired entries whose state changed while the sweep was deciding —
+    /// usually evidence that arrived during an escalation — and were left as
+    /// the other writer recorded them.
+    pub superseded: usize,
 }
 
 /// How an expired, still-unconfirmed `Sent` entry is escalated (§5a) — the
@@ -84,8 +100,8 @@ pub enum Escalation {
 ///
 /// The concrete escalator — which re-resolves the peer's DID document and
 /// re-sends over an alternate transport/mediator — is wired by the service that
-/// owns the transports (it lands with multi-transport / Phase 4); the delivery
-/// layer only applies the [`Escalation`] outcome. The default policy (no
+/// owns the transports; the delivery layer only applies the [`Escalation`]
+/// outcome. The default policy (no
 /// escalator, i.e. [`sweep_confirmations`]) settles every expired entry
 /// `Unconfirmed`.
 #[async_trait::async_trait]
@@ -111,22 +127,32 @@ impl ExpiryEscalator for SettleUnconfirmed {
 /// outbox entry `Sent → Delivered`.
 ///
 /// Returns `Ok(true)` if an entry was transitioned, `Ok(false)` if there was no
-/// matching `Sent` entry (absent, or already terminal — evidence is
+/// matching non-terminal entry (absent, or already terminal — evidence is
 /// **idempotent**, so a re-delivered receipt for an already-`Delivered` entry is
 /// a harmless no-op).
+///
+/// A `Queued` entry is confirmed too. Evidence can arrive while the drain's
+/// send is still in flight, before the entry is recorded `Sent`, or for an
+/// attempt that timed out locally but reached the recipient; dropping it then
+/// left the entry to settle `Unconfirmed` or be sent again. Confirmed, it is
+/// never sent again, and the drain's own `Queued → Sent` step finds it settled
+/// and leaves it.
 pub async fn confirm_delivered(
     store: &dyn OutboxStore,
     idempotency_key: &str,
 ) -> Result<bool, OutboxError> {
-    if let Some(mut entry) = store.get(idempotency_key).await?
-        && entry.state == OutboxState::Sent
-    {
-        entry.state = OutboxState::Delivered;
-        store.put(entry).await?;
-        return Ok(true);
-    }
-    Ok(false)
+    let now = now_unix_ms();
+    store
+        .transition(
+            idempotency_key,
+            CONFIRMABLE,
+            Box::new(move |entry| entry.settle(OutboxState::Delivered, now)),
+        )
+        .await
 }
+
+/// The states end-to-end evidence settles: anything not yet terminal.
+const CONFIRMABLE: &[OutboxState] = &[OutboxState::Queued, OutboxState::Sent];
 
 /// Record delivery evidence for `idempotency_key` that came **from `peer`**:
 /// transition its outbox entry `Sent → Delivered` only if `peer` is the entry's
@@ -146,19 +172,29 @@ pub async fn confirm_delivered_by(
     idempotency_key: &str,
     peer: &str,
 ) -> Result<bool, OutboxError> {
-    if let Some(mut entry) = store.get(idempotency_key).await?
-        && entry.state == OutboxState::Sent
-        && affinidi_did_common::scid::same_reference(peer, &entry.dest_did)
-    {
-        entry.state = OutboxState::Delivered;
-        store.put(entry).await?;
-        return Ok(true);
-    }
-    Ok(false)
+    let now = now_unix_ms();
+    let mut from_recipient = false;
+    let applied = store
+        .transition(
+            idempotency_key,
+            CONFIRMABLE,
+            Box::new(|entry| {
+                // Checked inside the guarded step, against the entry as it is
+                // now, not against an earlier read.
+                if affinidi_did_common::scid::same_reference(peer, &entry.dest_did) {
+                    from_recipient = true;
+                    entry.settle(OutboxState::Delivered, now);
+                }
+            }),
+        )
+        .await?;
+    Ok(applied && from_recipient)
 }
 
 /// One confirmation sweep at logical time `now_ms`: any `Sent` entry whose
-/// delivery window has passed without evidence settles `Unconfirmed`.
+/// delivery window has passed without evidence settles `Unconfirmed`, and any
+/// `Queued` entry whose window has passed settles `Failed`
+/// ([`ConfirmReport::expired_queued`]).
 ///
 /// `Unconfirmed` is deliberately distinct from `Failed`: the message *was*
 /// hop-accepted (the mediator took it), we just never got end-to-end evidence —
@@ -222,50 +258,135 @@ pub async fn sweep_confirmations_with_reach(
     reach: &ReceiptReach,
 ) -> Result<ConfirmReport, OutboxError> {
     let mut report = ConfirmReport::default();
-    for mut entry in store.awaiting_confirmation().await? {
+
+    // `Queued` entries past their window, wherever they are stuck. The drain
+    // fails an expired entry only when `due()` offers it to a drain that
+    // claims it; a pinned entry whose transport is gone, an entry deferred
+    // past its deadline, and a FIFO follower are never offered.
+    for entry in store.expired_queued(now_ms).await? {
+        let mut expired = false;
+        store
+            .transition(
+                &entry.idempotency_key,
+                &[OutboxState::Queued],
+                Box::new(|e| {
+                    // Re-checked against the entry as it is now: a re-queue
+                    // since the snapshot may have given it a new window.
+                    if now_ms >= e.deliver_by_ms {
+                        expired = true;
+                        e.settle(OutboxState::Failed, Some(now_ms));
+                    }
+                }),
+            )
+            .await?;
+        if expired {
+            tracing::warn!(
+                idempotency_key = %entry.idempotency_key,
+                dest = %entry.dest_did,
+                attempts = entry.attempts,
+                via = ?entry.via,
+                "delivery window closed before any send was accepted; the entry is Failed"
+            );
+            report.expired_queued += 1;
+        }
+    }
+
+    for entry in store.awaiting_confirmation().await? {
         if now_ms < entry.deliver_by_ms {
             continue;
         }
+        let key = entry.idempotency_key.clone();
         if entry.scope == DeliveryScope::Relayed && !reach.sends_receipts(&entry.dest_did, now_ms) {
+            let settled = store
+                .transition(
+                    &key,
+                    &[OutboxState::Sent],
+                    Box::new(move |e| {
+                        e.settle(OutboxState::Unconfirmed, Some(now_ms));
+                        e.unconfirmed_reason = Some(UnconfirmedReason::NoEvidencePath);
+                    }),
+                )
+                .await?;
+            if !settled {
+                report.superseded += 1;
+                continue;
+            }
             tracing::info!(
-                idempotency_key = %entry.idempotency_key,
+                idempotency_key = %key,
                 dest = %entry.dest_did,
                 "delivery unconfirmable: relayed to the recipient's own mediator, and the \
                  recipient is not known to send receipts; not escalated"
             );
-            entry.state = OutboxState::Unconfirmed;
-            entry.unconfirmed_reason = Some(UnconfirmedReason::NoEvidencePath);
-            store.put(entry).await?;
             report.unconfirmed += 1;
             report.unconfirmable += 1;
             continue;
         }
-        match escalator.escalate(&entry).await {
+        // The escalation may re-resolve and re-send, which takes time; evidence
+        // that lands meanwhile settles the entry, and the guarded transition
+        // below then leaves it alone.
+        let escalation = escalator.escalate(&entry).await;
+        let settled = match escalation {
             Escalation::Rebound {
                 deliver_by_ms,
                 hop_id,
                 scope,
             } => {
-                entry.deliver_by_ms = deliver_by_ms;
-                entry.hop_id = hop_id;
-                entry.scope = scope;
-                entry.outbox_observed = false;
-                // Stays Sent: the escalator re-sent over the alternate binding
-                // and it hop-accepted; we keep watching for evidence.
-                store.put(entry).await?;
-                report.rebound += 1;
+                let applied = store
+                    .transition(
+                        &key,
+                        &[OutboxState::Sent],
+                        Box::new(move |e| {
+                            e.deliver_by_ms = deliver_by_ms;
+                            e.hop_id = hop_id;
+                            e.scope = scope;
+                            e.outbox_observed = false;
+                            // Stays Sent: the escalator re-sent over the
+                            // alternate binding and it hop-accepted; we keep
+                            // watching for evidence.
+                        }),
+                    )
+                    .await?;
+                if applied {
+                    report.rebound += 1;
+                }
+                applied
             }
             Escalation::Failed => {
-                entry.state = OutboxState::Failed;
-                store.put(entry).await?;
-                report.failed += 1;
+                let applied = store
+                    .transition(
+                        &key,
+                        &[OutboxState::Sent],
+                        Box::new(move |e| e.settle(OutboxState::Failed, Some(now_ms))),
+                    )
+                    .await?;
+                if applied {
+                    report.failed += 1;
+                }
+                applied
             }
             Escalation::Unconfirmed => {
-                entry.state = OutboxState::Unconfirmed;
-                entry.unconfirmed_reason = Some(UnconfirmedReason::WindowPassed);
-                store.put(entry).await?;
-                report.unconfirmed += 1;
+                let applied = store
+                    .transition(
+                        &key,
+                        &[OutboxState::Sent],
+                        Box::new(move |e| {
+                            e.settle(OutboxState::Unconfirmed, Some(now_ms));
+                            e.unconfirmed_reason = Some(UnconfirmedReason::WindowPassed);
+                        }),
+                    )
+                    .await?;
+                if applied {
+                    report.unconfirmed += 1;
+                }
+                applied
             }
+        };
+        if !settled {
+            tracing::debug!(
+                idempotency_key = %key,
+                "entry changed while its expiry was being escalated; keeping what was recorded"
+            );
+            report.superseded += 1;
         }
     }
     Ok(report)
@@ -305,17 +426,21 @@ pub async fn confirmation_loop_with_reach(
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
+        let Some(now_ms) = now_for_pass("confirmation sweep") else {
+            continue;
+        };
         match sweep_confirmations_with_reach(
             store.as_ref(),
-            now_unix_ms(),
+            now_ms,
             escalator.as_ref(),
             reach.as_ref(),
         )
         .await
         {
-            Ok(report) if report.failed > 0 => {
+            Ok(report) if report.failed > 0 || report.expired_queued > 0 => {
                 tracing::warn!(
                     failed = report.failed,
+                    expired_queued = report.expired_queued,
                     unconfirmed = report.unconfirmed,
                     rebound = report.rebound,
                     "delivery window expired with no evidence and no alternate binding — messages FAILED",
@@ -484,7 +609,7 @@ async fn poll_outbox_drain_inner(
     let present: HashSet<&str> = ids.iter().map(String::as_str).collect();
 
     let mut report = DrainPollReport::default();
-    for mut entry in entries {
+    for entry in entries {
         let Some(hop_id) = entry.hop_id.clone() else {
             continue;
         };
@@ -492,8 +617,7 @@ async fn poll_outbox_drain_inner(
             // Still queued at the mediator — awaiting pickup. Record that we've
             // now seen it, so a later drain is unambiguous.
             if !entry.outbox_observed {
-                entry.outbox_observed = true;
-                store.put(entry).await?;
+                mark_observed(store, &entry.idempotency_key).await?;
             }
             report.observed += 1;
         } else if entry.outbox_observed {
@@ -609,26 +733,48 @@ fn is_pollable(entry: &OutboxEntry) -> bool {
     entry.hop_id.is_some() && entry.scope != DeliveryScope::Relayed
 }
 
+/// Record that a `Sent` entry's hop id was seen in the sender's outbox. Guarded
+/// on `Sent`: an entry settled since the poll's snapshot is left as it is.
+async fn mark_observed(store: &dyn OutboxStore, idempotency_key: &str) -> Result<(), OutboxError> {
+    store
+        .transition(
+            idempotency_key,
+            &[OutboxState::Sent],
+            Box::new(|e| e.outbox_observed = true),
+        )
+        .await?;
+    Ok(())
+}
+
 async fn settle_from_status(
     store: &dyn OutboxStore,
-    mut entry: OutboxEntry,
+    entry: OutboxEntry,
     status: OutboxStatus,
     report: &mut DrainPollReport,
 ) -> Result<(), OutboxError> {
     match status {
         OutboxStatus::Collected => {
-            confirm_delivered(store, &entry.idempotency_key).await?;
-            report.delivered += 1;
+            // Counted only if this settled it; evidence that already did is
+            // not counted twice.
+            let settled = confirm_delivered(store, &entry.idempotency_key).await?;
+            report.delivered += usize::from(settled);
         }
         OutboxStatus::Discarded | OutboxStatus::Withdrawn => {
-            entry.state = OutboxState::Failed;
-            store.put(entry).await?;
-            report.lost += 1;
+            let now = now_unix_ms();
+            if store
+                .transition(
+                    &entry.idempotency_key,
+                    &[OutboxState::Sent],
+                    Box::new(move |e| e.settle(OutboxState::Failed, now)),
+                )
+                .await?
+            {
+                report.lost += 1;
+            }
         }
         OutboxStatus::Queued | OutboxStatus::Delivered => {
             if !entry.outbox_observed {
-                entry.outbox_observed = true;
-                store.put(entry).await?;
+                mark_observed(store, &entry.idempotency_key).await?;
             }
             report.observed += 1;
         }
@@ -650,13 +796,10 @@ pub async fn outbox_drain_loop(
     let mut pacer = StatusPacer::new();
     loop {
         ticker.tick().await;
-        match poll_outbox_drain_paced(
-            transport.as_ref(),
-            store.as_ref(),
-            &mut pacer,
-            now_unix_ms(),
-        )
-        .await
+        let Some(now_ms) = now_for_pass("outbox-drain poll") else {
+            continue;
+        };
+        match poll_outbox_drain_paced(transport.as_ref(), store.as_ref(), &mut pacer, now_ms).await
         {
             Ok(report) if report.lost > 0 => {
                 tracing::warn!(
@@ -678,13 +821,6 @@ pub async fn outbox_drain_loop(
             Err(e) => tracing::warn!(error = %e, "outbox-drain poll failed; retrying next tick"),
         }
     }
-}
-
-fn now_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -763,18 +899,80 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn confirm_does_not_touch_a_queued_entry() {
+    async fn confirm_settles_a_queued_entry() {
         let store = InMemoryOutboxStore::new();
-        // Queued (not yet hop-accepted) — evidence for it shouldn't apply.
+        // Queued — its send may be in flight, or an attempt that timed out
+        // locally may have arrived. Evidence from the recipient still counts
+        // (#1022): dropping it left the entry to be sent again.
         store
             .put(OutboxEntry::new("k1", "did:x", vec![1], 1_000, 61_000))
             .await
             .unwrap();
-        assert!(!confirm_delivered(&store, "k1").await.unwrap());
+        assert!(confirm_delivered(&store, "k1").await.unwrap());
+        let entry = store.get("k1").await.unwrap().unwrap();
+        assert_eq!(entry.state, OutboxState::Delivered);
+        assert!(entry.settled_at_ms.is_some());
+        // Settled entries are not offered to the drain again.
+        assert!(store.due(u64::MAX / 2).await.unwrap().is_empty());
+    }
+
+    /// #1022: an escalation that is slow (it re-resolves and re-sends) holds
+    /// a snapshot of a `Sent` entry; a receipt that lands meanwhile settles it
+    /// `Delivered`, and the escalation's `Failed` must not overwrite that.
+    #[tokio::test]
+    async fn a_stale_sweep_snapshot_cannot_undo_delivered() {
+        struct ReceiptDuringEscalation(Arc<InMemoryOutboxStore>);
+
+        #[async_trait::async_trait]
+        impl ExpiryEscalator for ReceiptDuringEscalation {
+            async fn escalate(&self, entry: &OutboxEntry) -> Escalation {
+                assert!(
+                    confirm_delivered(self.0.as_ref(), &entry.idempotency_key)
+                        .await
+                        .unwrap()
+                );
+                Escalation::Failed
+            }
+        }
+
+        let store = Arc::new(InMemoryOutboxStore::new());
+        let mut e = OutboxEntry::new("k1", "did:x", vec![1], 1_000, 61_000);
+        e.state = OutboxState::Sent;
+        store.put(e).await.unwrap();
+
+        let report = sweep_confirmations_with(
+            store.as_ref(),
+            70_000,
+            &ReceiptDuringEscalation(store.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.superseded, 1);
         assert_eq!(
             store.get("k1").await.unwrap().unwrap().state,
-            OutboxState::Queued
+            OutboxState::Delivered
         );
+    }
+
+    /// #1023: a `Queued` entry the drain never reaches — pinned to a
+    /// transport that is gone — still settles `Failed` at its deadline.
+    #[tokio::test]
+    async fn the_sweep_fails_an_expired_queued_entry_the_drain_never_reached() {
+        let store = InMemoryOutboxStore::new();
+        store
+            .put(OutboxEntry::new("pinned", "did:x", vec![1], 1_000, 61_000).with_via("gone"))
+            .await
+            .unwrap();
+
+        let early = sweep_confirmations(&store, 60_999).await.unwrap();
+        assert_eq!(early.expired_queued, 0);
+
+        let report = sweep_confirmations(&store, 61_000).await.unwrap();
+        assert_eq!(report.expired_queued, 1);
+        let entry = store.get("pinned").await.unwrap().unwrap();
+        assert_eq!(entry.state, OutboxState::Failed);
+        assert_eq!(entry.settled_at_ms, Some(61_000));
     }
 
     #[tokio::test]

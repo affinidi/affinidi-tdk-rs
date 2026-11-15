@@ -1,5 +1,15 @@
 # Affinidi Messaging Mediator Types
 
+## 0.1.2 — `MediatorACLSet::from_u64` clears unassigned bits
+
+Bits 19-63 of an ACL value are unassigned and documented as "must stay zero",
+but `from_u64` (and so `from_hex_string`) kept them, so two values enforcing
+the same ACL compared unequal and the stray bits round-tripped. They are now
+cleared (#1027). A value with only assigned bits is unaffected. `Deserialize`
+still accepts whatever `acl` the JSON holds; that is tracked with the
+`MediatorACLSet` wire-format follow-up (#1141).
+
+
 ## 0.1.1 — audit actions for DID multiplexing
 
 Three new `AuditAction` values, so the mediator can audit what the

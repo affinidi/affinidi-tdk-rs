@@ -23,18 +23,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "affinidi-cesr"
-version = "0.1.5"
-dependencies = [
- "base64ct",
- "thiserror",
-]
-
-[[package]]
 name = "affinidi-tsp"
-version = "0.3.4"
+version = "0.4.0"
 dependencies = [
- "affinidi-cesr",
  "blake2",
  "chacha20poly1305",
  "crypto_secretbox",
@@ -65,12 +56,6 @@ name = "arbitrary"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3bc62ac97cc33321f50863d514c3bc38a453947a8f9e781137e47c7401020aed"
-
-[[package]]
-name = "base64ct"
-version = "1.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "blake2"

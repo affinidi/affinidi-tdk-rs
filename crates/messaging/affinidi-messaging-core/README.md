@@ -131,24 +131,29 @@ async fn establish_relationship(
     adapter: &impl RelationshipManager,
     my_id: &str,
     their_id: &str,
+    transmit: impl AsyncFn(&str, Vec<u8>) -> Result<(), affinidi_messaging_core::MessagingError>,
 ) -> Result<RelationshipState, affinidi_messaging_core::MessagingError> {
-    let state = adapter.request_relationship(my_id, their_id).await?;
+    let change = adapter
+        .request_relationship_with_control(my_id, their_id)
+        .await?;
 
-    match state {
-        // DIDComm: ready immediately
-        RelationshipState::Bidirectional => Ok(state),
-
-        // TSP: invite sent, wait for acceptance
-        RelationshipState::Pending => {
-            // The remote party calls accept_relationship() on their side,
-            // which transitions both sides to Bidirectional
-            Ok(state)
-        }
-
-        _ => Ok(state),
+    // Nothing has been sent yet. TSP returns the invite (RFI) to deliver;
+    // DIDComm returns no control message.
+    if let Some(invite) = change.control_message {
+        transmit(their_id, invite).await?;
     }
+
+    // DIDComm: `Bidirectional` immediately. TSP: `Pending` until the peer's
+    // accept arrives and is unpacked, which moves this side to `Bidirectional`.
+    Ok(change.state)
 }
 ```
+
+The state-only `request_relationship` / `accept_relationship` /
+`cancel_relationship` remain for implicit-relationship protocols. The TSP
+adapter refuses them with `MessagingError::NotSupported`, because changing
+state without handing back the control message would leave the peer never
+hearing of it.
 
 ### Resolving Identities
 
@@ -166,7 +171,9 @@ async fn lookup(
     println!("ID:             {}", identity.id);
     println!("Endpoints:      {:?}", identity.endpoints);
     println!("Encryption key: {} bytes", identity.encryption_key.len());
-    println!("Signing key:    {} bytes", identity.verification_key.len());
+    if let Some(key) = &identity.verification_key {
+        println!("Signing key:    {} bytes", key.len());
+    }
 
     Ok(())
 }
@@ -178,23 +185,25 @@ The real power of this crate is writing functions that accept any protocol
 adapter. This example works identically with DIDComm or TSP:
 
 ```rust
-use affinidi_messaging_core::{
-    MessagingProtocol, RelationshipManager, RelationshipState,
-};
+use affinidi_messaging_core::{MessagingError, MessagingProtocol, RelationshipManager};
 
 async fn secure_exchange(
     adapter: &(impl MessagingProtocol + RelationshipManager),
     my_id: &str,
     their_id: &str,
     message: &[u8],
-) -> Result<Vec<u8>, affinidi_messaging_core::MessagingError> {
-    // Ensure relationship is established
+) -> Result<Vec<u8>, MessagingError> {
+    // Only pack once the relationship admits messages. For TSP that means the
+    // handshake has completed (see "Managing Relationships"): requesting a
+    // relationship here and packing straight away would fail, because the
+    // state is `Pending` until the peer accepts.
     let state = adapter.relationship_state(my_id, their_id).await?;
     if !state.can_send() {
-        adapter.request_relationship(my_id, their_id).await?;
+        return Err(MessagingError::Relationship(format!(
+            "relationship with {their_id} is {state:?}; establish it first"
+        )));
     }
 
-    // Pack and return the message
     adapter.pack(message, my_id, their_id).await
 }
 ```

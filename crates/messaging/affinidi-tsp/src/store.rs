@@ -111,7 +111,6 @@ impl TspStore {
 
     // --- Thread-digest correlation ---
 
-    /// Remember the thread digest of the relationship-forming message for a pair.
     /// Record the *reply* thread id — the accept's own self-addressing digest,
     /// which identifies the relationship in the other direction.
     ///
@@ -146,6 +145,7 @@ impl TspStore {
         held.iter().flatten().any(|d| d == digest)
     }
 
+    /// Remember the thread digest of the relationship-forming message for a pair.
     pub fn set_thread_digest(&self, our_vid: &str, their_vid: &str, digest: [u8; 32]) {
         let key = relationship_key(our_vid, their_vid);
         self.thread_digests.write().unwrap().insert(key, digest);

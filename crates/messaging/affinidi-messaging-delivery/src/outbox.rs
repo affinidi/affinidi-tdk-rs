@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use affinidi_messaging_core::DeliveryScope;
 use serde::{Deserialize, Serialize};
@@ -16,8 +17,13 @@ pub type Key = String;
 ///
 /// `Sent` is **not** terminal and **not** "delivered": it means the next hop
 /// accepted the bytes (durably queued at the mediator) and we are awaiting
-/// end-to-end evidence. Confirmation (`Sent → Delivered`) lands in a later
-/// increment; until then a `Sent` entry is simply not re-sent.
+/// end-to-end evidence. A `Sent` entry is not re-sent; evidence
+/// ([`confirm_delivered`](crate::confirm_delivered)) settles it `Delivered`,
+/// and the confirmation sweep settles it when its window passes.
+///
+/// Terminal states are absorbing for the layer's own transitions: every state
+/// change goes through [`OutboxStore::transition`], guarded on the state it
+/// expects, so a slow task holding a stale snapshot cannot undo a `Delivered`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum OutboxState {
@@ -85,13 +91,30 @@ pub enum UnconfirmedReason {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct OutboxEntry {
-    /// Dedup anchor. The receiver drops a duplicate carrying the same key, which
-    /// is what makes at-least-once retry safe.
+    /// Dedup anchor on the sending side: [`MessagingService::send`] with a key
+    /// that already has an entry returns that entry's state and neither
+    /// enqueues nor transmits again.
+    ///
+    /// The delivery layer does **not** deduplicate on the receiving side. A
+    /// retried transmission (a send that timed out but arrived, a rebind) can
+    /// reach the recipient twice, and a receiving application that must act
+    /// once deduplicates on an identifier it carries in its own payload.
+    ///
+    /// [`MessagingService::send`]: crate::MessagingService::send
     pub idempotency_key: Key,
     /// The recipient DID (who), not the wire.
     pub dest_did: String,
-    /// `None` = drain in parallel; `Some(k)` = per-`k` FIFO (an entry is due only
-    /// if no earlier-enqueued entry with the same key is still non-terminal).
+    /// `None` = no ordering constraint; `Some(k)` = per-`k` FIFO of
+    /// **hop-acceptance**: an entry is due only once every earlier-enqueued
+    /// entry with the same key has left `Queued` (been hop-accepted, or
+    /// settled). It does not wait for the earlier entry's end-to-end
+    /// confirmation, and a rebind of an earlier entry by an
+    /// [`ExpiryEscalator`](crate::ExpiryEscalator) can re-send it after its
+    /// followers.
+    ///
+    /// Either way the drain sends one entry at a time, in due order; "no
+    /// ordering constraint" means an entry does not wait for others, not that
+    /// entries are sent concurrently.
     pub ordering_key: Option<Key>,
     /// The transport (by `MessagingService` transport id) this entry **must** go
     /// out over, or `None` for "whichever transport is primary at drain time".
@@ -123,6 +146,15 @@ pub struct OutboxEntry {
     pub next_attempt_at_ms: u64,
     /// Unix-ms time the entry was enqueued (FIFO ordering anchor).
     pub created_at_ms: u64,
+    /// Enqueue order within this process, the FIFO tie-breaker for entries
+    /// created in the same millisecond (`created_at_ms` alone made every one
+    /// of them a head, sent in key order). Assigned by [`OutboxEntry::new`]
+    /// from a process-wide counter.
+    ///
+    /// `#[serde(default)]`: entries persisted before it existed load as `0`
+    /// and order by `created_at_ms`, then key, as before.
+    #[serde(default)]
+    pub enqueue_seq: u64,
     /// Unix-ms delivery-window deadline — the acceptable recovery time. Past
     /// this without success the entry settles visibly, never a silent success.
     pub deliver_by_ms: u64,
@@ -167,6 +199,13 @@ pub struct OutboxEntry {
     /// `#[serde(default)]` for entries persisted before it existed.
     #[serde(default)]
     pub unconfirmed_reason: Option<UnconfirmedReason>,
+    /// Unix-ms time the entry reached a terminal state, or `None` if it has
+    /// not (or settled before this field existed). The reap measures
+    /// retention from here — see [`settled_basis_ms`](Self::settled_basis_ms).
+    ///
+    /// `#[serde(default)]`: no migration needed for entries already on disk.
+    #[serde(default)]
+    pub settled_at_ms: Option<u64>,
 }
 
 impl OutboxEntry {
@@ -193,7 +232,34 @@ impl OutboxEntry {
             outbox_observed: false,
             scope: DeliveryScope::Unknown,
             unconfirmed_reason: None,
+            enqueue_seq: ENQUEUE_SEQ.fetch_add(1, Ordering::Relaxed),
+            settled_at_ms: None,
         }
+    }
+
+    /// The time retention of a terminal entry is measured from: when it
+    /// settled, or — for an entry settled before
+    /// [`settled_at_ms`](Self::settled_at_ms) existed, or by code that does
+    /// not set it — the later of its creation and its delivery deadline. An
+    /// entry settled early, by evidence, then looks younger than it is, which
+    /// errs the safe way: it is kept longer, never reaped sooner.
+    pub fn settled_basis_ms(&self) -> u64 {
+        self.settled_at_ms
+            .unwrap_or_else(|| self.created_at_ms.max(self.deliver_by_ms))
+    }
+
+    /// Move to the terminal `state`, recording when (`now_ms`; `None` leaves
+    /// [`settled_at_ms`](Self::settled_at_ms) unset if the clock could not be
+    /// read).
+    pub(crate) fn settle(&mut self, state: OutboxState, now_ms: Option<u64>) {
+        debug_assert!(state.is_terminal());
+        self.state = state;
+        self.settled_at_ms = now_ms.or(self.settled_at_ms);
+    }
+
+    /// The FIFO order of entries: enqueue time, then enqueue sequence, then key.
+    fn fifo_order(&self) -> (u64, u64, &str) {
+        (self.created_at_ms, self.enqueue_seq, &self.idempotency_key)
     }
 
     /// Builder-style: state whether the recipient shares the sender's mediator,
@@ -217,6 +283,12 @@ impl OutboxEntry {
     }
 }
 
+/// Process-wide source of [`OutboxEntry::enqueue_seq`].
+static ENQUEUE_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// A state change applied by [`OutboxStore::transition`].
+pub type Transition<'a> = Box<dyn FnOnce(&mut OutboxEntry) + Send + 'a>;
+
 /// Errors from an [`OutboxStore`] backend.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -230,21 +302,117 @@ pub enum OutboxError {
 /// store (e.g. fjall); [`InMemoryOutboxStore`] is provided for tests and
 /// ephemeral use.
 ///
-/// `put` is an upsert keyed by `idempotency_key`, so re-persisting a mutated
-/// entry (new state / attempts / backoff) replaces it. `due` encodes the
-/// ordering-key FIFO gate so the drain doesn't have to.
+/// `put` is an unconditional upsert keyed by `idempotency_key`. The delivery
+/// layer itself no longer uses it for state changes: an enqueue goes through
+/// [`insert_if_absent`](Self::insert_if_absent) and every later change through
+/// [`transition`](Self::transition), both conditional. `put` remains for a
+/// caller that means to overwrite — re-queueing an `Unconfirmed` entry by hand,
+/// or seeding a store. `due` encodes the ordering-key FIFO gate so the drain
+/// doesn't have to.
+///
+/// # Implementing a durable store
+///
+/// Override [`insert_if_absent`](Self::insert_if_absent) and
+/// [`transition`](Self::transition) so each runs as one atomic step (a
+/// transaction, a compare-and-swap) — their defaults are a read followed by a
+/// write and can lose a race between the layer's concurrent loops. Override
+/// [`awaiting_confirmation`](Self::awaiting_confirmation),
+/// [`expired_queued`](Self::expired_queued),
+/// [`terminal_before`](Self::terminal_before) and
+/// [`remove_if_terminal`](Self::remove_if_terminal), or the corresponding
+/// sweeps silently do nothing.
 #[async_trait::async_trait]
 pub trait OutboxStore: Send + Sync {
     /// Insert or replace an entry, keyed by its `idempotency_key`.
     async fn put(&self, entry: OutboxEntry) -> Result<(), OutboxError>;
+
+    /// Insert `entry` unless an entry with its `idempotency_key` exists.
+    /// Returns `None` if it was inserted, or the existing entry (unchanged)
+    /// if not.
+    ///
+    /// What [`MessagingService::send`](crate::MessagingService::send) enqueues
+    /// with: re-sending under an idempotency key must not reset a `Sent` or
+    /// `Delivered` entry to `Queued` and transmit it again.
+    ///
+    /// The default is `get` then `put`, which is not atomic: two concurrent
+    /// inserts of one key can both succeed, the later replacing the earlier. A
+    /// store that can do better SHOULD override it.
+    async fn insert_if_absent(
+        &self,
+        entry: OutboxEntry,
+    ) -> Result<Option<OutboxEntry>, OutboxError> {
+        if let Some(existing) = self.get(&entry.idempotency_key).await? {
+            return Ok(Some(existing));
+        }
+        self.put(entry).await?;
+        Ok(None)
+    }
+
+    /// Apply `change` to the entry for `idempotency_key` **only if** its
+    /// current state is one of `expected`, and persist the result. Returns
+    /// whether it was applied: `false` for an absent entry or one in another
+    /// state, which is left untouched.
+    ///
+    /// Every state change the delivery layer makes goes through this. Its
+    /// loops run on separate tasks and each holds a snapshot across a slow
+    /// `.await` — an escalation re-send, a status poll, a transport send — so
+    /// writing the snapshot back with `put` could overwrite what another task
+    /// recorded in the meantime: a receipt's `Delivered` undone by a sweep's
+    /// `Failed`. Guarding on the expected state makes terminal states
+    /// absorbing: no transition the layer makes expects one.
+    ///
+    /// `change` must not alter `idempotency_key`; an implementation keeps the
+    /// key it looked up.
+    ///
+    /// The default is `get`, check, `put` — correct against a stale snapshot
+    /// taken before a slow operation, but not atomic against a concurrent
+    /// writer between its own read and write. A durable store SHOULD override
+    /// it to evaluate the guard and write in one step, as
+    /// [`InMemoryOutboxStore`] does under its lock.
+    async fn transition(
+        &self,
+        idempotency_key: &str,
+        expected: &[OutboxState],
+        change: Transition<'_>,
+    ) -> Result<bool, OutboxError> {
+        let Some(mut entry) = self.get(idempotency_key).await? else {
+            return Ok(false);
+        };
+        if !expected.contains(&entry.state) {
+            return Ok(false);
+        }
+        change(&mut entry);
+        entry.idempotency_key = idempotency_key.to_string();
+        self.put(entry).await?;
+        Ok(true)
+    }
+
+    /// `Queued` entries whose delivery window has closed
+    /// (`deliver_by_ms <= now_ms`), whatever their backoff, ordering key or
+    /// [`via`](OutboxEntry::via).
+    ///
+    /// The drain fails an expired entry only when `due()` hands it over and
+    /// the drain claims it, which never happens for an entry pinned to a
+    /// transport that is gone, one deferred past its deadline, or a FIFO
+    /// follower stuck behind its head. The confirmation sweep settles these
+    /// from this query instead.
+    ///
+    /// The default returns none, so a store that does not override it keeps
+    /// the old behaviour: those entries stay `Queued`. A durable store SHOULD
+    /// override it.
+    async fn expired_queued(&self, _now_ms: u64) -> Result<Vec<OutboxEntry>, OutboxError> {
+        Ok(Vec::new())
+    }
 
     /// Look up an entry by idempotency key.
     async fn get(&self, idempotency_key: &str) -> Result<Option<OutboxEntry>, OutboxError>;
 
     /// Entries that are ready for a send attempt now: `Queued`, with
     /// `next_attempt_at_ms <= now_ms`, and — for entries with an `ordering_key`
-    /// — only the earliest-enqueued non-terminal entry per key (so a per-key
-    /// FIFO is preserved). Returned oldest-first.
+    /// — only the earliest-enqueued `Queued` entry per key, so a per-key FIFO
+    /// of hop-acceptance is preserved (see [`OutboxEntry::ordering_key`]).
+    /// "Earliest" is by `created_at_ms`, then `enqueue_seq`, then key, so
+    /// exactly one entry heads each key. Returned oldest-first in that order.
     async fn due(&self, now_ms: u64) -> Result<Vec<OutboxEntry>, OutboxError>;
 
     /// All `Sent` entries — hop-accepted and awaiting end-to-end evidence (§5a).
@@ -291,14 +459,14 @@ pub trait OutboxStore: Send + Sync {
         Ok(false)
     }
 
-    /// Terminal entries created at or before `cutoff_ms`, oldest first — the
-    /// input to [`reap_terminal`](crate::reap::reap_terminal).
+    /// Terminal entries that settled at or before `cutoff_ms`
+    /// ([`OutboxEntry::settled_basis_ms`]), oldest first — the input to
+    /// [`reap_terminal`](crate::reap::reap_terminal).
     ///
-    /// Age is measured from `created_at_ms` rather than from when the entry
-    /// settled, because there is no settled-at field and adding one would need
-    /// a migration for entries already on disk. Creation time is the more
-    /// conservative basis anyway: it can only make an entry look *older*, so a
-    /// reap keyed on it never keeps a terminal entry longer than intended.
+    /// Age is measured from when the entry settled, not from when it was
+    /// created: with a delivery window longer than the retention, creation
+    /// time made an entry eligible for reaping the moment it settled, and its
+    /// outcome vanished before anyone could read it.
     ///
     /// Defaulted to none: enumerating by settle time is store-specific, and a
     /// store that cannot do it efficiently should keep working rather than fail
@@ -344,18 +512,19 @@ impl OutboxStore for InMemoryOutboxStore {
     async fn due(&self, now_ms: u64) -> Result<Vec<OutboxEntry>, OutboxError> {
         let entries = self.lock()?;
 
-        // Per ordering-key FIFO head: the earliest-enqueued NON-TERMINAL entry
-        // for each key gates the rest. Entries with no ordering key are
-        // independent.
-        let mut head_created_at: HashMap<&Key, u64> = HashMap::new();
+        // Per ordering-key FIFO head: the earliest-enqueued entry still
+        // `Queued` for each key gates the rest. An entry that has been
+        // hop-accepted (`Sent`) or settled no longer holds its followers back.
+        // Entries with no ordering key are independent.
+        let mut head: HashMap<&Key, &OutboxEntry> = HashMap::new();
         for e in entries.values() {
-            if e.state.is_terminal() {
+            if e.state != OutboxState::Queued {
                 continue;
             }
             if let Some(key) = &e.ordering_key {
-                let head = head_created_at.entry(key).or_insert(e.created_at_ms);
-                if e.created_at_ms < *head {
-                    *head = e.created_at_ms;
+                let current = head.entry(key).or_insert(e);
+                if e.fifo_order() < current.fifo_order() {
+                    *current = e;
                 }
             }
         }
@@ -365,19 +534,59 @@ impl OutboxStore for InMemoryOutboxStore {
             .filter(|e| e.state == OutboxState::Queued && e.next_attempt_at_ms <= now_ms)
             .filter(|e| match &e.ordering_key {
                 // Only the FIFO head for this key is eligible.
-                Some(key) => head_created_at.get(key) == Some(&e.created_at_ms),
+                Some(key) => head
+                    .get(key)
+                    .is_some_and(|h| h.idempotency_key == e.idempotency_key),
                 None => true,
             })
             .cloned()
             .collect();
 
-        // Oldest-first, tie-broken by key for determinism.
-        due.sort_by(|a, b| {
-            a.created_at_ms
-                .cmp(&b.created_at_ms)
-                .then_with(|| a.idempotency_key.cmp(&b.idempotency_key))
-        });
+        // Oldest-first, in enqueue order.
+        due.sort_by(|a, b| a.fifo_order().cmp(&b.fifo_order()));
         Ok(due)
+    }
+
+    async fn insert_if_absent(
+        &self,
+        entry: OutboxEntry,
+    ) -> Result<Option<OutboxEntry>, OutboxError> {
+        let mut entries = self.lock()?;
+        if let Some(existing) = entries.get(&entry.idempotency_key) {
+            return Ok(Some(existing.clone()));
+        }
+        entries.insert(entry.idempotency_key.clone(), entry);
+        Ok(None)
+    }
+
+    async fn transition(
+        &self,
+        idempotency_key: &str,
+        expected: &[OutboxState],
+        change: Transition<'_>,
+    ) -> Result<bool, OutboxError> {
+        // The guard and the write under one lock: that is the whole point.
+        let mut entries = self.lock()?;
+        let Some(entry) = entries.get_mut(idempotency_key) else {
+            return Ok(false);
+        };
+        if !expected.contains(&entry.state) {
+            return Ok(false);
+        }
+        change(entry);
+        entry.idempotency_key = idempotency_key.to_string();
+        Ok(true)
+    }
+
+    async fn expired_queued(&self, now_ms: u64) -> Result<Vec<OutboxEntry>, OutboxError> {
+        let mut out: Vec<OutboxEntry> = self
+            .lock()?
+            .values()
+            .filter(|e| e.state == OutboxState::Queued && e.deliver_by_ms <= now_ms)
+            .cloned()
+            .collect();
+        out.sort_by(|a, b| a.fifo_order().cmp(&b.fifo_order()));
+        Ok(out)
     }
 
     async fn remove_if_terminal(&self, idempotency_key: &str) -> Result<bool, OutboxError> {
@@ -397,10 +606,10 @@ impl OutboxStore for InMemoryOutboxStore {
         let mut out: Vec<OutboxEntry> = self
             .lock()?
             .values()
-            .filter(|e| e.state.is_terminal() && e.created_at_ms <= cutoff_ms)
+            .filter(|e| e.state.is_terminal() && e.settled_basis_ms() <= cutoff_ms)
             .cloned()
             .collect();
-        out.sort_by_key(|e| e.created_at_ms);
+        out.sort_by_key(OutboxEntry::settled_basis_ms);
         Ok(out)
     }
 
@@ -573,5 +782,129 @@ mod tests {
         let loaded: OutboxEntry = serde_json::from_value(without_via).unwrap();
         assert_eq!(loaded.via, None);
         assert_eq!(loaded.idempotency_key, "k1");
+    }
+
+    /// #1023: entries created in the same millisecond have one head, the
+    /// first enqueued, not one per entry in key order.
+    #[tokio::test]
+    async fn same_millisecond_entries_drain_in_enqueue_order() {
+        let store = InMemoryOutboxStore::new();
+        // Enqueued "z" then "a", both at t=100.
+        store
+            .put(entry("z", 100).with_ordering_key("ord"))
+            .await
+            .unwrap();
+        store
+            .put(entry("a", 100).with_ordering_key("ord"))
+            .await
+            .unwrap();
+        let due = store.due(1_000).await.unwrap();
+        let keys: Vec<_> = due.iter().map(|e| e.idempotency_key.as_str()).collect();
+        assert_eq!(keys, vec!["z"]);
+    }
+
+    /// #1023: FIFO is of hop-acceptance — a `Sent` head releases its follower.
+    #[tokio::test]
+    async fn a_sent_head_releases_its_follower() {
+        let store = InMemoryOutboxStore::new();
+        store
+            .put(entry("a", 100).with_ordering_key("ord"))
+            .await
+            .unwrap();
+        store
+            .put(entry("b", 200).with_ordering_key("ord"))
+            .await
+            .unwrap();
+        assert!(
+            store
+                .transition(
+                    "a",
+                    &[OutboxState::Queued],
+                    Box::new(|e| e.state = OutboxState::Sent)
+                )
+                .await
+                .unwrap()
+        );
+        let due = store.due(1_000).await.unwrap();
+        let keys: Vec<_> = due.iter().map(|e| e.idempotency_key.as_str()).collect();
+        assert_eq!(keys, vec!["b"]);
+    }
+
+    #[tokio::test]
+    async fn insert_if_absent_keeps_the_existing_entry() {
+        let store = InMemoryOutboxStore::new();
+        assert!(
+            store
+                .insert_if_absent(entry("k", 100))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let mut changed = entry("k", 999);
+        changed.packed = vec![9];
+        let existing = store.insert_if_absent(changed).await.unwrap().unwrap();
+        assert_eq!(existing.created_at_ms, 100);
+        assert_eq!(store.get("k").await.unwrap().unwrap().packed, vec![1, 2, 3]);
+    }
+
+    /// #1022: a transition guarded on `Sent` cannot overwrite `Delivered`.
+    #[tokio::test]
+    async fn a_guarded_transition_cannot_undo_a_terminal_state() {
+        let store = InMemoryOutboxStore::new();
+        let mut e = entry("k", 100);
+        e.state = OutboxState::Delivered;
+        store.put(e).await.unwrap();
+        let applied = store
+            .transition(
+                "k",
+                &[OutboxState::Sent],
+                Box::new(|e| e.state = OutboxState::Failed),
+            )
+            .await
+            .unwrap();
+        assert!(!applied);
+        assert_eq!(
+            store.get("k").await.unwrap().unwrap().state,
+            OutboxState::Delivered
+        );
+        assert!(
+            !store
+                .transition("absent", &[OutboxState::Sent], Box::new(|_| {}))
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_queued_ignores_backoff_and_ordering() {
+        let store = InMemoryOutboxStore::new();
+        let mut deferred = entry("deferred", 100);
+        deferred.next_attempt_at_ms = 10_000_000;
+        store.put(deferred).await.unwrap();
+        store
+            .put(entry("head", 100).with_ordering_key("ord"))
+            .await
+            .unwrap();
+        store
+            .put(entry("follower", 200).with_ordering_key("ord"))
+            .await
+            .unwrap();
+        let mut sent = entry("sent", 100);
+        sent.state = OutboxState::Sent;
+        store.put(sent).await.unwrap();
+
+        let expired = store.expired_queued(1_000_000).await.unwrap();
+        let mut keys: Vec<_> = expired.iter().map(|e| e.idempotency_key.as_str()).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["deferred", "follower", "head"]);
+    }
+
+    #[test]
+    fn settled_basis_falls_back_to_the_later_of_creation_and_deadline() {
+        let mut e = entry("k", 1_000);
+        assert_eq!(e.settled_basis_ms(), 61_000);
+        e.settle(OutboxState::Failed, Some(70_000));
+        assert_eq!(e.settled_at_ms, Some(70_000));
+        assert_eq!(e.settled_basis_ms(), 70_000);
     }
 }

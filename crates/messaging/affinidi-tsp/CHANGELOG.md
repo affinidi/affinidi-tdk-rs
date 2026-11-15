@@ -1,5 +1,44 @@
 # Affinidi TSP Changelog
 
+## 0.4.0 — received messages say whether they were sealed; the adapter's relationship calls return what to send
+
+Breaking (#1024, #1027, #1026).
+
+- **`ReceivedMessage::confidential`** (new field): `false` for a signed-only
+  (non-confidential, Rev 3 §3.5) message. `TspAgent::receive` accepts those —
+  including control messages, which change relationship state like any other —
+  so a consumer that requires confidentiality must check this field (an
+  opt-in policy to refuse them is tracked in #1141). Adding
+  the field breaks code that builds a `ReceivedMessage` with a struct literal.
+- **`TspAdapter` (`messaging-core`):** `unpack` sets `encrypted` from
+  `confidential` instead of always `true`. A signed-only message now reports
+  `encrypted: false`.
+- **`TspAdapter` relationship calls (behaviour change, R3.6):**
+  `request_relationship_with_control`, `accept_relationship_with_control` and
+  `cancel_relationship_with_control` return the packed RFI / RFA / cancel for
+  the caller to transmit. The state-only `request_relationship`,
+  `accept_relationship` and `cancel_relationship` now fail with
+  `MessagingError::NotSupported` and leave the state untouched; before, they
+  moved the local FSM, discarded the control message, and reported success,
+  so the peer never heard of it and a second call failed on an invalid
+  transition. Requires `affinidi-messaging-core` 0.1.13.
+- `From` conversions between `affinidi_tsp::RelationshipState` and
+  `affinidi_messaging_core::RelationshipState` (under `messaging-core`).
+- **Removed:** the `affinidi-cesr` dependency and `TspError::Cesr`, which
+  nothing constructed. This crate has its own minimal CESR codec
+  (`message::wire`).
+- Docs: `send_routed` no longer claims to require a `Bidirectional`
+  relationship (it does not check one); the crate and README state the spec
+  version once (TSP 1.0; section numbers cite Rev 3 where unchanged); the
+  README's version requirements, badge and related-crates links, feature table
+  (`pq`, `test-vectors`), crypto table (sealed box, signed-only) and
+  relationship state table (every FSM transition) are corrected, and its
+  `messaging-core` example now forms a relationship and unpacks on the
+  recipient's side. Misplaced rustdoc on `wire::decode_version`,
+  `TspStore::set_thread_digest` and `TspAgent::handle_control` is moved to the
+  items it describes.
+
+
 ## 0.3.4 — HPKE refuses an all-zero X25519 shared secret; derived secrets are wiped
 
 The classical HPKE-Base suite (`crypto::hpke`, DHKEM(X25519, HKDF-SHA256)) now

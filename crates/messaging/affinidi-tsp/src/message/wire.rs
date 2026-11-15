@@ -459,14 +459,6 @@ pub fn decode_variable_data(identifier: u32, stream: &[u8], pos: &mut usize) -> 
     Some(stream[range].to_vec())
 }
 
-/// Decode and validate the TSP version marker, returning `(major, minor,
-/// patch)`. Advances `*pos`.
-///
-/// Rev 3 §9.1 separates two failures that Rev 2 conflated. Bytes that are not a
-/// `YTSP` genus marker at all are [`TspError::NotTsp`]; a well-formed marker
-/// whose MAJOR we do not speak is [`TspError::VersionMismatch`]. MINOR and
-/// PATCH are carried to the caller, never rejected — only MAJOR gates whether
-/// the message is processable.
 /// Read the version marker at the start of a whole frame, without gating on it.
 ///
 /// [`decode_version`] refuses a MAJOR this build does not speak, which is right
@@ -479,6 +471,14 @@ pub fn decode_frame_version(stream: &[u8], pos: &mut usize) -> Result<(u16, u16)
     read_version(stream, pos)
 }
 
+/// Decode and validate the TSP version marker at `*pos`, returning
+/// `(major, minor)`. Advances `*pos`.
+///
+/// Rev 3 §9.1 separates two failures that Rev 2 conflated. Bytes that are not a
+/// `YTSP` genus marker at all are [`TspError::NotTsp`]; a well-formed marker
+/// whose MAJOR we do not speak is [`TspError::VersionMismatch`]. MINOR is
+/// carried to the caller, never rejected — only MAJOR gates whether the
+/// message is processable.
 pub fn decode_version(stream: &[u8], pos: &mut usize) -> Result<(u16, u16), TspError> {
     let (major, minor) = read_version(stream, pos)?;
     if major != TSP_VERSION.0 {

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.47.2"
+version = "0.48.0"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -38,7 +38,7 @@ affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version =
 affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.12" }
 ## The delivery layer's receipt contract (`ReceiptPacker`), which
 ## `delivery::AtmReceiptPacker` implements over this SDK.
-affinidi-messaging-delivery = { path = "../affinidi-messaging-delivery", version = "0.2" }
+affinidi-messaging-delivery = { path = "../affinidi-messaging-delivery", version = "0.3" }
 ## Trust Tasks runtime. The task types themselves are generated at build time
 ## from the versions pinned in trust-tasks.lock (see build.rs and `crate::tasks`),
 ## so no prebuilt specification module is compiled.
@@ -48,7 +48,7 @@ trust-tasks-rs = { version = "0.39", default-features = false }
 trust-tasks-proof = { version = "0.39", default-features = false, features = ["affinidi"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 ## Optional: Trust Spanning Protocol (activated by the `tsp` feature)
-affinidi-tsp = { path = "../affinidi-tsp", version = "0.3", optional = true }
+affinidi-tsp = { path = "../affinidi-tsp", version = "0.4", optional = true }
 ## Async trait support for the pluggable TSP `RelationshipStore` (tsp feature only).
 async-trait = "0.1"
 ## Pure-TSP auth handler needs the resolver-cache types named by the
