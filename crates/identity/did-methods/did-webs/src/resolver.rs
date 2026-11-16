@@ -544,14 +544,22 @@ fn check_published(derived: &Derived, published: &Value) -> Result<(), DidWebsEr
         }
     }
 
-    // Services: the same set. A `DelegatorOOBI` endpoint is a discovery hint
-    // whose URL each implementation forms its own way, so it is matched by id
-    // and type only — and its id must be this delegation's seal.
+    // Services: the same set. A service's `type` is a string or a set of
+    // strings (DID Core §5.4), so `"X"` and `["X"]` are one type: it is
+    // compared as a sorted set, never as the JSON it was written as. A
+    // `DelegatorOOBI` endpoint is a discovery hint whose URL each
+    // implementation forms its own way, so it is matched by id and type only —
+    // and its id must be this delegation's seal.
     let service_key = |s: &Value| -> Value {
-        if s["type"] == "DelegatorOOBI" {
-            json!({"id": s["id"], "type": s["type"]})
+        let types = service_types(s);
+        if is_delegator_oobi(s) {
+            json!({"id": s["id"], "type": types})
         } else {
-            normalized(s, subject)
+            let mut key = normalized(s, subject);
+            if let Some(object) = key.as_object_mut() {
+                object.insert("type".into(), json!(types));
+            }
+            key
         }
     };
     let our_services: Vec<Value> = as_array(&ours["service"]).iter().map(service_key).collect();
@@ -560,8 +568,8 @@ fn check_published(derived: &Derived, published: &Value) -> Result<(), DidWebsEr
     let optional_delegator = derived
         .delegation_seal
         .as_ref()
-        .filter(|_| our_services.iter().all(|s| s["type"] != "DelegatorOOBI"))
-        .map(|seal| json!({"id": seal, "type": "DelegatorOOBI"}));
+        .filter(|_| our_services.iter().all(|s| !is_delegator_oobi(s)))
+        .map(|seal| json!({"id": seal, "type": ["DelegatorOOBI"]}));
     let their_services: Vec<Value> = as_array(theirs.get("service").unwrap_or(&Value::Null))
         .iter()
         .map(service_key)
@@ -616,15 +624,13 @@ fn check_published(derived: &Derived, published: &Value) -> Result<(), DidWebsEr
 /// delegation, which the key event log has already verified.
 fn carry_delegator_service(derived: &Derived, published: &Value, document: &mut Value) {
     if derived.delegation_seal.is_none()
-        || as_array(&document["service"])
-            .iter()
-            .any(|s| s["type"] == "DelegatorOOBI")
+        || as_array(&document["service"]).iter().any(is_delegator_oobi)
     {
         return;
     }
     if let Some(delegator) = as_array(published.get("service").unwrap_or(&Value::Null))
         .into_iter()
-        .find(|s| s["type"] == "DelegatorOOBI")
+        .find(is_delegator_oobi)
         && let Some(Value::Array(services)) = document.get_mut("service")
     {
         services.push(delegator);
@@ -648,6 +654,29 @@ fn relative(reference: &str, subject: &str) -> String {
 /// A document member with every reference made relative to the subject and
 /// every subject DID normalised, so two spellings of one document compare
 /// equal.
+/// A service's types as a sorted set: a `type` written as one string is the
+/// set holding it. Anything that is not a string is kept out, so a malformed
+/// `type` compares as no type rather than as some other one.
+fn service_types(service: &Value) -> Vec<String> {
+    let mut types: Vec<String> = match &service["type"] {
+        Value::String(t) => vec![t.clone()],
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|t| t.as_str().map(str::to_string))
+            .collect(),
+        _ => Vec::new(),
+    };
+    types.sort();
+    types.dedup();
+    types
+}
+
+/// Whether `service` is a `DelegatorOOBI` endpoint, however its `type` is
+/// written.
+fn is_delegator_oobi(service: &Value) -> bool {
+    service_types(service).iter().any(|t| t == "DelegatorOOBI")
+}
+
 fn normalized(value: &Value, subject: &str) -> Value {
     match value {
         Value::String(s) if same_did(s, subject) => json!(subject),

@@ -185,6 +185,55 @@ fn the_published_did_json_carries_them() {
     );
 }
 
+/// What a host serves when it renders the resolved document itself — through
+/// `Document`, which writes every service `type` as an array — is the document
+/// the stream implies, and resolves.
+#[test]
+fn a_did_json_rendered_from_the_resolved_document_is_accepted() {
+    let result = created();
+    let did = DidWebs::parse(result.did()).expect("parse");
+    let keri = &result.artifacts().keri_cesr;
+    let document = resolve_from_artifacts(&did, keri, None).expect("resolve");
+    let served = serde_json::to_vec(&document).expect("serializes");
+    resolve_from_artifacts(&did, keri, Some(&served))
+        .expect("the resolver's own rendering of the document is that document");
+}
+
+/// DID Core lets a service `type` be a string or a set of strings: `"X"` and
+/// `["X"]` are one type, and order within the set does not matter.
+#[test]
+fn a_service_type_is_compared_as_a_set() {
+    let result = created();
+    let did = DidWebs::parse(result.did()).expect("parse");
+    let keri = &result.artifacts().keri_cesr;
+    let published: Value = serde_json::from_slice(&result.artifacts().did_json).expect("json");
+    let with_types = |types: Value| -> Vec<u8> {
+        let mut doc = published.clone();
+        for service in doc["service"].as_array_mut().expect("services") {
+            if service["type"] == "TSPTransport" {
+                service["type"] = types.clone();
+            }
+        }
+        serde_json::to_vec(&doc).expect("serializes")
+    };
+
+    resolve_from_artifacts(&did, keri, Some(&with_types(json!(["TSPTransport"]))))
+        .expect("a one-element array is the same type");
+    assert!(
+        resolve_from_artifacts(
+            &did,
+            keri,
+            Some(&with_types(json!(["TSPTransport", "LinkedDomains"])))
+        )
+        .is_err(),
+        "a type the stream does not authorise is still refused"
+    );
+    assert!(
+        resolve_from_artifacts(&did, keri, Some(&with_types(json!([])))).is_err(),
+        "no type is not the authorised one"
+    );
+}
+
 #[test]
 fn a_did_json_leaving_out_the_designated_key_agreement_is_refused() {
     let result = created();
