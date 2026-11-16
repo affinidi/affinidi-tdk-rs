@@ -12,14 +12,27 @@ use crate::vid::{PrivateVid, ResolvedVid};
 
 /// How many received invites are remembered per VID pair.
 ///
-/// The bound is per pair, not overall. Every entry is a genuine invite from
+/// Every entry is a genuine invite from
 /// the peer — one that verified — so one pair's history grows only as fast as
 /// that peer re-forms the relationship, and the bound keeps a long-lived pair
-/// from growing it without limit; the oldest is forgotten first. The map of
-/// pairs itself is not bounded: it gains an entry for every distinct peer that
-/// sends a verified invite and keeps it for the life of the store, as the
-/// relationship and digest maps do.
+/// from growing it without limit; the oldest is forgotten first. The number of
+/// pairs is bounded too ([`DEFAULT_INVITE_HISTORY_PAIRS`]), since anyone can
+/// mint an identity and send a verified invite.
 const SEEN_INVITES_PER_PAIR: usize = 64;
+
+/// How many VID pairs' invite histories a [`TspStore`] remembers by default.
+/// Past it the pair first recorded longest ago is forgotten: a copy of one of
+/// its *earlier* invites is then treated as new (a copy of the invite its
+/// current relationship records is still refused, from the thread digests).
+pub const DEFAULT_INVITE_HISTORY_PAIRS: usize = 10_000;
+
+/// Invite histories per pair, with the order the pairs were first recorded
+/// in, so the oldest can be forgotten.
+#[derive(Default)]
+struct SeenInvites {
+    pairs: HashMap<String, VecDeque<[u8; 32]>>,
+    order: VecDeque<String>,
+}
 
 /// Build a compact relationship key from two VID strings.
 /// Format: "{our_vid}\0{their_vid}" — null byte separator is safe since VIDs can't contain it.
@@ -58,11 +71,18 @@ pub struct TspStore {
     /// The other half's thread id — see [`TspStore::set_reply_thread_digest`].
     reply_thread_digests: RwLock<HashMap<String, [u8; 32]>>,
     /// Thread digests of the invites already acted on for each VID pair, oldest
-    /// first, at most [`SEEN_INVITES_PER_PAIR`] per pair (the map grows with
-    /// the number of distinct peers). Kept across a cancellation: an
+    /// first, at most [`SEEN_INVITES_PER_PAIR`] per pair and at most
+    /// `invite_history_limit` pairs (the pair first recorded longest ago is
+    /// forgotten first). Kept across a cancellation: an
     /// invite from an earlier relationship is no fresher than one from the
     /// current relationship. Key format: "{our_vid}\0{their_vid}".
-    seen_invites: RwLock<HashMap<String, VecDeque<[u8; 32]>>>,
+    seen_invites: RwLock<SeenInvites>,
+    /// At most this many pairs in `seen_invites`.
+    invite_history_limit: std::sync::atomic::AtomicUsize,
+    /// The `Reply_Path` each pair's latest invite carried (Rev 3 §7.2.4), one
+    /// per pair and no larger than the verified invite it came in. Key
+    /// format: "{our_vid}\0{their_vid}".
+    reply_paths: RwLock<HashMap<String, Vec<String>>>,
 }
 
 impl TspStore {
@@ -73,8 +93,61 @@ impl TspStore {
             relationships: RwLock::new(HashMap::new()),
             thread_digests: RwLock::new(HashMap::new()),
             reply_thread_digests: RwLock::new(HashMap::new()),
-            seen_invites: RwLock::new(HashMap::new()),
+            seen_invites: RwLock::new(SeenInvites::default()),
+            invite_history_limit: std::sync::atomic::AtomicUsize::new(DEFAULT_INVITE_HISTORY_PAIRS),
+            reply_paths: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// Remember the invite history of at most `limit` VID pairs from now on
+    /// (default [`DEFAULT_INVITE_HISTORY_PAIRS`]), forgetting the oldest at
+    /// once if more are held.
+    pub fn set_invite_history_limit(&self, limit: usize) {
+        self.invite_history_limit
+            .store(limit, std::sync::atomic::Ordering::Relaxed);
+        let mut seen = self.seen_invites.write().unwrap();
+        Self::evict_invite_history(&mut seen, limit);
+    }
+
+    /// How many VID pairs' invite histories are held.
+    pub fn invite_history_pairs(&self) -> usize {
+        self.seen_invites.read().unwrap().pairs.len()
+    }
+
+    fn evict_invite_history(seen: &mut SeenInvites, limit: usize) {
+        while seen.pairs.len() > limit {
+            let Some(oldest) = seen.order.pop_front() else {
+                break;
+            };
+            seen.pairs.remove(&oldest);
+        }
+    }
+
+    // --- Reply paths (§7.2.4) ---
+
+    /// Record the `Reply_Path` an invite from `their_vid` carried: the route
+    /// the accept is to travel back over. An empty path (a direct reply) is
+    /// not stored.
+    pub fn set_reply_path(&self, our_vid: &str, their_vid: &str, path: Vec<String>) {
+        let key = relationship_key(our_vid, their_vid);
+        let mut paths = self.reply_paths.write().unwrap();
+        if path.is_empty() {
+            paths.remove(&key);
+        } else {
+            paths.insert(key, path);
+        }
+    }
+
+    /// The `Reply_Path` recorded for the pair; empty for a direct reply or
+    /// when none is recorded.
+    pub fn reply_path(&self, our_vid: &str, their_vid: &str) -> Vec<String> {
+        let key = relationship_key(our_vid, their_vid);
+        self.reply_paths
+            .read()
+            .unwrap()
+            .get(&key)
+            .cloned()
+            .unwrap_or_default()
     }
 
     // --- Invites already acted on ---
@@ -91,6 +164,7 @@ impl TspStore {
         self.seen_invites
             .read()
             .unwrap()
+            .pairs
             .get(&key)
             .is_some_and(|seen| seen.contains(digest))
     }
@@ -98,15 +172,21 @@ impl TspStore {
     /// Remember that the invite with this thread digest has been acted on.
     pub(crate) fn record_seen_invite(&self, our_vid: &str, their_vid: &str, digest: [u8; 32]) {
         let key = relationship_key(our_vid, their_vid);
+        let limit = self
+            .invite_history_limit
+            .load(std::sync::atomic::Ordering::Relaxed);
         let mut seen_invites = self.seen_invites.write().unwrap();
-        let seen = seen_invites.entry(key).or_default();
-        if seen.contains(&digest) {
-            return;
+        if !seen_invites.pairs.contains_key(&key) {
+            seen_invites.order.push_back(key.clone());
         }
-        if seen.len() == SEEN_INVITES_PER_PAIR {
-            seen.pop_front();
+        let seen = seen_invites.pairs.entry(key).or_default();
+        if !seen.contains(&digest) {
+            if seen.len() == SEEN_INVITES_PER_PAIR {
+                seen.pop_front();
+            }
+            seen.push_back(digest);
         }
-        seen.push_back(digest);
+        Self::evict_invite_history(&mut seen_invites, limit);
     }
 
     // --- Thread-digest correlation ---

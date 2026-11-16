@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.3.3] - 2026-11-16
+
+A stalled subscriber no longer holds the dispatcher; a partial handoff is
+re-offered only to the subscribers that missed it; an admission policy for
+unknown senders (#1168)
+
+- **Per-subscriber waiting, off the dispatcher.** Each `subscribe()` stream
+  now has, in front of its queue, a bounded wait queue (64 offers) served by
+  a task of its own, which waits up to `SUBSCRIBER_SEND_TIMEOUT` (10 s) for
+  room. The dispatcher puts a message straight into a queue with room and
+  never waits: a subscriber that stops reading no longer delays request
+  replies, receipts or the other subscribers. A message is still acked and
+  receipted only once every live subscriber it was offered to has taken it,
+  so a message whose handoff waits on a subscriber is acked from that
+  subscriber's task, after the dispatcher has moved on (acks can complete out
+  of arrival order). A subscriber whose wait queue is full misses the message
+  at once, as one whose wait ran out does. `subscribe()` must now be called
+  inside a Tokio runtime to get the wait (outside one, a full queue misses at
+  once; nothing is lost).
+- **Partial handoff is tracked per subscriber.** A message some subscribers
+  took and some missed is still left unacked, but the subscribers that took
+  it are recorded — in process, and on the record (new
+  `InboxRecord::handed_to`, at most `MAX_HANDED_TO` ids) through the new
+  `InboxStore::mark_handed_off` — and the mediator's copy, or
+  `redeliver_pending`, is offered only to the live subscribers that missed
+  it. `mark_handed_off` has a default that tracks nothing (`Ok(false)`), in
+  which case a re-offer may still reach a subscriber that took the message;
+  `InMemoryInboxStore` implements it, and
+  `inbox::conformance::check_handoff_tracking` checks a store that does.
+- **Admission policy for unknown senders.** New `SenderClassifier` (with
+  `AllowList`), `SenderClass`, `InboxAdmission`,
+  `InMemoryInboxStore::with_admission`,
+  `MessagingService::with_sender_classifier`, `CLASSIFY_TIMEOUT`,
+  `InboxRecord::sender_class`/`with_sender_class`,
+  `InboxRefusal::UnknownSenders` and
+  `inbox::conformance::check_unknown_sender_admission`. With a classifier
+  installed, a sender it calls `Unknown` (no established relationship, not on
+  an allow-list) is held to a lower per-sender quota (default 100 records /
+  1 MiB pending) and all unknown senders share a sub-cap (default 10 000
+  records / 16 MiB pending), so cheap identities cannot fill the store's
+  total bound and starve known senders. A refusal leaves the message unacked
+  at the mediator. The classifier runs on the dispatcher bounded by
+  `CLASSIFY_TIMEOUT` (500 ms; one that does not answer counts the sender as
+  unknown). Without a classifier every sender is `Known` and nothing changes.
+  Records persisted before this release deserialize as `Known` with an empty
+  `handed_to`.
+
 ## [0.3.2] - 2026-11-15
 
 Inbox: a receipt means the message is recorded, and re-sends are not delivered twice (#1140)

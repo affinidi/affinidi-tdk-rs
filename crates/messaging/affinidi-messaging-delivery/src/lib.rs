@@ -137,8 +137,9 @@ pub use confirm::{
 };
 pub use drain::{DrainReport, drain_loop, drain_loop_via, drain_once, drain_once_via};
 pub use inbox::{
-    INBOX_REAP_INTERVAL, InMemoryInboxStore, InboxError, InboxKey, InboxLimits, InboxReapReport,
-    InboxRecord, InboxRefusal, InboxRetention, InboxState, InboxStore, Recorded, payload_digest,
+    AllowList, CLASSIFY_TIMEOUT, INBOX_REAP_INTERVAL, InMemoryInboxStore, InboxAdmission,
+    InboxError, InboxKey, InboxLimits, InboxReapReport, InboxRecord, InboxRefusal, InboxRetention,
+    InboxState, InboxStore, MAX_HANDED_TO, Recorded, SenderClass, SenderClassifier, payload_digest,
 };
 pub use outbox::{
     InMemoryOutboxStore, Key, OutboxEntry, OutboxError, OutboxState, OutboxStore, Transition,

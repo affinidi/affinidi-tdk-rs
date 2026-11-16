@@ -377,7 +377,9 @@ impl ATM {
             deletion_shutdown: CancellationToken::new(),
             mediator_speaks: std::sync::Mutex::new(std::collections::HashMap::new()),
             #[cfg(feature = "tsp")]
-            tsp_key_state: affinidi_tsp::keystate::KeyStateTracker::new(),
+            tsp_key_state: affinidi_tsp::keystate::KeyStateTracker::with_retained_limit(
+                config.tsp_retained_key_state_limit(),
+            ),
             #[cfg(feature = "tsp")]
             status_over_tsp: std::sync::Mutex::new(Default::default()),
         };

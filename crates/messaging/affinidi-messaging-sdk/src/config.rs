@@ -232,6 +232,14 @@ pub struct ATMConfig {
     /// re-verification threshold and a minute's resolution rate limit.
     #[cfg(feature = "tsp")]
     pub(crate) tsp_key_state_policy: affinidi_tsp::KeyStatePolicy,
+    /// What the TSP receive path refuses beyond what verification refuses.
+    /// The default accepts signed-only (Rev 3 §3.5) messages.
+    #[cfg(feature = "tsp")]
+    pub(crate) tsp_receive_policy: affinidi_tsp::ReceivePolicy,
+    /// How many peers whose relationships have ended keep their TSP key-state
+    /// bookkeeping.
+    #[cfg(feature = "tsp")]
+    pub(crate) tsp_retained_key_state_limit: usize,
 }
 
 impl ATMConfig {
@@ -333,6 +341,19 @@ impl ATMConfig {
     #[cfg(feature = "tsp")]
     pub(crate) fn tsp_key_state_policy(&self) -> affinidi_tsp::KeyStatePolicy {
         self.tsp_key_state_policy
+    }
+
+    /// What the TSP receive path refuses beyond what verification refuses.
+    #[cfg(feature = "tsp")]
+    pub(crate) fn tsp_receive_policy(&self) -> affinidi_tsp::ReceivePolicy {
+        self.tsp_receive_policy
+    }
+
+    /// How many peers whose relationships have ended keep their TSP key-state
+    /// bookkeeping.
+    #[cfg(feature = "tsp")]
+    pub(crate) fn tsp_retained_key_state_limit(&self) -> usize {
+        self.tsp_retained_key_state_limit
     }
 
     /// Returns a builder for `ATMConfig`
@@ -454,6 +475,10 @@ pub struct ATMConfigBuilder {
     relationship_drop_counter: Option<Arc<std::sync::atomic::AtomicU64>>,
     #[cfg(feature = "tsp")]
     tsp_key_state_policy: affinidi_tsp::KeyStatePolicy,
+    #[cfg(feature = "tsp")]
+    tsp_receive_policy: affinidi_tsp::ReceivePolicy,
+    #[cfg(feature = "tsp")]
+    tsp_retained_key_state_limit: usize,
 }
 
 impl Default for ATMConfigBuilder {
@@ -488,6 +513,10 @@ impl Default for ATMConfigBuilder {
             relationship_drop_counter: None,
             #[cfg(feature = "tsp")]
             tsp_key_state_policy: affinidi_tsp::KeyStatePolicy::default(),
+            #[cfg(feature = "tsp")]
+            tsp_receive_policy: affinidi_tsp::ReceivePolicy::default(),
+            #[cfg(feature = "tsp")]
+            tsp_retained_key_state_limit: affinidi_tsp::keystate::DEFAULT_RETAINED_KEY_STATE,
         }
     }
 }
@@ -851,6 +880,33 @@ impl ATMConfigBuilder {
         self
     }
 
+    /// What the TSP receive path refuses beyond what verification refuses.
+    ///
+    /// [`ReceivePolicy::require_confidential`](affinidi_tsp::ReceivePolicy::require_confidential)
+    /// refuses every signed-only (non-confidential, Rev 3 §3.5) message —
+    /// control messages included, which then never change relationship
+    /// state — so a consumer that relies on confidentiality need not check
+    /// `UnpackedMessage::confidential` itself. A refused message is an
+    /// unpack failure that is not transient (it is not left queued). The
+    /// default accepts signed-only messages, as before.
+    #[cfg(feature = "tsp")]
+    pub fn with_tsp_receive_policy(mut self, policy: affinidi_tsp::ReceivePolicy) -> Self {
+        self.tsp_receive_policy = policy;
+        self
+    }
+
+    /// How many peers whose TSP relationships have ended keep their key-state
+    /// bookkeeping (last seen, refresh back-off). It is kept so cancelling and
+    /// re-forming a relationship cannot reset a back-off; past `limit` the
+    /// peer whose relationship ended longest ago is forgotten, and re-forming
+    /// a relationship with it confirms its key state afresh. Defaults to
+    /// [`affinidi_tsp::keystate::DEFAULT_RETAINED_KEY_STATE`] (10 000).
+    #[cfg(feature = "tsp")]
+    pub fn with_tsp_retained_key_state_limit(mut self, limit: usize) -> Self {
+        self.tsp_retained_key_state_limit = limit;
+        self
+    }
+
     pub fn build(self) -> Result<ATMConfig, ATMError> {
         // Process any custom SSL certificates
         let mut certs = vec![];
@@ -937,6 +993,10 @@ impl ATMConfigBuilder {
             relationship_drop_counter: self.relationship_drop_counter,
             #[cfg(feature = "tsp")]
             tsp_key_state_policy: self.tsp_key_state_policy,
+            #[cfg(feature = "tsp")]
+            tsp_receive_policy: self.tsp_receive_policy,
+            #[cfg(feature = "tsp")]
+            tsp_retained_key_state_limit: self.tsp_retained_key_state_limit,
         })
     }
 }
@@ -1014,6 +1074,30 @@ mod tests {
     /// with a day's re-verification threshold and a minute's rate limit, and
     /// can be replaced wholesale — including turning the rules off for a
     /// deployment where the VID implementation maintains key state itself.
+    #[test]
+    #[cfg(feature = "tsp")]
+    fn retained_key_state_limit_defaults_and_overrides() {
+        let config = ATMConfig::builder().build().unwrap();
+        assert_eq!(config.tsp_retained_key_state_limit(), 10_000);
+        let config = ATMConfig::builder()
+            .with_tsp_retained_key_state_limit(5)
+            .build()
+            .unwrap();
+        assert_eq!(config.tsp_retained_key_state_limit(), 5);
+    }
+
+    #[test]
+    #[cfg(feature = "tsp")]
+    fn receive_policy_defaults_to_accepting_signed_only_messages() {
+        let config = ATMConfig::builder().build().unwrap();
+        assert!(!config.tsp_receive_policy().require_confidential);
+        let config = ATMConfig::builder()
+            .with_tsp_receive_policy(affinidi_tsp::ReceivePolicy::require_confidential())
+            .build()
+            .unwrap();
+        assert!(config.tsp_receive_policy().require_confidential);
+    }
+
     #[test]
     #[cfg(feature = "tsp")]
     fn key_state_policy_defaults_and_overrides() {
