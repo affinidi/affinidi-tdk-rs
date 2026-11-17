@@ -78,7 +78,7 @@ pub fn generate_ml_dsa_87(seed: Option<&[u8; 32]>) -> KeyPair {
 
 fn seed_to_b32(seed: &[u8]) -> Result<B32> {
     if seed.len() != 32 {
-        return Err(CryptoError::KeyError(format!(
+        return Err(CryptoError::Decoding(format!(
             "Invalid ML-DSA seed length: expected 32, got {}",
             seed.len()
         )));
@@ -193,7 +193,7 @@ pub fn sign_ml_dsa_87(seed: &[u8], data: &[u8]) -> Result<Vec<u8>> {
 
 fn vk_bytes_to_array<const N: usize>(vk: &[u8]) -> Result<[u8; N]> {
     if vk.len() != N {
-        return Err(CryptoError::KeyError(format!(
+        return Err(CryptoError::Decoding(format!(
             "Invalid ML-DSA public key length: expected {}, got {}",
             N,
             vk.len()
@@ -210,14 +210,14 @@ pub fn verify_ml_dsa_44(public_key: &[u8], data: &[u8], signature: &[u8]) -> Res
     let enc = ml_dsa::EncodedVerifyingKey::<MlDsa44>::from(vk_arr);
     let vk = ml_dsa::VerifyingKey::<MlDsa44>::decode(&enc);
     let sig_bytes: [u8; 2420] = signature.try_into().map_err(|_| {
-        CryptoError::KeyError(format!(
+        CryptoError::Decoding(format!(
             "Invalid ML-DSA-44 signature length: expected 2420, got {}",
             signature.len()
         ))
     })?;
     let sig_enc = ml_dsa::EncodedSignature::<MlDsa44>::from(sig_bytes);
     let sig = Signature::<MlDsa44>::decode(&sig_enc)
-        .ok_or_else(|| CryptoError::KeyError("Invalid ML-DSA-44 signature encoding".into()))?;
+        .ok_or_else(|| CryptoError::Decoding("Invalid ML-DSA-44 signature encoding".into()))?;
     vk.verify(data, &sig)
         .map_err(|e| CryptoError::Verification(format!("ML-DSA-44 verification failed: {e}")))
 }
@@ -228,14 +228,14 @@ pub fn verify_ml_dsa_65(public_key: &[u8], data: &[u8], signature: &[u8]) -> Res
     let enc = ml_dsa::EncodedVerifyingKey::<MlDsa65>::from(vk_arr);
     let vk = ml_dsa::VerifyingKey::<MlDsa65>::decode(&enc);
     let sig_bytes: [u8; 3309] = signature.try_into().map_err(|_| {
-        CryptoError::KeyError(format!(
+        CryptoError::Decoding(format!(
             "Invalid ML-DSA-65 signature length: expected 3309, got {}",
             signature.len()
         ))
     })?;
     let sig_enc = ml_dsa::EncodedSignature::<MlDsa65>::from(sig_bytes);
     let sig = Signature::<MlDsa65>::decode(&sig_enc)
-        .ok_or_else(|| CryptoError::KeyError("Invalid ML-DSA-65 signature encoding".into()))?;
+        .ok_or_else(|| CryptoError::Decoding("Invalid ML-DSA-65 signature encoding".into()))?;
     vk.verify(data, &sig)
         .map_err(|e| CryptoError::Verification(format!("ML-DSA-65 verification failed: {e}")))
 }
@@ -246,14 +246,14 @@ pub fn verify_ml_dsa_87(public_key: &[u8], data: &[u8], signature: &[u8]) -> Res
     let enc = ml_dsa::EncodedVerifyingKey::<MlDsa87>::from(vk_arr);
     let vk = ml_dsa::VerifyingKey::<MlDsa87>::decode(&enc);
     let sig_bytes: [u8; 4627] = signature.try_into().map_err(|_| {
-        CryptoError::KeyError(format!(
+        CryptoError::Decoding(format!(
             "Invalid ML-DSA-87 signature length: expected 4627, got {}",
             signature.len()
         ))
     })?;
     let sig_enc = ml_dsa::EncodedSignature::<MlDsa87>::from(sig_bytes);
     let sig = Signature::<MlDsa87>::decode(&sig_enc)
-        .ok_or_else(|| CryptoError::KeyError("Invalid ML-DSA-87 signature encoding".into()))?;
+        .ok_or_else(|| CryptoError::Decoding("Invalid ML-DSA-87 signature encoding".into()))?;
     vk.verify(data, &sig)
         .map_err(|e| CryptoError::Verification(format!("ML-DSA-87 verification failed: {e}")))
 }
@@ -336,6 +336,15 @@ mod tests {
         sig[0] ^= 0xff;
         let err = verify_ml_dsa_44(&kp.public_bytes, b"m", &sig).unwrap_err();
         assert!(matches!(err, CryptoError::Verification(_)), "got {err:?}");
+    }
+
+    /// A wrong-length signature is malformed input, reported as `Decoding`
+    /// like P-256's (#1143), not as a key error.
+    #[test]
+    fn ml_dsa_44_wrong_length_sig_is_a_decoding_error() {
+        let kp = generate_ml_dsa_44(Some(&[1u8; 32]));
+        let err = verify_ml_dsa_44(&kp.public_bytes, b"m", &[0u8; 10]).unwrap_err();
+        assert!(matches!(err, CryptoError::Decoding(_)), "got {err:?}");
     }
 
     #[test]

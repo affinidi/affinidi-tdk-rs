@@ -1,5 +1,31 @@
 # Affinidi DID Resolver Cache SDK
 
+## [0.9.0] - 2026-11-17
+
+did:webs registers under `MethodName::Webs` (#1166); new generation of DID crates
+
+**Breaking (R3.6).** Part of the coordinated breaking release of #1143 and #1166: affinidi-crypto 0.4, affinidi-encoding 0.2, affinidi-secrets-resolver 0.6, affinidi-did-common 0.5, affinidi-did-resolver-traits 0.2, affinidi-did-web 0.2, affinidi-did-resolver-cache-sdk 0.9 and affinidi-data-integrity 0.9 move together; a crate that mixes two generations does not compile.
+
+- **Changed: did:webs is registered under `MethodName::Webs`** (it was
+  `MethodName::Other("webs")`), matching affinidi-did-common 0.5's
+  `DIDMethod::Webs`. Every resolver-chain method (`set_resolver`,
+  `prepend_resolver`, `append_resolver`, `clear_resolvers`,
+  `remove_resolver`, `find_resolver`) normalises its key with
+  `MethodName::canonical`, so a caller that still passes
+  `MethodName::Other("webs")` reaches the did:webs chain as before.
+- A client built without the `did-webs` feature reports did:webs as
+  `UnsupportedMethod("did:webs is not enabled")`, like did:webvh / did:scid.
+- **Re-exported types change:** `MethodName`, `AsyncResolver`, `Resolver`,
+  `Resolution` and `ResolverError` come from affinidi-did-resolver-traits 0.2
+  (`MethodName` is now `#[non_exhaustive]`), and `HostPolicy` from
+  affinidi-did-web 0.2, whose `PublicOnly` now also refuses `*.internal`,
+  `*.home.arpa` and single-label did:web hosts (behaviour change).
+- Moves to affinidi-did-common 0.5, affinidi-did-web 0.2, affinidi-did-webs
+  0.14, did-scid 0.5, did-ebsi 0.2, the did:ethr / did:jwk / did:pkh 0.2
+  resolvers, did-example 0.6 and agent-names 0.2.
+- Requires a `didwebvh-rs` release that accepts affinidi-did-common 0.5,
+  affinidi-data-integrity 0.9 and affinidi-secrets-resolver 0.6.
+
 ## [0.8.57] - 2026-11-15
 
 method crates' own resolvers

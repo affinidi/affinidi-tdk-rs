@@ -1,5 +1,9 @@
 # Affinidi DID Resolver Cache Server
 
+## [0.13.0] - 2026-11-17
+
+**Breaking (R3.6): moves to the new generation of its affinidi dependencies.** affinidi-did-resolver-cache-sdk's `DIDCacheClient`, `DIDCacheError` and `DIDMethod` appear in this crate's public API, so it moves a minor even where its own code is unchanged. Part of the coordinated breaking release of #1143 and #1166: affinidi-crypto 0.4, affinidi-encoding 0.2, affinidi-secrets-resolver 0.6, affinidi-did-common 0.5, affinidi-did-resolver-traits 0.2, affinidi-did-web 0.2, affinidi-did-resolver-cache-sdk 0.9 and affinidi-data-integrity 0.9 move together; a crate that mixes two generations does not compile.
+
 ## [0.12.0] - 2026-11-15
 
 Agent name lookups: negative cache, single-flight, `Retry-After` (AgenticSec #547)

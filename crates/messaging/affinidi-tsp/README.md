@@ -50,7 +50,7 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-affinidi-tsp = { version = "0.4" }
+affinidi-tsp = { version = "0.5" }
 ```
 
 ### Creating an Agent and VIDs
@@ -169,7 +169,7 @@ and relationship management across protocols.
 
 ```toml
 [dependencies]
-affinidi-tsp = { version = "0.4", features = ["messaging-core"] }
+affinidi-tsp = { version = "0.5", features = ["messaging-core"] }
 affinidi-messaging-core = "0.1"
 ```
 

@@ -63,12 +63,12 @@ impl DidWebs {
 
     /// Read a parsed `did:webs` DID (or DID URL) as this method's identifier.
     ///
-    /// `affinidi-did-common` does not model did:webs, so the DID's method is
-    /// `DIDMethod::Other { method: "webs", .. }` and its method-specific id
-    /// is split here into the host, path and AID labels. This checks what DID
-    /// syntax does not: there is a host and an AID and no empty label, the
-    /// host label decodes to a host and optional port, each path label to one
-    /// path segment, and the AID is plausibly a CESR primitive. A `versionId` query parameter is kept; a fragment is
+    /// `affinidi-did-common` parses did:webs into
+    /// `DIDMethod::Webs { domain, path_segments, aid, .. }` (0.5.0), having
+    /// already checked that there is a host and an AID, no empty label, and
+    /// that the AID is plausibly a CESR primitive. This checks the rest: the
+    /// host label decodes to a host and optional port, and each path label to
+    /// one path segment. A `versionId` query parameter is kept; a fragment is
     /// ignored; a path is refused, because it is not part of the identifier.
     ///
     /// # Errors
@@ -76,30 +76,24 @@ impl DidWebs {
     /// breaks one of those rules.
     pub fn from_did(did: &DID) -> Result<Self, DidWebsError> {
         let text = did.to_string();
-        let identifier = match did.method_ref() {
-            DIDMethod::Other { method, identifier } if method == "webs" => identifier,
-            _ => {
-                return Err(DidWebsError::InvalidDid(format!(
-                    "{text:?} is not a did:webs DID"
-                )));
-            }
-        };
-        let labels: Vec<&str> = identifier.split(':').collect();
-        if labels.len() < 2 {
+        let DIDMethod::Webs {
+            identifier,
+            domain,
+            path_segments,
+            aid,
+        } = did.method_ref()
+        else {
             return Err(DidWebsError::InvalidDid(format!(
-                "{text:?} has no AID: did:webs requires a host and a trailing AID"
+                "{text:?} is not a did:webs DID"
             )));
-        }
-        if labels.iter().any(|label| label.is_empty()) {
+        };
+        // did-common enforces these when it parses; they are re-checked so a
+        // `DIDMethod::Webs` built by hand cannot put a malformed label in a URL.
+        if domain.is_empty() || path_segments.iter().any(String::is_empty) {
             return Err(DidWebsError::InvalidDid(format!(
                 "{text:?} contains an empty label"
             )));
         }
-        let (domain, aid) = (labels[0], labels[labels.len() - 1]);
-        let path_segments: Vec<String> = labels[1..labels.len() - 1]
-            .iter()
-            .map(|label| (*label).to_string())
-            .collect();
         if did.path_ref().is_some() {
             return Err(DidWebsError::InvalidDid(format!(
                 "{text:?} has a path, which is not part of a did:webs identifier"
@@ -118,7 +112,7 @@ impl DidWebs {
 
         // Path segments stay as written in the URL, but each must decode to a
         // single path segment.
-        for segment in &path_segments {
+        for segment in path_segments {
             validate_path_segment(&percent_decode(segment, &text)?, &text)?;
         }
 
@@ -126,8 +120,8 @@ impl DidWebs {
             did: format!("did:webs:{identifier}"),
             version_id,
             host,
-            path: path_segments,
-            aid: aid.to_string(),
+            path: path_segments.clone(),
+            aid: aid.clone(),
         })
     }
 

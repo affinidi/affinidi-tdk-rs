@@ -917,9 +917,8 @@ impl AsyncResolver for EbsiResolver {
 /// `did.json` is cross-checked rather than trusted; a disagreement fails the
 /// resolution.
 ///
-/// `did:webs` is not modelled by `DIDMethod`, so it arrives here as
-/// `DIDMethod::Other { method: "webs", .. }` and is registered under
-/// `MethodName::Other("webs")`.
+/// `did:webs` arrives here as `DIDMethod::Webs` and is registered under
+/// `MethodName::Webs` (0.9.0; before that, `Other("webs")`).
 #[cfg(feature = "did-webs")]
 pub struct WebsResolver {
     inner: affinidi_did_webs::WebsResolver,

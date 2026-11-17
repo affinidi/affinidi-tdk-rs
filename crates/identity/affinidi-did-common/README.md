@@ -13,7 +13,7 @@ Documents. This crate is the foundation for the Affinidi DID Resolver.
 
 ```toml
 [dependencies]
-affinidi-did-common = "0.4"
+affinidi-did-common = "0.5"
 ```
 
 ## Feature Flags

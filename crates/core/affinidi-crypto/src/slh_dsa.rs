@@ -46,7 +46,7 @@ pub fn verify_slh_dsa_sha2_128s(public_key: &[u8], data: &[u8], signature: &[u8]
     let vk = VerifyingKey::<Sha2_128s>::try_from(public_key)
         .map_err(|e| CryptoError::KeyError(format!("Invalid SLH-DSA public key: {e}")))?;
     let sig = Signature::<Sha2_128s>::try_from(signature)
-        .map_err(|e| CryptoError::KeyError(format!("Invalid SLH-DSA signature: {e}")))?;
+        .map_err(|e| CryptoError::Decoding(format!("Invalid SLH-DSA signature: {e}")))?;
     vk.verify(data, &sig)
         .map_err(|e| CryptoError::Verification(format!("SLH-DSA verification failed: {e}")))
 }

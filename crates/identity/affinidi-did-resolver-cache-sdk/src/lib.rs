@@ -427,16 +427,16 @@ impl Clone for DIDCacheClient {
 /// locally.
 #[cfg(feature = "network")]
 fn resolved_locally_in_network_mode(method: &MethodName) -> bool {
-    match method {
+    matches!(
+        method,
         MethodName::Key
-        | MethodName::Peer
-        | MethodName::Jwk
-        | MethodName::Ethr
-        | MethodName::Pkh
-        | MethodName::Scid => true,
-        MethodName::Other(name) => name == "webs",
-        _ => false,
-    }
+            | MethodName::Peer
+            | MethodName::Jwk
+            | MethodName::Ethr
+            | MethodName::Pkh
+            | MethodName::Scid
+            | MethodName::Webs
+    )
 }
 
 /// Warn once, at construction, when the cache server is reached over plain
@@ -521,7 +521,13 @@ impl DIDCacheClient {
     ///
     /// This is the most common operation — "I want this resolver for this method."
     /// Clears any existing resolvers for the method before inserting.
+    ///
+    /// `method` is normalised with [`MethodName::canonical`] here and in every
+    /// other resolver-chain method, so `MethodName::Other("webs")` (how
+    /// did:webs was named before 0.9.0) is the same key as
+    /// [`MethodName::Webs`].
     pub fn set_resolver(&mut self, method: MethodName, resolver: Box<dyn AsyncResolver>) {
+        let method = method.canonical();
         let map = self.resolvers_mut();
         let deque = map.entry(method).or_default();
         deque.clear();
@@ -536,6 +542,7 @@ impl DIDCacheClient {
         method: MethodName,
         resolver: Box<dyn AsyncResolver>,
     ) -> Result<(), DIDCacheError> {
+        let method = method.canonical();
         let name = resolver.name().to_string();
         let map = self.resolvers_mut();
         let deque = map.entry(method.clone()).or_default();
@@ -556,6 +563,7 @@ impl DIDCacheClient {
         method: MethodName,
         resolver: Box<dyn AsyncResolver>,
     ) -> Result<(), DIDCacheError> {
+        let method = method.canonical();
         let name = resolver.name().to_string();
         let map = self.resolvers_mut();
         let deque = map.entry(method.clone()).or_default();
@@ -570,7 +578,8 @@ impl DIDCacheClient {
 
     /// Remove all resolvers for a method.
     pub fn clear_resolvers(&mut self, method: &MethodName) {
-        self.resolvers_mut().remove(method);
+        let method = method.clone().canonical();
+        self.resolvers_mut().remove(&method);
     }
 
     /// Remove a resolver at a specific index in a method's chain.
@@ -581,11 +590,12 @@ impl DIDCacheClient {
         method: &MethodName,
         index: usize,
     ) -> Option<Box<dyn AsyncResolver>> {
+        let method = method.clone().canonical();
         let map = self.resolvers_mut();
-        let deque = map.get_mut(method)?;
+        let deque = map.get_mut(&method)?;
         let removed = deque.remove(index);
         if deque.is_empty() {
-            map.remove(method);
+            map.remove(&method);
         }
         removed
     }
@@ -595,7 +605,7 @@ impl DIDCacheClient {
     /// Returns the index if found, suitable for use with `remove_resolver`.
     pub fn find_resolver(&self, method: &MethodName, name: &str) -> Option<usize> {
         self.resolvers
-            .get(method)?
+            .get(&method.clone().canonical())?
             .iter()
             .position(|r| r.name() == name)
     }
@@ -1005,13 +1015,12 @@ impl DIDCacheClient {
             .entry(MethodName::Ebsi)
             .or_default()
             .push_back(Box::new(network_resolvers::EbsiResolver));
-        // did:webs is not modelled by `MethodName`, so it registers under the
-        // catch-all. Adding a typed variant would be a source-breaking change
-        // to `MethodName`, which is not `#[non_exhaustive]`, and buys nothing
-        // here — dispatch is by name either way.
+        // did:webs has its own `MethodName` since resolver-traits 0.2 (it was
+        // `Other("webs")`); a caller that still names it that way reaches this
+        // entry through `MethodName::canonical`.
         #[cfg(feature = "did-webs")]
         resolvers
-            .entry(MethodName::Other("webs".to_string()))
+            .entry(MethodName::Webs)
             .or_default()
             .push_back(Box::new(network_resolvers::WebsResolver::with_policy(
                 config.host_policy,
@@ -1187,18 +1196,15 @@ mod tests {
 
     #[cfg(feature = "did-webs")]
     #[test]
-    fn did_webs_dispatches_to_the_catch_all_method_name() {
-        // did:webs is registered under `MethodName::Other("webs")` rather than
-        // a typed variant. This pins the key the registration and the lookup
+    fn did_webs_dispatches_to_its_own_method_name() {
+        // did:webs is registered under `MethodName::Webs` (0.9.0; it was
+        // `Other("webs")`). This pins the key the registration and the lookup
         // must agree on — if they ever drift, resolution silently returns
         // "unsupported method" instead of using the resolver.
         let did: DID = "did:webs:example.com:ENro7uf0ePmiK3jdTo2YCdXLqW7z7xoP6qhhBou6gBLe"
             .parse()
             .expect("valid did");
-        assert_eq!(
-            MethodName::from(&did.method()),
-            MethodName::Other("webs".to_string()),
-        );
+        assert_eq!(MethodName::from(&did.method()), MethodName::Webs);
     }
 
     #[test]

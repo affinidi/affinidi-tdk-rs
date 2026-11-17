@@ -12,7 +12,7 @@ add custom DID method support to the resolver.
 
 ```toml
 [dependencies]
-affinidi-did-resolver-traits = "0.1"
+affinidi-did-resolver-traits = "0.2"
 ```
 
 ## Traits

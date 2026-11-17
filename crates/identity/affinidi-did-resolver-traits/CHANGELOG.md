@@ -1,5 +1,24 @@
 # Affinidi DID Resolver Traits
 
+## [0.2.0] - 2026-11-17
+
+`MethodName` is `#[non_exhaustive]` and gains `Webs` (#1166)
+
+**Breaking (R3.6).** Part of the coordinated breaking release of #1143 and #1166: affinidi-crypto 0.4, affinidi-encoding 0.2, affinidi-secrets-resolver 0.6, affinidi-did-common 0.5, affinidi-did-resolver-traits 0.2, affinidi-did-web 0.2, affinidi-did-resolver-cache-sdk 0.9 and affinidi-data-integrity 0.9 move together; a crate that mixes two generations does not compile.
+
+- **`MethodName` is `#[non_exhaustive]`.** A `match` on it needs a wildcard
+  arm. Future methods can gain a typed variant without another breaking
+  release.
+- **Added: `MethodName::Webs`.** `MethodName::from(&DIDMethod)` maps did:webs
+  to it; before, did:webs was `MethodName::Other("webs")`. A resolver chain
+  keyed by `Other("webs")` no longer matches did:webs DIDs unless its owner
+  normalises keys (the cache SDK does, see below).
+- **Added: `MethodName::from_name(&str)`** (the method-name mapping `From`
+  uses) and **`MethodName::canonical()`**, which turns an `Other` that names a
+  typed method into that variant (`Other("webs")` -> `Webs`).
+- Moves to affinidi-did-common 0.5 (its `DID`, `DIDMethod` and `Document`
+  are in this crate's public API).
+
 ## [0.1.6] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

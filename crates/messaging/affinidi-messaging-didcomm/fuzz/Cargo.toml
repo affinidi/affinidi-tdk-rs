@@ -11,12 +11,12 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 serde_json = "1"
 ed25519-dalek = "3"
-affinidi-crypto = { version = "0.3", features = ["jose"] }
+affinidi-crypto = { version = "0.4.0", features = ["jose"] }
 # `arbitrary` feature provides Arbitrary for the wire types (the message_structured target).
 affinidi-messaging-didcomm = { path = "..", features = ["arbitrary"] }
 
 # This is a standalone workspace, so it does NOT inherit the parent's
-# [patch.crates-io]. didcomm pulls affinidi-crypto by version (=0.3); without
+# [patch.crates-io]. didcomm pulls affinidi-crypto by version (0.4); without
 # this redirect cargo would resolve a second copy from crates.io and the build
 # fails with duplicate-type errors. affinidi-crypto in turn pulls
 # affinidi-encoding by version, so that is redirected too, keeping the fuzzer

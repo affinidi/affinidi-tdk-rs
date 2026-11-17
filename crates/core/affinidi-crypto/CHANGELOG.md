@@ -1,5 +1,28 @@
 # Affinidi Crypto Changelog
 
+## [0.4.0] - 2026-11-17
+
+verify functions share one result shape; the deprecated `p256::verify` is gone (#1143)
+
+**Breaking (R3.6).** Part of the coordinated breaking release of #1143 and #1166: affinidi-crypto 0.4, affinidi-encoding 0.2, affinidi-secrets-resolver 0.6, affinidi-did-common 0.5, affinidi-did-resolver-traits 0.2, affinidi-did-web 0.2, affinidi-did-resolver-cache-sdk 0.9 and affinidi-data-integrity 0.9 move together; a crate that mixes two generations does not compile.
+
+- **Removed: `p256::verify`** (`Result<bool>`, deprecated in 0.3.4). Use
+  `p256::verify_signature`, which returns `Ok(())` for a signature that
+  verifies and `CryptoError::Verification` for one that does not.
+- **Changed: a malformed ML-DSA or SLH-DSA signature is `CryptoError::Decoding`**
+  (it was `CryptoError::KeyError`), the classification P-256 already used: a
+  wrong-length or undecodable signature is malformed input, not a key problem.
+  An invalid public key is still `KeyError`, and a signature that does not
+  verify is `Verification`. Callers that matched `KeyError` to detect a
+  malformed signature must match `Decoding`.
+- Every verify function in this crate now returns `Result<(), CryptoError>`
+  with `CryptoError::Verification` for a signature that does not verify.
+  The JOSE verifiers (`jose::signing::verify*`, `JwsVerifier`) keep reporting
+  every failure, including a malformed key or signature, as `Verification`,
+  which is what DIDComm maps to its own verification error.
+- Ed25519 verification is strict everywhere (shipped in 0.3.4).
+- Moves to affinidi-encoding 0.2 (its types are in this crate's public API).
+
 ## [0.3.4] - 2026-11-15
 
 one verify-result shape and one Ed25519 policy (non-breaking part of #1143)

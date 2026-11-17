@@ -54,10 +54,10 @@ Then enable the `messaging-core` feature on your protocol crate of choice:
 
 ```toml
 # For DIDComm
-affinidi-messaging-didcomm = { version = "0.15", features = ["messaging-core"] }
+affinidi-messaging-didcomm = { version = "0.16", features = ["messaging-core"] }
 
 # For TSP
-affinidi-tsp = { version = "0.4", features = ["messaging-core"] }
+affinidi-tsp = { version = "0.5", features = ["messaging-core"] }
 ```
 
 ## Usage

@@ -109,6 +109,50 @@ fn parse_web(identifier: &str) -> Result<DIDMethod, DIDError> {
     })
 }
 
+/// `did:webs:<domain>[:<path>...]:<aid>`: at least a domain and an AID, no
+/// empty label, and an AID that is plausibly a CESR primitive (four or more
+/// characters of the base64url alphabet). This is a syntax check, not a
+/// security one: the AID is proven by its key event log, which
+/// `affinidi-did-webs` verifies. That crate also decodes and checks the
+/// domain label as a host and optional port.
+fn parse_webs(identifier: &str) -> Result<DIDMethod, DIDError> {
+    let labels: Vec<&str> = identifier.split(':').collect();
+    if labels.len() < 2 {
+        return Err(DIDError::InvalidMethodSpecificId(
+            "did:webs requires a host and a trailing AID".into(),
+        ));
+    }
+    if labels.iter().any(|label| label.is_empty()) {
+        return Err(DIDError::InvalidMethodSpecificId(
+            "did:webs identifier contains an empty label".into(),
+        ));
+    }
+    let (domain, aid) = (labels[0], labels[labels.len() - 1]);
+    if aid.len() < 4 {
+        return Err(DIDError::InvalidMethodSpecificId(format!(
+            "did:webs AID is too short to be a CESR primitive: {aid:?}"
+        )));
+    }
+    if !aid
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return Err(DIDError::InvalidMethodSpecificId(format!(
+            "did:webs AID has characters outside the CESR base64url alphabet: {aid:?}"
+        )));
+    }
+
+    Ok(DIDMethod::Webs {
+        identifier: identifier.to_string(),
+        domain: domain.to_string(),
+        path_segments: labels[1..labels.len() - 1]
+            .iter()
+            .map(|label| (*label).to_string())
+            .collect(),
+        aid: aid.to_string(),
+    })
+}
+
 fn parse_pkh(identifier: &str) -> Result<DIDMethod, DIDError> {
     // Format: <chain_namespace>:<chain_reference>:<account_address>
     let segments: Vec<&str> = identifier.split(':').collect();
@@ -230,6 +274,7 @@ pub fn parse_method(method_name: &str, identifier: &str) -> Result<DIDMethod, DI
         "cheqd" => parse_cheqd(identifier),
         "scid" => parse_scid(identifier),
         "ebsi" => parse_ebsi(identifier),
+        "webs" => parse_webs(identifier),
         other => Ok(DIDMethod::Other {
             method: other.to_string(),
             identifier: identifier.to_string(),
@@ -242,6 +287,47 @@ mod tests {
     use crate::DID;
 
     const ED25519: &str = "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+
+    const AID: &str = "ENro7uf0ePmiK3jdTo2YCdXLqW7z7xoP6qhhBou6gBLe";
+
+    #[test]
+    fn webs_parses_domain_path_and_aid() {
+        let did: DID = format!("did:webs:example.com%3A3000:dids:alice:{AID}")
+            .parse()
+            .unwrap();
+        match did.method() {
+            crate::DIDMethod::Webs {
+                identifier,
+                domain,
+                path_segments,
+                aid,
+            } => {
+                assert_eq!(identifier, format!("example.com%3A3000:dids:alice:{AID}"));
+                assert_eq!(domain, "example.com%3A3000");
+                assert_eq!(path_segments, vec!["dids", "alice"]);
+                assert_eq!(aid, AID);
+            }
+            other => panic!("expected DIDMethod::Webs, got {other:?}"),
+        }
+
+        let did: DID = format!("did:webs:example.com:{AID}").parse().unwrap();
+        assert!(matches!(
+            did.method(),
+            crate::DIDMethod::Webs { path_segments, .. } if path_segments.is_empty()
+        ));
+    }
+
+    #[test]
+    fn webs_refuses_a_missing_or_malformed_aid() {
+        for did in [
+            "did:webs:example.com".to_string(),
+            format!("did:webs:example.com::{AID}"),
+            "did:webs:example.com:EAb".to_string(),
+            "did:webs:example.com:EA.b-c".to_string(),
+        ] {
+            assert!(did.parse::<DID>().is_err(), "{did} should not parse");
+        }
+    }
 
     #[test]
     fn peer_2_refuses_a_private_key() {

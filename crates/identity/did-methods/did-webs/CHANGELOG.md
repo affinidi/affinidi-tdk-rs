@@ -2,6 +2,18 @@
 
 All notable changes to this crate are documented here.
 
+## [0.14.0] - 2026-11-17
+
+**Breaking (R3.6): moves to the new generation of its affinidi dependencies.** affinidi-did-common's `Document` and affinidi-did-resolver-traits' `AsyncResolver` / `Resolution` appear in this crate's public API, so it moves a minor even where its own code is unchanged. Part of the coordinated breaking release of #1143 and #1166: affinidi-crypto 0.4, affinidi-encoding 0.2, affinidi-secrets-resolver 0.6, affinidi-did-common 0.5, affinidi-did-resolver-traits 0.2, affinidi-did-web 0.2, affinidi-did-resolver-cache-sdk 0.9 and affinidi-data-integrity 0.9 move together; a crate that mixes two generations does not compile.
+
+- `DidWebs::from_did` reads `DIDMethod::Webs { domain, path_segments, aid }`
+  instead of splitting a `DIDMethod::Other { method: "webs" }` identifier, and
+  the `resolver-traits` `WebsResolver` handles `DIDMethod::Webs`. The host,
+  AID and label rules are unchanged; the AID and label checks now also run in
+  did-common's parser, so a malformed did:webs fails to parse as a `DID`
+  (still `DidWebsError::InvalidDid` from `DidWebs::parse`).
+- The optional `resolver-traits` feature moves to affinidi-did-resolver-traits 0.2.
+
 ## [0.13.9] - 2026-11-17
 
 ### Fixed

@@ -27,7 +27,7 @@ sequenceDiagram
 
 ```toml
 [dependencies]
-affinidi-did-authentication = "0.3"
+affinidi-did-authentication = "0.4"
 ```
 
 ## Usage

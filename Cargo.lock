@@ -101,7 +101,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-crypto"
-version = "0.3.4"
+version = "0.4.0"
 dependencies = [
  "aes 0.9.3",
  "aes-gcm",
@@ -129,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-data-integrity"
-version = "0.8.11"
+version = "0.9.0"
 dependencies = [
  "affinidi-bbs",
  "affinidi-crypto",
@@ -159,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-authentication"
-version = "0.3.21"
+version = "0.4.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-common"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-encoding",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-ethr"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-resolver-traits",
@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-jwk"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-resolver-traits",
@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-pkh"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-resolver-traits",
@@ -238,7 +238,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.8.57"
+version = "0.9.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -284,7 +284,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-resolver-cache-server"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
@@ -318,7 +318,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-resolver-traits"
-version = "0.1.6"
+version = "0.2.0"
 dependencies = [
  "affinidi-did-common",
  "thiserror 2.0.21",
@@ -327,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-web"
-version = "0.1.11"
+version = "0.2.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-resolver-traits",
@@ -343,7 +343,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-webs"
-version = "0.13.9"
+version = "0.14.0"
 dependencies = [
  "affinidi-cesr",
  "affinidi-crypto",
@@ -368,7 +368,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-encoding"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "bs58",
  "serde",
@@ -459,7 +459,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-meeting-place"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "affinidi-did-authentication",
  "affinidi-did-common",
@@ -497,7 +497,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-delivery"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "affinidi-did-common",
  "affinidi-messaging-core",
@@ -513,7 +513,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm"
-version = "0.15.16"
+version = "0.16.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -537,7 +537,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm-service"
-version = "0.37.1"
+version = "0.38.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-messaging-core",
@@ -561,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm-v1"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-messaging-core",
@@ -588,7 +588,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-helpers"
-version = "0.13.6"
+version = "0.14.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-messaging-core",
@@ -626,7 +626,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-sdk"
-version = "0.49.5"
+version = "0.50.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-authentication",
@@ -674,7 +674,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-text-client"
-version = "0.12.10"
+version = "0.13.0"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
@@ -723,7 +723,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-oid4vc-core"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "affinidi-crypto",
  "affinidi-sd-jwt",
@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-secrets-resolver"
-version = "0.5.21"
+version = "0.6.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-encoding",
@@ -879,7 +879,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.48.1"
+version = "0.49.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -916,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk-common"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "affinidi-data-integrity",
  "affinidi-did-authentication",
@@ -945,7 +945,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk-test-support"
-version = "0.12.3"
+version = "0.13.0"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -989,7 +989,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tsp"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
@@ -1033,7 +1033,7 @@ dependencies = [
 
 [[package]]
 name = "agent-names"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-net-guard",
@@ -2435,7 +2435,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.7",
 ]
 
 [[package]]
@@ -2602,7 +2602,7 @@ dependencies = [
 
 [[package]]
 name = "did-ebsi"
-version = "0.1.10"
+version = "0.2.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-resolver-traits",
@@ -2618,7 +2618,7 @@ dependencies = [
 
 [[package]]
 name = "did-example"
-version = "0.5.10"
+version = "0.6.0"
 dependencies = [
  "affinidi-did-common",
  "ahash",
@@ -2628,7 +2628,7 @@ dependencies = [
 
 [[package]]
 name = "did-scid"
-version = "0.4.11"
+version = "0.5.0"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-resolver-traits",
@@ -2644,9 +2644,9 @@ dependencies = [
 
 [[package]]
 name = "didwebvh-rs"
-version = "0.8.1"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "346ad3a3c4f10c0c8dc8c710c2511375cd14ffb5e5bc5b6e6f03617ce2dabb87"
+checksum = "54a7236de7726e2fdab65b06bfa3e4406f668ffe376b91498066197da9faf1f7"
 dependencies = [
  "affinidi-data-integrity",
  "affinidi-did-common",
@@ -6697,7 +6697,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.6",
  "windows-sys 0.61.2",
@@ -7173,9 +7173,9 @@ dependencies = [
 
 [[package]]
 name = "trust-tasks-build"
-version = "0.1.2"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9b7c7c19d0bf6b8d8069a61bfe116a5b5de58d752e93d1f7ef02f7757b7861e"
+checksum = "c2ced855a337a2879300990d5316d2889dea8c885199252b8334c0bd8f4ea6ff"
 dependencies = [
  "anyhow",
  "heck",
@@ -7185,7 +7185,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "syn 2.0.119",
  "toml",
  "typify",
@@ -7193,9 +7193,9 @@ dependencies = [
 
 [[package]]
 name = "trust-tasks-proof"
-version = "0.39.0"
+version = "0.40.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "386b41ffc09545395b3f5ae289640b0e1ffc1c9355e59571883a5bd9d3962995"
+checksum = "a553610241209b8cc657f494a8798155172af710e1fa7b55f1b073004ea73a56"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -7213,9 +7213,9 @@ dependencies = [
 
 [[package]]
 name = "trust-tasks-rs"
-version = "0.39.0"
+version = "0.40.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e17bca8ec64f2d7ee8bedb77a57dc748869d340f9ec3a9afeb2dfb43b149ea04"
+checksum = "91630673b3acb89ebdf910bf609f902b2821be1b395dc207723a0778d50e8817"
 dependencies = [
  "async-trait",
  "chrono",

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-text-client"
-version = "0.12.10"
+version = "0.13.0"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -14,10 +14,10 @@ repository.workspace = true
 
 [dependencies]
 # Affinidi Crates
-affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.48" }
-affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.49.0" }
-affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15.15" }
-affinidi-did-resolver-cache-sdk = "0.8.55"
+affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.49.0" }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.50.0" }
+affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.16.0" }
+affinidi-did-resolver-cache-sdk = "0.9.0"
 
 # External Crates
 ahash = { workspace = true, features = ["serde"] }

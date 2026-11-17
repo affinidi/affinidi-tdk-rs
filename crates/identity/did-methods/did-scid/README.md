@@ -15,7 +15,7 @@ identifier is cryptographically bound to the keys from which it was generated.
 
 ```toml
 [dependencies]
-did-scid = "0.4"
+did-scid = "0.5"
 ```
 
 ## Feature Flags

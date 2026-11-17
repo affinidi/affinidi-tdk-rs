@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-crypto"
-version = "0.3.4"
+version = "0.4.0"
 description = "Cryptographic primitives and JWK types for Affinidi TDK"
 edition.workspace = true
 authors.workspace = true
@@ -35,7 +35,7 @@ jose = ["dep:aes", "dep:aes-gcm", "dep:cbc", "dep:hmac", "dep:subtle", "ed25519"
 # `decode_multikey_checked` / `did_key::decode_expecting`, added in 0.1.7.
 # (A loose "0.1" resolved against an older lock to a version without the
 # items this crate imports and failed to compile, #348.)
-affinidi-encoding = "0.1.7"
+affinidi-encoding = "0.2.0"
 
 base64.workspace = true
 ed25519-dalek = { workspace = true, features = ["rand_core"], optional = true }
