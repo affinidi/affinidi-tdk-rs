@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-web"
-version = "0.1.11"
+version = "0.2.0"
 description = "Minimal did:web DID method resolver for the Affinidi TDK"
 repository.workspace = true
 edition.workspace = true
@@ -23,9 +23,9 @@ resolver-traits = ["dep:affinidi-did-resolver-traits"]
 
 [dependencies]
 # 0.4.8: `Document::from_json_slice`, which reads relative ids.
-affinidi-did-common = "0.4.8"
+affinidi-did-common = "0.5.0"
 # 0.1.6: `NetworkFetchError` converts from `NetworkError`.
-affinidi-did-resolver-traits = { version = "0.1.6", path = "../../affinidi-did-resolver-traits", optional = true }
+affinidi-did-resolver-traits = { version = "0.2.0", path = "../../affinidi-did-resolver-traits", optional = true }
 # Address classification and the connect-time DNS resolver of the SSRF guard.
 # Named at the exact sibling version so the publish dry-run guard reports
 # `wait` until it is on crates.io, rather than registry drift.

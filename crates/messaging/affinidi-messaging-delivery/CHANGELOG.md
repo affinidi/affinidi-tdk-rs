@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.4] - 2026-11-17
+
+moves to affinidi-did-common 0.5
+
+Patch: affinidi-did-common is used privately (`scid::same_reference`,
+`strip_scid_src`), no type of it is in this crate's API. Part of the coordinated breaking release of #1143 and #1166: affinidi-crypto 0.4, affinidi-encoding 0.2, affinidi-secrets-resolver 0.6, affinidi-did-common 0.5, affinidi-did-resolver-traits 0.2, affinidi-did-web 0.2, affinidi-did-resolver-cache-sdk 0.9 and affinidi-data-integrity 0.9 move together; a crate that mixes two generations does not compile.
+
 ## [0.3.3] - 2026-11-16
 
 A stalled subscriber no longer holds the dispatcher; a partial handoff is

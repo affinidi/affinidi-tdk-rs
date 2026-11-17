@@ -1,5 +1,26 @@
 # Affinidi DID Web
 
+## [0.2.0] - 2026-11-17
+
+`Retry-After` kept on an unsuccessful status; `HostPolicy::PublicOnly` refuses net-guard's special-use names (#1166)
+
+**Breaking (R3.6).** Part of the coordinated breaking release of #1143 and #1166: affinidi-crypto 0.4, affinidi-encoding 0.2, affinidi-secrets-resolver 0.6, affinidi-did-common 0.5, affinidi-did-resolver-traits 0.2, affinidi-did-web 0.2, affinidi-did-resolver-cache-sdk 0.9 and affinidi-data-integrity 0.9 move together; a crate that mixes two generations does not compile.
+
+- **Changed: `DidWebError::ResolutionFailed { status, url }` is replaced by
+  `DidWebError::Network(NetworkError)`**, the `affinidi_did_common::NetworkError`
+  did:webs, did:ebsi and did:scid already report. It carries the URL, the
+  HTTP status and, new, the host's `Retry-After` (when sent in seconds), so a
+  caller can back off a rate limit for as long as the host asked.
+  `network_error()` returns it as is.
+- **Behaviour change: `HostPolicy::PublicOnly` (the default) refuses
+  `*.internal`, `*.home.arpa` and single-label hosts**, the special-use names
+  of `affinidi-net-guard`'s `EgressPolicy::public_internet()`, alongside
+  `localhost`, `*.localhost` and `*.local` as before. A deployment that
+  resolves did:web on such a host must opt in with `HostPolicy::AllowPrivate`
+  or `DIDWeb::with_egress_policy` and an allow-list.
+- The optional `resolver-traits` feature moves to
+  affinidi-did-resolver-traits 0.2; moves to affinidi-did-common 0.5.
+
 ## [0.1.11] - 2026-11-15
 
 `affinidi-net-guard` egress policies, a chosen timeout, and an optional

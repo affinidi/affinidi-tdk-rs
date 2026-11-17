@@ -48,10 +48,10 @@ post-quantum (ML-DSA, SLH-DSA) algorithms.
 
 ```toml
 [dependencies]
-affinidi-data-integrity = "0.8"
+affinidi-data-integrity = "0.9"
 
 # With post-quantum cryptosuites:
-# affinidi-data-integrity = { version = "0.8", features = ["post-quantum"] }
+# affinidi-data-integrity = { version = "0.9", features = ["post-quantum"] }
 ```
 
 ## Quickstart

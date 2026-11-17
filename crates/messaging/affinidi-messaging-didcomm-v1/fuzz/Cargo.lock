@@ -24,7 +24,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-crypto"
-version = "0.3.4"
+version = "0.4.0"
 dependencies = [
  "affinidi-encoding",
  "base64",
@@ -41,7 +41,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-encoding"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "bs58",
  "serde",
@@ -52,7 +52,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm-v1"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "affinidi-crypto",
  "base64",

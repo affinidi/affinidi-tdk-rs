@@ -1,5 +1,17 @@
 # Affinidi Encoding Changelog
 
+## [0.2.0] - 2026-11-17
+
+`MultiEncoded` loses its no-op `Zeroize` / `ZeroizeOnDrop` impls (#1143)
+
+**Breaking (R3.6).** Part of the coordinated breaking release of #1143 and #1166: affinidi-crypto 0.4, affinidi-encoding 0.2, affinidi-secrets-resolver 0.6, affinidi-did-common 0.5, affinidi-did-resolver-traits 0.2, affinidi-did-web 0.2, affinidi-did-resolver-cache-sdk 0.9 and affinidi-data-integrity 0.9 move together; a crate that mixes two generations does not compile.
+
+- **Removed: `impl Zeroize for MultiEncoded` and `impl ZeroizeOnDrop for
+  MultiEncoded`.** `MultiEncoded` is an unsized borrowed view that is only
+  ever held by reference, so neither ever ran on drop. Wipe the owning buffer
+  instead (`MultiEncodedBuf` still zeroizes on drop). Code that named the
+  traits for `MultiEncoded` no longer compiles; no behaviour changes.
+
 ## [0.1.8] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.

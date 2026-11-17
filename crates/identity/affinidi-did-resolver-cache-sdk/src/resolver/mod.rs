@@ -43,6 +43,10 @@ impl DIDCacheClient {
             DIDMethod::Scid { .. } => Err(DIDCacheError::UnsupportedMethod(
                 "did:scid is not enabled".to_string(),
             )),
+            #[cfg(not(feature = "did-webs"))]
+            DIDMethod::Webs { .. } => Err(DIDCacheError::UnsupportedMethod(
+                "did:webs is not enabled".to_string(),
+            )),
             _ => Err(DIDCacheError::UnsupportedMethod(format!(
                 "no resolver registered for DID method '{method_name}'"
             ))),
@@ -484,6 +488,30 @@ mod tests {
         // did:key resolution should fail
         let did: DID = DID_KEY.parse().unwrap();
         assert!(client.local_resolve(&did).await.is_err());
+    }
+
+    /// `MethodName::Other("webs")`, how did:webs was named before 0.9.0,
+    /// keys the same chain as `MethodName::Webs`.
+    #[tokio::test]
+    async fn the_catch_all_webs_spelling_is_an_alias_for_webs() {
+        let config = config::DIDCacheConfigBuilder::default().build();
+        let mut client = DIDCacheClient::new(config).await.unwrap();
+
+        client.set_resolver(
+            MethodName::Other("webs".to_string()),
+            Box::new(TestResolver),
+        );
+        let name = "TestResolver";
+        assert_eq!(client.find_resolver(&MethodName::Webs, name), Some(0));
+        assert_eq!(
+            client.find_resolver(&MethodName::Other("webs".to_string()), name),
+            Some(0)
+        );
+        assert!(
+            client
+                .remove_resolver(&MethodName::Webs, 0)
+                .is_some_and(|r| r.name() == name)
+        );
     }
 
     #[tokio::test]

@@ -30,7 +30,7 @@ Enable in the resolver SDK with the `did_example` feature flag:
 
 ```toml
 [dependencies]
-affinidi-did-resolver-cache-sdk = { version = "0.8", features = ["did_example"] }
+affinidi-did-resolver-cache-sdk = { version = "0.9", features = ["did_example"] }
 ```
 
 ## Related Crates

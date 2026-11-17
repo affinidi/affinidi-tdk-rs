@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-helpers"
-version = "0.13.6"
+version = "0.14.0"
 description = "CLI tools for Affinidi Messaging (mediator administration)"
 edition.workspace = true
 authors.workspace = true
@@ -21,15 +21,15 @@ path = "src/mediator_administration/main.rs"
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
 ## SDK for connecting to and communicating with a running mediator
-affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.49.2" }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.50.0" }
 ## Trust Tasks runtime (the `hijack_admin` example builds a `TrustTask`). The
 ## task types come from `affinidi_messaging_sdk::tasks`.
-trust-tasks-rs = { version = "0.39", default-features = false }
+trust-tasks-rs = { version = "0.40.2", default-features = false }
 ## TDK for DID resolution and crypto utilities
-affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.48" }
+affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.49.0" }
 ## DIDComm message types — used by example binaries
-affinidi-crypto = { version = "0.3.2", features = ["jose"] }
-affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15.15", features = ["messaging-core"] }
+affinidi-crypto = { version = "0.4.0", features = ["jose"] }
+affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.16.0", features = ["messaging-core"] }
 ## Protocol-agnostic messaging-core traits — used by `unified_messaging` example
 affinidi-messaging-core = { path = "../affinidi-messaging-core" }
 ## TSP transport — used by `unified_messaging` and `protocol_comparison` examples

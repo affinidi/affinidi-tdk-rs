@@ -84,14 +84,14 @@ pub enum DidWebError {
     #[error("did:web HTTP request failed: {0}")]
     Http(String),
 
-    /// The remote returned a non-2xx response.
-    #[error("did:web resolution failed: HTTP {status} from {url}")]
-    ResolutionFailed {
-        /// HTTP status returned by the server.
-        status: u16,
-        /// URL we requested.
-        url: String,
-    },
+    /// The remote returned a non-2xx response. The status, the URL and the
+    /// host's `Retry-After` (when it sent one in seconds) are kept as data,
+    /// so a caller can tell a rate limit (HTTP 429) from a DID that does not
+    /// exist (HTTP 404), and when to try again.
+    ///
+    /// Replaced `ResolutionFailed { status, url }` in 0.2.0 (#1166).
+    #[error("did:web resolution failed: {0}")]
+    Network(NetworkError),
 
     /// The response body was not a valid DID Document.
     #[error("did:web response was not a valid DID Document: {0}")]
@@ -131,16 +131,12 @@ pub enum DidWebError {
 
 impl DidWebError {
     /// The failed fetch behind this error, as the [`NetworkError`] every DID
-    /// method crate reports: [`DidWebError::ResolutionFailed`] with its URL
-    /// and status, and [`DidWebError::Http`] with its message and no status.
-    /// `None` for any other error.
+    /// method crate reports: [`DidWebError::Network`] as it is (URL, status
+    /// and `Retry-After`), and [`DidWebError::Http`] with its message and no
+    /// status. `None` for any other error.
     pub fn network_error(&self) -> Option<NetworkError> {
         match self {
-            Self::ResolutionFailed { status, url } => Some(
-                NetworkError::new(format!("HTTP {status}"))
-                    .with_url(url.clone())
-                    .with_status(*status),
-            ),
+            Self::Network(network) => Some(network.clone()),
             Self::Http(message) => Some(NetworkError::new(message.clone())),
             _ => None,
         }
@@ -171,16 +167,17 @@ pub const DEFAULT_ACCEPT: &str = "application/did+ld+json, application/json";
 #[non_exhaustive]
 pub enum HostPolicy {
     /// Refuse loopback, private (RFC 1918 / unique-local), carrier-grade NAT,
-    /// link-local (which is where the cloud-metadata address lives),
-    /// `localhost` and `*.local` — both when the DID names them as a literal
-    /// address and when a hostname in the DID *resolves* to one. The default.
+    /// link-local (which is where the cloud-metadata address lives) — both
+    /// when the DID names them as a literal address and when a hostname in
+    /// the DID *resolves* to one — and the special-use names of
+    /// [`EgressPolicy::public_internet`]: `localhost`, `*.localhost`,
+    /// `*.local`, `*.internal`, `*.home.arpa` and single-label names. The
+    /// default.
     ///
-    /// Addresses are classified by `affinidi-net-guard`. The names are this
-    /// crate's own, narrower than [`EgressPolicy::public_internet`] (which
-    /// also refuses `*.internal`, `*.home.arpa` and single-label names);
-    /// adopting those is a behaviour change, left for the next breaking
-    /// release. `with_egress_policy(builder, EgressPolicy::public_internet())`
-    /// applies them now.
+    /// Addresses and names are both classified by `affinidi-net-guard`. Until
+    /// 0.2.0 the names were this crate's own narrower set (`localhost`,
+    /// `*.localhost`, `*.local`); `*.internal`, `*.home.arpa` and
+    /// single-label hosts are now refused too (#1166).
     #[default]
     PublicOnly,
 
@@ -352,7 +349,7 @@ impl DIDWeb {
     /// Resolve a `did:web` DID into its DID Document.
     ///
     /// Returns [`DidWebError::InvalidDid`] when `did` is not a syntactically
-    /// valid `did:web`, and [`DidWebError::ResolutionFailed`] /
+    /// valid `did:web`, and [`DidWebError::Network`] /
     /// [`DidWebError::Http`] when the HTTP fetch fails.
     pub async fn resolve(&self, did: &str) -> Result<Document, DidWebError> {
         let parsed: DID = did
@@ -434,10 +431,16 @@ impl DIDWeb {
 
         let status = response.status();
         if !status.is_success() {
-            return Err(DidWebError::ResolutionFailed {
-                status: status.as_u16(),
-                url,
-            });
+            let retry_after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok());
+            return Err(DidWebError::Network(
+                NetworkError::new(format!("HTTP {}", status.as_u16()))
+                    .with_url(url)
+                    .with_status(status.as_u16())
+                    .with_retry_after_header(retry_after),
+            ));
         }
 
         // Read the body under a hard cap so a hostile server (or one lying about
@@ -560,18 +563,14 @@ fn vet(policy: &EgressPolicy, url: &reqwest::Url) -> Result<(), DidWebError> {
 /// Reject a host that must never be the target of a `did:web` fetch under
 /// [`HostPolicy::PublicOnly`]: loopback, RFC-1918 / unique-local,
 /// carrier-grade NAT, link-local (which includes the cloud-metadata address
-/// `169.254.169.254`), unspecified, or broadcast. Bare `localhost` and
-/// `*.localhost` / `*.local` are refused by name.
+/// `169.254.169.254`), unspecified, or broadcast, and the special-use names
+/// `affinidi-net-guard` refuses under [`EgressPolicy::public_internet`]
+/// (`localhost`, `*.localhost`, `*.local`, `*.internal`, `*.home.arpa` and
+/// single-label names).
 ///
 /// This classifies the host *as written in the DID*. A hostname that resolves
 /// to one of these addresses is caught separately, at connect time, by
 /// [`guarded_dns_resolver`].
-///
-/// Addresses are classified by `affinidi_net_guard`. The name set is this
-/// crate's own and deliberately narrower than `affinidi-net-guard`'s default
-/// (which also refuses `*.internal`, `*.home.arpa` and single-label names):
-/// adopting that is a behaviour change, left for the next breaking release.
-/// [`DIDWeb::with_egress_policy`] applies `affinidi-net-guard`'s rules in full.
 fn host_is_blocked(host: &str) -> bool {
     // A trailing root dot is part of a legal hostname and survives URL
     // normalisation, so `localhost.` must normalise to `localhost` before the
@@ -581,12 +580,15 @@ fn host_is_blocked(host: &str) -> bool {
         .trim_start_matches('[')
         .trim_end_matches(']')
         .to_ascii_lowercase();
-    if h == "localhost" || h.ends_with(".localhost") || h.ends_with(".local") {
-        return true;
+    if let Ok(a) = h.parse::<IpAddr>() {
+        return !affinidi_net_guard::is_globally_routable(a);
     }
-    match h.parse::<IpAddr>() {
-        Ok(a) => !affinidi_net_guard::is_globally_routable(a),
-        Err(_) => false,
+    // A name: net-guard's special-use name rules, applied to the URL a
+    // fetch would use. A host that does not even form a URL is refused: a
+    // security guard must not fail open.
+    match reqwest::Url::parse(&format!("https://{h}/")) {
+        Ok(url) => EgressPolicy::public_internet().vet_url(&url).is_err(),
+        Err(_) => true,
     }
 }
 
@@ -1002,6 +1004,20 @@ mod tests {
         assert!(err.to_string().contains("id"), "{err}");
     }
 
+    /// A 429's `Retry-After` is kept as data (#1166).
+    #[tokio::test]
+    async fn a_rate_limit_keeps_its_retry_after() {
+        let err = resolve_via_mock(
+            "did:web:example.com",
+            ResponseTemplate::new(429).insert_header("Retry-After", "30"),
+        )
+        .await
+        .unwrap_err();
+        let network = err.network_error().expect("a network error");
+        assert!(network.is_rate_limited(), "{err:?}");
+        assert_eq!(network.retry_after, Some(Duration::from_secs(30)));
+    }
+
     #[tokio::test]
     async fn surfaces_http_error_status() {
         let err = resolve_via_mock("did:web:example.com", ResponseTemplate::new(404))
@@ -1010,7 +1026,7 @@ mod tests {
         assert!(
             matches!(
                 &err,
-                DidWebError::ResolutionFailed { status: 404, url }
+                DidWebError::Network(NetworkError { status: Some(404), url: Some(url), .. })
                     if url.ends_with("/.well-known/did.json")
             ),
             "{err:?}"
@@ -1039,9 +1055,9 @@ mod tests {
         );
     }
 
-    /// `HostPolicy::PublicOnly` keeps this crate's narrower name set; an
-    /// egress policy applies `affinidi-net-guard`'s, which also refuses
-    /// `*.internal`, `*.home.arpa` and single-label names.
+    /// `HostPolicy::PublicOnly` and an egress policy refuse the same
+    /// special-use names, `affinidi-net-guard`'s: since 0.2.0 that includes
+    /// `*.internal`, `*.home.arpa` and single-label names (#1166).
     #[tokio::test]
     async fn an_egress_policy_applies_the_net_guard_special_use_names() {
         let resolver = DIDWeb::with_egress_policy(
@@ -1050,7 +1066,15 @@ mod tests {
         )
         .unwrap();
         for host in ["metadata.internal", "router.home.arpa", "intranet"] {
-            assert!(!host_is_blocked(host), "{host}: PublicOnly is unchanged");
+            assert!(host_is_blocked(host), "{host}: PublicOnly refuses it too");
+            let err = DIDWeb::new()
+                .resolve(&format!("did:web:{host}"))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, DidWebError::BlockedHost(_)),
+                "{host}: {err:?}"
+            );
             let err = resolver
                 .resolve(&format!("did:web:{host}"))
                 .await
@@ -1311,10 +1335,12 @@ mod tests {
         };
         assert!(matches!(err, ResolverError::ResolutionFailed(_)), "{err:?}");
 
-        let status = super::resolver_impl::resolver_error(DidWebError::ResolutionFailed {
-            status: 429,
-            url: "https://example.com/.well-known/did.json".to_string(),
-        });
+        let status = super::resolver_impl::resolver_error(DidWebError::Network(
+            NetworkError::new("HTTP 429")
+                .with_url("https://example.com/.well-known/did.json")
+                .with_status(429)
+                .with_retry_after(Duration::from_secs(30)),
+        ));
         let ResolverError::NetworkFetch(fetch) = status else {
             panic!("expected NetworkFetch, got {status:?}");
         };
@@ -1323,6 +1349,7 @@ mod tests {
             fetch.url.as_deref(),
             Some("https://example.com/.well-known/did.json")
         );
+        assert_eq!(fetch.retry_after, Some(Duration::from_secs(30)));
     }
 
     /// Under `PublicOnly` no proxy is used, even one the caller's builder

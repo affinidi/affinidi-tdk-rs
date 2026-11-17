@@ -12,7 +12,7 @@ resolution, and cryptographic operations for DID-associated private keys.
 
 ```toml
 [dependencies]
-affinidi-secrets-resolver = "0.5"
+affinidi-secrets-resolver = "0.6"
 ```
 
 ## Feature Flags

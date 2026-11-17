@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.50.0] - 2026-11-17
+
+trust-tasks 0.40; new generation of affinidi crates
+
+**Breaking (R3.6).** Part of the coordinated breaking release of #1143 and #1166: affinidi-crypto 0.4, affinidi-encoding 0.2, affinidi-secrets-resolver 0.6, affinidi-did-common 0.5, affinidi-did-resolver-traits 0.2, affinidi-did-web 0.2, affinidi-did-resolver-cache-sdk 0.9 and affinidi-data-integrity 0.9 move together; a crate that mixes two generations does not compile.
+
+- **trust-tasks-rs and trust-tasks-proof 0.39 -> 0.40.2, trust-tasks-build
+  0.1.2 -> 0.2.1.** Trust Task types (`TrustTask`, `Payload`, the generated
+  `crate::tasks`) are in this crate's public API, so this is breaking on its
+  own. Upstream changes that reach SDK users:
+  - trust-tasks-rs 0.40 refuses a document that marks an unrecognised `ext`
+    namespace critical (`extCritical`, SPEC §4.5.2 rule 4) with
+    `unsupportedExtension` in its consume checks. The SDK only produces Trust
+    Tasks; a consumer verifying them with trust-tasks-rs sees the new rule.
+  - trust-tasks-build 0.2 stamps every generated file with the runtime
+    contract it needs (`trust_tasks_rs::__private::ABI_V1`) and emits only
+    the `$defs` each schema constant reaches. `trust-tasks.lock` and the
+    vendored bundles are unchanged (no digest moves).
+  - trust-tasks-proof 0.40.2 accepts affinidi-crypto 0.4,
+    affinidi-did-common 0.5, affinidi-did-resolver-cache-sdk 0.9 and
+    affinidi-data-integrity 0.9, so the SDK, the proof crate and this
+    workspace share one copy of each.
+- Moves to affinidi-crypto 0.4 (`Curve` is in `ATMConfig`'s API),
+  affinidi-did-common 0.5, affinidi-secrets-resolver 0.6, affinidi-encoding
+  0.2, affinidi-did-resolver-cache-sdk 0.9, affinidi-did-authentication 0.4,
+  affinidi-messaging-didcomm 0.16, affinidi-tsp 0.5 and affinidi-tdk-common
+  0.8. No source change; send / ack / reconnect semantics are unchanged.
+- Requires a `didwebvh-rs` release that accepts affinidi-did-common 0.5,
+  affinidi-data-integrity 0.9 and affinidi-secrets-resolver 0.6.
+
 ## [0.49.5] - 2026-11-16
 
 TSP control messages through the control core shared with `TspAgent`, and

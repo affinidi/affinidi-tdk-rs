@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.49.5"
+version = "0.50.0"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -26,13 +26,13 @@ tsp = [
 
 [build-dependencies]
 # Generates `crate::tasks` from trust-tasks.lock and the bundles in trust-tasks/.
-trust-tasks-build = "0.1.2"
+trust-tasks-build = "0.2.1"
 
 [dependencies]
 # Affinidi Crates
-affinidi-tdk-common = { version = "0.7.2", path = "../../tdk/affinidi-tdk-common" }
-affinidi-crypto = { version = "0.3.2", features = ["jose"] }
-affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15.15" }
+affinidi-tdk-common = { version = "0.8.0", path = "../../tdk/affinidi-tdk-common" }
+affinidi-crypto = { version = "0.4.0", features = ["jose"] }
+affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.16.0" }
 # Protocol-agnostic messaging vocabulary (ConnState, the future MessageTransport
 # trait). The websocket transport publishes ConnState over a watch channel.
 affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.13" }
@@ -42,18 +42,18 @@ affinidi-messaging-delivery = { path = "../affinidi-messaging-delivery", version
 ## Trust Tasks runtime. The task types themselves are generated at build time
 ## from the versions pinned in trust-tasks.lock (see build.rs and `crate::tasks`),
 ## so no prebuilt specification module is compiled.
-trust-tasks-rs = { version = "0.39", default-features = false }
+trust-tasks-rs = { version = "0.40.2", default-features = false }
 # Signs every outgoing Trust Task (eddsa-jcs-2022 Data Integrity proof) — the
 # sign-side counterpart of the verifier consumers run.
-trust-tasks-proof = { version = "0.39", default-features = false, features = ["affinidi"] }
+trust-tasks-proof = { version = "0.40.2", default-features = false, features = ["affinidi"] }
 chrono = { workspace = true, features = ["clock"] }
 ## Optional: Trust Spanning Protocol (activated by the `tsp` feature)
-affinidi-tsp = { path = "../affinidi-tsp", version = "0.4.3", optional = true }
+affinidi-tsp = { path = "../affinidi-tsp", version = "0.5.0", optional = true }
 ## Async trait support for the pluggable TSP `RelationshipStore` (tsp feature only).
 async-trait.workspace = true
 ## Pure-TSP auth handler needs the resolver-cache types named by the
 ## `CustomAuthHandler` trait it implements (tsp feature only).
-affinidi-did-resolver-cache-sdk = { version = "0.8.55", path = "../../identity/affinidi-did-resolver-cache-sdk", optional = true }
+affinidi-did-resolver-cache-sdk = { version = "0.9.0", path = "../../identity/affinidi-did-resolver-cache-sdk", optional = true }
 ## The HTTP client type `affinidi-tdk-common` hands out. Named directly so a
 ## non-success response can be read into `HttpStatusError` with its headers.
 ## Named only to recognise hyper's `IncompleteMessage` / closed-connection
@@ -66,10 +66,10 @@ reqwest = { workspace = true, features = ["default", "rustls", "json"] }
 ## call sites continue to resolve their old paths. A crate of its own so the
 ## SDK depends on nothing from the mediator.
 affinidi-messaging-mediator-types = { path = "../affinidi-messaging-mediator-types", version = "0.1" }
-affinidi-did-authentication = { version = "0.3.17", path = "../../identity/affinidi-did-authentication" }
-affinidi-did-common = { version = "0.4.8", path = "../../identity/affinidi-did-common", features = ["key-agreement"] }
-affinidi-encoding = "0.1.7"
-affinidi-secrets-resolver = { version = "0.5.19", path = "../../core/affinidi-secrets-resolver" }
+affinidi-did-authentication = { version = "0.4.0", path = "../../identity/affinidi-did-authentication" }
+affinidi-did-common = { version = "0.5.0", path = "../../identity/affinidi-did-common", features = ["key-agreement"] }
+affinidi-encoding = "0.2.0"
+affinidi-secrets-resolver = { version = "0.6.0", path = "../../core/affinidi-secrets-resolver" }
 ## Shared background-task supervision (delete-handler restart + health)
 affinidi-task-utils = "0.1"
 
@@ -101,7 +101,7 @@ uuid = { workspace = true, features = ["v4", "fast-rng"] }
 tokio = { workspace = true, features = ["net", "io-util", "test-util"] }
 # A did:scid sender, from a signed did:webvh log served on loopback.
 didwebvh-rs = "0.8.1"
-affinidi-did-resolver-cache-sdk = { version = "0.8.55", path = "../../identity/affinidi-did-resolver-cache-sdk" }
+affinidi-did-resolver-cache-sdk = { version = "0.9.0", path = "../../identity/affinidi-did-resolver-cache-sdk" }
 clap = { workspace = true, features = ["derive"] }
 console = "0.16"
 dialoguer = "0.12"

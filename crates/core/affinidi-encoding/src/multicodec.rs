@@ -181,14 +181,13 @@ impl Codec {
 
 /// A multicodec-encoded byte slice (borrowed).
 ///
-/// Only ever held by reference, so the `Zeroize`/`ZeroizeOnDrop` derives never
-/// run on drop: wipe the owning buffer instead. They are kept because removing
-/// a trait impl would break the public API.
+/// Only ever held by reference, so it cannot wipe itself: wipe the owning
+/// buffer (for example a [`MultiEncodedBuf`], which zeroizes on drop) instead.
+/// The no-op `Zeroize`/`ZeroizeOnDrop` derives were removed in 0.2.0 (#1143).
 ///
 /// `#[repr(transparent)]` guarantees the same memory layout as `[u8]`,
 /// which `MultiEncoded::new` relies on when reinterpreting a borrowed
 /// byte slice as this DST.
-#[derive(Zeroize, ZeroizeOnDrop)]
 #[repr(transparent)]
 pub struct MultiEncoded([u8]);
 

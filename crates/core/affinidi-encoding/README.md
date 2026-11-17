@@ -14,7 +14,7 @@ Kit. Provides encoding and decoding of cryptographic key material using the
 
 ```toml
 [dependencies]
-affinidi-encoding = "0.1"
+affinidi-encoding = "0.2"
 ```
 
 ## Features

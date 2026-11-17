@@ -447,8 +447,7 @@ mod resolver_impl {
             did: &'a DID,
         ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
             Box::pin(async move {
-                if !matches!(did.method_ref(), DIDMethod::Other { method, .. } if method == "webs")
-                {
+                if !matches!(did.method_ref(), DIDMethod::Webs { .. }) {
                     return None;
                 }
                 let resolution = match DidWebs::from_did(did) {

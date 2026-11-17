@@ -14,7 +14,7 @@ your process) or **network mode** (requests are forwarded to a remote
 
 ```toml
 [dependencies]
-affinidi-did-resolver-cache-sdk = "0.8"
+affinidi-did-resolver-cache-sdk = "0.9"
 ```
 
 ## Supported DID Methods

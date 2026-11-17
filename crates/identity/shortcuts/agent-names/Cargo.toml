@@ -1,6 +1,6 @@
 [package]
 name = "agent-names"
-version = "0.1.5"
+version = "0.2.0"
 description = "Agent Name (DID shortcut) parsing, resolution and verification for the Affinidi TDK"
 repository.workspace = true
 edition.workspace = true
@@ -16,7 +16,7 @@ rust-version.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-affinidi-did-common = "0.4.8"
+affinidi-did-common = "0.5.0"
 affinidi-net-guard = "0.1.1"
 reqwest = { workspace = true, features = ["rustls", "charset", "http2", "json"] }
 serde_json.workspace = true

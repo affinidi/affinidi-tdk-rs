@@ -69,16 +69,17 @@ DID URLs (`"#key-1"`); they are resolved against the document's `id`.
 A `did:web` value names the host the resolver fetches from, so a DID supplied
 by an attacker can aim it at an internal address. Under the default
 `HostPolicy::PublicOnly` the resolver refuses loopback, private, link-local
-(including the cloud-metadata address), carrier-grade NAT, `localhost` and
-`*.local` hosts, both when the DID names one literally and when a hostname
+(including the cloud-metadata address) and carrier-grade NAT addresses, and
+`affinidi-net-guard`'s special-use names (`localhost`, `*.localhost`,
+`*.local`, `*.internal`, `*.home.arpa` and single-label names; the last
+three since 0.2.0), both when the DID names one literally and when a hostname
 resolves to one (checked at connect time), and it never follows a redirect or
 uses a proxy. `HostPolicy::AllowPrivate` turns that off for deployments whose
 did:web hosts really are internal, or for a local test stack
 (`did:web:localhost%3A8080`); use it only where the DIDs resolved are trusted.
 `DIDWeb::with_egress_policy` takes an `affinidi-net-guard` `EgressPolicy`
-instead, for an operator allow-list, named private ranges, or net-guard's full
-set of special-use names (`*.internal`, `*.home.arpa`, single-label names),
-which `PublicOnly` does not yet refuse.
+instead, for an operator allow-list (which can re-admit a named internal
+host) or named private ranges.
 
 ## License
 

@@ -99,6 +99,21 @@ pub enum DIDMethod {
         /// Raw identifier (e.g., "zfEmvX5twhXjQJiCWsukvQA")
         identifier: String,
     },
+    /// KERI-backed web DID method (did:webs)
+    /// Format: <domain>[:<path_segments>...]:<aid>
+    ///
+    /// Before 0.5.0 a did:webs DID parsed as `Other { method: "webs", .. }`.
+    Webs {
+        /// Raw identifier for Display ("example.com:dids:EAid…")
+        identifier: String,
+        /// Domain (first label), as written: a `%3A`-encoded port stays
+        /// encoded, like [`DIDMethod::Web`]'s
+        domain: String,
+        /// Path segments between the domain and the AID, as written
+        path_segments: Vec<String>,
+        /// The KERI autonomic identifier (AID): the last label
+        aid: String,
+    },
     /// Catch-all for methods we don't explicitly model
     Other {
         /// Method name (e.g., "example")
@@ -122,6 +137,7 @@ impl DIDMethod {
             DIDMethod::Cheqd { .. } => "cheqd",
             DIDMethod::Scid { .. } => "scid",
             DIDMethod::Ebsi { .. } => "ebsi",
+            DIDMethod::Webs { .. } => "webs",
             DIDMethod::Other { method, .. } => method,
         }
     }
@@ -139,6 +155,7 @@ impl DIDMethod {
             DIDMethod::Cheqd { identifier, .. } => identifier,
             DIDMethod::Scid { identifier, .. } => identifier,
             DIDMethod::Ebsi { identifier, .. } => identifier,
+            DIDMethod::Webs { identifier, .. } => identifier,
             DIDMethod::Other { identifier, .. } => identifier,
         }
     }
@@ -166,6 +183,10 @@ mod tests {
                 "peer",
             ),
             ("did:web:example.com", "web"),
+            (
+                "did:webs:example.com:ENro7uf0ePmiK3jdTo2YCdXLqW7z7xoP6qhhBou6gBLe",
+                "webs",
+            ),
             (
                 "did:ethr:0xb9c5714089478a327f09197987f16f9e5d936e8a",
                 "ethr",

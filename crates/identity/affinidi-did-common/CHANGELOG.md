@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.0] - 2026-11-17
+
+did:webs parses into `DIDMethod::Webs` (#1166); moves to affinidi-crypto 0.4
+
+**Breaking (R3.6).** Part of the coordinated breaking release of #1143 and #1166: affinidi-crypto 0.4, affinidi-encoding 0.2, affinidi-secrets-resolver 0.6, affinidi-did-common 0.5, affinidi-did-resolver-traits 0.2, affinidi-did-web 0.2, affinidi-did-resolver-cache-sdk 0.9 and affinidi-data-integrity 0.9 move together; a crate that mixes two generations does not compile.
+
+- **Added: `DIDMethod::Webs { identifier, domain, path_segments, aid }`.**
+  did:webs DIDs parsed as `DIDMethod::Other { method: "webs", .. }` before;
+  code that matched that shape must match `DIDMethod::Webs`. `domain` and the
+  path segments are as written (a `%3A`-encoded port stays encoded, as for
+  `DIDMethod::Web`); `aid` is the last label.
+- **Behaviour change: a malformed did:webs no longer parses at all.** The
+  parser applies the rules affinidi-did-webs applied after the fact: a host
+  and a trailing AID, no empty label, and an AID of four or more characters
+  of the CESR base64url alphabet. `"did:webs:example.com".parse::<DID>()`
+  (no AID) was `Ok` and is now `Err(InvalidMethodSpecificId)`.
+- This variant cannot ship with an older cache SDK: published
+  affinidi-did-resolver-cache-sdk <= 0.8.57 dispatches did:webs by the
+  `Other` shape. 0.9.0 matches the new variant.
+- Moves to affinidi-crypto 0.4 and affinidi-encoding 0.2 (`KeyType`,
+  `EncodingError` and others are in this crate's public API).
+
 ## [0.4.10] - 2026-11-15
 
 EC JWK public keys must be points on their curve (AgenticSec #535)
