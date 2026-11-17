@@ -2,6 +2,21 @@
 
 All notable changes to this crate are documented here.
 
+## [0.13.9] - 2026-11-17
+
+### Fixed
+
+- **A service's `type` is compared as a set.** DID Core lets a service `type`
+  be one string or a set of strings, but the check of a published `did.json`
+  against the services the stream authorises compared the JSON as written, so
+  `"TSPTransport"` and `["TSPTransport"]` were different services. A
+  `did.json` rendered from the resolved `Document` — which writes every
+  `type` as an array, as a did:webs host serving the document it derives does
+  — was refused as `DocumentMismatch("did.json's services differ from those
+  the stream authorises")` for every identifier with a designated service.
+  Types are now compared as a sorted set, and `DelegatorOOBI` is recognised
+  in either form. A different set of types is still refused.
+
 ## [0.13.8] - 2026-11-15
 
 DID parsing through `affinidi_did_common::DID`, `affinidi-net-guard` egress
