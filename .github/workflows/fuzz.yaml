@@ -100,7 +100,7 @@ jobs:
       # the ones this job legitimately needs, so a compromised dependency cannot
       # exfiltrate. New-version supply-chain risk is separately closed by the
       # committed fuzz Cargo.lock (SEC-3899); this is defense in depth.
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: block
           allowed-endpoints: >
@@ -122,7 +122,7 @@ jobs:
 
       # Actions SHA-pinned (SEC-3898): a mutable tag like @v4 can be repointed to
       # malicious code; pin to the exact commit the tag names today.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -132,7 +132,7 @@ jobs:
       # Pin cargo-fuzz (SEC-3898): unpinned, this pulls the newest release on
       # every run, which is both non-reproducible and a supply-chain intake.
       - name: Install cargo-fuzz
-        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with:
           tool: cargo-fuzz@0.13.2
 
@@ -167,7 +167,7 @@ jobs:
 
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # Target names repeat across fuzz crates (several `unpack`s), so the
           # job index keeps artifact names unique within a run.
