@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 use std::sync::{LazyLock, RwLock};
 
-use hash2curve::ExpandMsgXmd;
 use bls12_381_plus::{G1Affine, G1Projective, Scalar};
+use hash2curve::ExpandMsgXmd;
 use sha2::Sha256;
 
 use crate::ciphersuite::Ciphersuite;
