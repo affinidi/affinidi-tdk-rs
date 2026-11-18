@@ -84,7 +84,7 @@ rust-version = "1.95.0"
 # keep their own features. Where a member needs a dependency without its
 # default features, the entry here sets `default-features = false` and members
 # that want the defaults list `"default"` in their features. Renamed imports
-# (`rand_10`) and the RustCrypto 0.10 line in affinidi-bbs stay per-crate.
+# (`rand_10`) stay per-crate.
 ahash = "0.8"
 async-trait = "0.1"
 base64 = "0.23"

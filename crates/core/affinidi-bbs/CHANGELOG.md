@@ -1,5 +1,23 @@
 # Affinidi BBS
 
+## [0.5.0] - 2026-11-19
+
+**Breaking: moves to bls12_381_plus 0.10 and sha2 0.11 (one RustCrypto generation).** `Scalar` (re-exported) and `G1Projective` (returned by `calculate_pseudonym_generator*`) now come from bls12_381_plus 0.10, so this is a minor bump even though no signature in this crate changed.
+
+- bls12_381_plus 0.9 -> 0.10. It drops the elliptic-curve 0.13 line, and
+  `G1Projective::hash` now takes a `hash2curve` 0.14 `ExpandMsg`, so the
+  pseudonym generator, the generators and `expand_message` use
+  `hash2curve::ExpandMsgXmd<Sha256>` (new direct dependency, `hash2curve`
+  0.14, no default features) instead of
+  `bls12_381_plus::elliptic_curve_013::hash2curve`.
+- `sha2` 0.10 -> 0.11, from the workspace (#1161). elliptic-curve 0.13 and
+  crypto-bigint 0.5 leave the lockfile.
+- No behaviour change: XMD expansion and hash-to-curve are the same RFC 9380
+  construction at the same 128-bit security level, so signatures, proofs and
+  the IETF test vectors are unchanged. `expand_msg_xmd` now returns an error
+  (instead of reaching the expander) for an output length of 0 or above
+  `u16::MAX`, which RFC 9380 already rules out.
+
 ## [0.4.4] - 2026-11-15
 
 Workspace lint and dependency housekeeping. No API or behaviour change.
