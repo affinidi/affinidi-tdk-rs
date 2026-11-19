@@ -1,5 +1,19 @@
 # Affinidi Data Integrity Changelog
 
+## [0.9.1] - 2026-11-18
+
+serde_json_canonicalizer 0.3 -> 0.4 (#1160). No API change.
+
+- The JCS canonicalizer now refuses a document that serialises an object with
+  a duplicate key, returning `DataIntegrityError::Canonicalization` where 0.3
+  silently kept one of the values. RFC 8785 requires I-JSON input, so such a
+  document never had a well-defined signature. A `serde_json::Value` cannot
+  hold a duplicate key; only a typed document whose `#[serde(flatten)]`
+  fields collide can reach this. Canonical output for every other input is
+  byte-identical.
+- serde_json_canonicalizer 0.3.2 leaves Cargo.lock; the workspace now has one
+  canonicalizer version.
+
 ## [0.9.0] - 2026-11-17
 
 **Breaking (R3.6): moves to the new generation of its affinidi dependencies.** affinidi-secrets-resolver's `Secret` and affinidi-crypto's `KeyType` appear in this crate's public API, so it moves a minor even where its own code is unchanged. Part of the coordinated breaking release of #1143 and #1166: affinidi-crypto 0.4, affinidi-encoding 0.2, affinidi-secrets-resolver 0.6, affinidi-did-common 0.5, affinidi-did-resolver-traits 0.2, affinidi-did-web 0.2, affinidi-did-resolver-cache-sdk 0.9 and affinidi-data-integrity 0.9 move together; a crate that mixes two generations does not compile.
