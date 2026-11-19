@@ -6,13 +6,17 @@
  * - `messages_to_scalars`: Convert message byte arrays to scalars
  * - `expand_message`: SHA-256 (XMD) message expansion per RFC 9380
  *
- * Uses `elliptic_curve_013::hash2curve::ExpandMsgXmd<Sha256>` for exact
+ * Uses `hash2curve::ExpandMsgXmd<Sha256>` (the implementation
+ * `bls12_381_plus` uses internally) for exact
  * compatibility with the `bls12_381_plus` hash-to-curve implementation.
  */
 
 use bls12_381_plus::Scalar;
-use bls12_381_plus::elliptic_curve_013::hash2curve::{ExpandMsg, ExpandMsgXmd, Expander};
+use std::num::NonZero;
+
+use hash2curve::{ExpandMsg, ExpandMsgXmd, Expander};
 use sha2::Sha256;
+use sha2::digest::consts::U16;
 
 use crate::ciphersuite::Ciphersuite;
 use crate::error::{BbsError, Result};
@@ -55,20 +59,30 @@ pub fn messages_to_scalars_with_api_id(
         .collect()
 }
 
-/// Expand message using ExpandMsgXmd<SHA-256> from the elliptic_curve crate.
+/// Expand message using `ExpandMsgXmd<SHA-256>` from the `hash2curve` crate,
+/// at the 128-bit security level (`k = 128`, `U16` bytes) BBS uses.
 ///
 /// Returns an error instead of panicking on invalid inputs.
 pub fn expand_msg_xmd(msg: &[u8], dst: &[u8], len_in_bytes: usize) -> Result<Vec<u8>> {
+    let failed = || {
+        BbsError::Crypto(format!(
+            "expand_message failed (dst_len={}, out_len={})",
+            dst.len(),
+            len_in_bytes
+        ))
+    };
+    let len = u16::try_from(len_in_bytes)
+        .ok()
+        .and_then(NonZero::new)
+        .ok_or_else(failed)?;
     let mut output = vec![0u8; len_in_bytes];
-    <ExpandMsgXmd<Sha256> as ExpandMsg<'_>>::expand_message(&[msg], &[dst], len_in_bytes)
-        .map_err(|_| {
-            BbsError::Crypto(format!(
-                "expand_message failed (dst_len={}, out_len={})",
-                dst.len(),
-                len_in_bytes
-            ))
-        })?
-        .fill_bytes(&mut output);
+    let written = <ExpandMsgXmd<Sha256> as ExpandMsg<U16>>::expand_message(&[msg], &[dst], len)
+        .map_err(|_| failed())?
+        .fill_bytes(&mut output)
+        .map_err(|_| failed())?;
+    if written != len_in_bytes {
+        return Err(failed());
+    }
     Ok(output)
 }
 

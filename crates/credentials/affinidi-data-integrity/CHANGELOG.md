@@ -1,5 +1,12 @@
 # Affinidi Data Integrity Changelog
 
+## [0.9.2] - 2026-11-19
+
+Takes affinidi-bbs 0.5 for the `bbs-2023` feature. No API or behaviour change.
+
+- `affinidi-bbs` 0.4 -> 0.5 (bls12_381_plus 0.10, sha2 0.11, #1161). No
+  affinidi-bbs type appears in this crate's public API, so this is a patch.
+
 ## [0.9.1] - 2026-11-18
 
 serde_json_canonicalizer 0.3 -> 0.4 (#1160). No API change.
