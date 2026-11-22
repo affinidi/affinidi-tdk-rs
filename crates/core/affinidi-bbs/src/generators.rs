@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 use std::sync::{LazyLock, RwLock};
 
-use bls12_381_plus::elliptic_curve_013::hash2curve::ExpandMsgXmd;
 use bls12_381_plus::{G1Affine, G1Projective, Scalar};
+use hash2curve::ExpandMsgXmd;
 use sha2::Sha256;
 
 use crate::ciphersuite::Ciphersuite;
@@ -179,7 +179,7 @@ impl GeneratorSequence {
     }
 }
 
-/// Expand message using the elliptic_curve crate's XMD implementation.
+/// Expand message using the `hash2curve` crate's XMD implementation.
 ///
 /// This ensures byte-exact compatibility with what `bls12_381_plus::hash`
 /// uses internally for its hash-to-curve operations.
