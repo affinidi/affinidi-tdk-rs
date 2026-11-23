@@ -100,7 +100,7 @@ jobs:
       # the ones this job legitimately needs, so a compromised dependency cannot
       # exfiltrate. New-version supply-chain risk is separately closed by the
       # committed fuzz Cargo.lock (SEC-3899); this is defense in depth.
-      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: block
           allowed-endpoints: >
@@ -132,7 +132,7 @@ jobs:
       # Pin cargo-fuzz (SEC-3898): unpinned, this pulls the newest release on
       # every run, which is both non-reproducible and a supply-chain intake.
       - name: Install cargo-fuzz
-        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
         with:
           tool: cargo-fuzz@0.13.2
 
