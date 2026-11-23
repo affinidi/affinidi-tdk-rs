@@ -26,7 +26,9 @@ mod common;
 use std::time::Duration;
 
 use affinidi_messaging_didcomm::Message;
-use affinidi_messaging_test_mediator::{RelayMode, TestEnvironment, TestMediator, TestUser, acl};
+use affinidi_messaging_test_mediator::{
+    MediatorACLSet, RelayMode, TestEnvironment, TestMediator, TestUser, acl,
+};
 use common::{await_monitor_event, init_tracing};
 use serde_json::json;
 use uuid::Uuid;
@@ -644,6 +646,50 @@ async fn single_forward_and_receive(
     }
 }
 
+/// Rewrap relay of a single forward under an open default, with no recipient
+/// ACL in play: the relay layer must be encrypted to the peer mediator Bob's
+/// DID document names, not to Bob, or B cannot peel it. Isolates the
+/// `relay_to` change from the access-list change.
+#[tokio::test]
+async fn rewrap_single_forward_encrypts_the_relay_layer_to_the_peer_mediator() {
+    init_tracing();
+
+    let spawn = || async {
+        let mediator = TestMediator::builder()
+            .enable_forwarding(true)
+            .enable_external_forwarding(true)
+            .global_acl_default(acl::allow_all())
+            .local_direct_delivery(true, false)
+            .relay_mode(RelayMode::Rewrap)
+            .spawn()
+            .await
+            .expect("spawn rewrap mediator with direct delivery");
+        TestEnvironment::new(mediator).await.expect("environment")
+    };
+    let env_a = spawn().await;
+    let env_b = spawn().await;
+    let mediator_a_did = env_a.mediator.did().to_string();
+
+    let alice = add_live_user(&env_a, "Alice").await;
+    let bob = add_live_user(&env_b, "Bob").await;
+
+    let text = "Single forward, rewrapped to mediator B.";
+    let received = single_forward_and_receive(
+        &env_a,
+        &alice,
+        &mediator_a_did,
+        &env_b,
+        &bob,
+        text,
+        Duration::from_secs(15),
+    )
+    .await;
+    assert_eq!(received.as_deref(), Some(text));
+
+    env_a.shutdown().await.expect("shutdown mediator A");
+    env_b.shutdown().await.expect("shutdown mediator B");
+}
+
 /// The regression for the production `session_mismatch` refusal: a blind relay
 /// whose inner envelope is addressed to a local account must be delivered, not
 /// refused for failing to match the anonymous relay session's (empty) DID.
@@ -857,4 +903,397 @@ async fn the_monitor_reports_a_failed_relay_attempt() {
     assert_eq!(failed["channel"], "peerMediator");
 
     env_a.shutdown().await.expect("shutdown A");
+}
+
+// ─── Consent-based default: closed per-DID access lists ────────────────────
+//
+// Every relay above runs an `ALLOW_ALL` default, so every inbox is open and
+// no access list ever refuses anything. A consent-based deployment starts each
+// new DID with an empty allowlist instead. The recipient's access list is
+// enforced by the mediator that holds the recipient's inbox; the sender's
+// mediator only relays, and the placeholder account it registers for a remote
+// next hop is not the recipient's real policy.
+
+/// A consent-based default: forwarding granted, every new inbox an empty
+/// allowlist its owner may open.
+fn consent_based_default() -> MediatorACLSet {
+    MediatorACLSet::from_string_ruleset(
+        "DENY_ALL,ALLOW_ALL_SELF_CHANGE,SEND_MESSAGES,RECEIVE_MESSAGES,SEND_FORWARDED,\
+         RECEIVE_FORWARDED,CREATE_INVITES,ANON_RECEIVE,SELF_MANAGE_LIST,\
+         SELF_MANAGE_SEND_QUEUE_LIMIT,SELF_MANAGE_RECEIVE_QUEUE_LIMIT,MODE_SELF_CHANGE,\
+         MODE_EXPLICIT_ALLOW,LOCAL",
+    )
+    .expect("consent-based ruleset")
+}
+
+/// Blind relay with direct delivery, registering unknown DIDs with
+/// [`consent_based_default`].
+async fn spawn_consent_relay_environment() -> TestEnvironment {
+    spawn_consent_environment(RelayMode::Blind).await
+}
+
+/// [`spawn_consent_relay_environment`] in the given relay mode.
+async fn spawn_consent_environment(relay_mode: RelayMode) -> TestEnvironment {
+    let mediator = TestMediator::builder()
+        .enable_forwarding(true)
+        .enable_external_forwarding(true)
+        .global_acl_default(consent_based_default())
+        .local_direct_delivery(true, false)
+        .relay_mode(relay_mode)
+        // A refusal by the peer is retried; keep the budget short so a test can
+        // wait for the abandonment instead of guessing a delay.
+        .forwarding_retry_policy(1, Duration::from_millis(100), Duration::from_millis(100))
+        .spawn()
+        .await
+        .expect("spawn consent-based relay mediator");
+    TestEnvironment::new(mediator)
+        .await
+        .expect("wire SDK environment to consent-based relay mediator")
+}
+
+/// The sender's mediator must not apply its placeholder for a remote next hop:
+/// both the single forward (`next` = Bob) and the double forward (`next` =
+/// mediator B) reach Bob.
+#[tokio::test]
+async fn consent_based_relay_reaches_remote_recipient() {
+    relay_reaches_remote_recipient(RelayMode::Blind).await;
+}
+
+/// The same in `rewrap` mode: the single forward's relay layer is encrypted to
+/// mediator B (Bob's mediator), not to Bob.
+#[tokio::test]
+async fn rewrap_relay_reaches_remote_recipient() {
+    relay_reaches_remote_recipient(RelayMode::Rewrap).await;
+}
+
+async fn relay_reaches_remote_recipient(relay_mode: RelayMode) {
+    init_tracing();
+
+    let env_a = spawn_consent_environment(relay_mode).await;
+    let env_b = spawn_consent_environment(relay_mode).await;
+    let mediator_a_did = env_a.mediator.did().to_string();
+    let mediator_b_did = env_b.mediator.did().to_string();
+
+    let alice = add_live_user(&env_a, "Alice").await;
+    let bob = add_live_user(&env_b, "Bob").await;
+
+    let text = "Single forward through a consent-based relay.";
+    let received = single_forward_and_receive(
+        &env_a,
+        &alice,
+        &mediator_a_did,
+        &env_b,
+        &bob,
+        text,
+        Duration::from_secs(15),
+    )
+    .await;
+    assert_eq!(received.as_deref(), Some(text), "single forward next = Bob");
+
+    let text = "Double forward through a consent-based relay.";
+    let received = forward_and_receive(
+        &env_a,
+        &alice,
+        &mediator_a_did,
+        &env_b,
+        &bob,
+        &mediator_b_did,
+        text,
+        Duration::from_secs(15),
+    )
+    .await;
+    assert_eq!(received.as_deref(), Some(text), "double forward next = B");
+
+    // A relayed both without registering an account for either remote hop.
+    for (hop, did) in [("Bob", &bob.did), ("mediator B", &mediator_b_did)] {
+        let account = env_a
+            .mediator
+            .store()
+            .account_get(&sha256::digest(did.as_str()))
+            .await
+            .expect("account lookup");
+        assert!(account.is_none(), "A registered a placeholder for {hop}");
+    }
+
+    env_a.shutdown().await.expect("shutdown mediator A");
+    env_b.shutdown().await.expect("shutdown mediator B");
+}
+
+/// Bob's own mediator still enforces Bob's allowlist: A accepts the forward
+/// and relays it, B refuses it. Once Bob admits Alice, a new message is
+/// delivered.
+#[tokio::test]
+async fn consent_based_relay_honours_recipients_access_list() {
+    recipients_access_list_is_enforced_by_their_mediator(RelayMode::Blind).await;
+}
+
+/// The same in `rewrap` mode, where B sees mediator A as the authenticated
+/// sender of the outer layer. B peels that layer before any recipient check,
+/// so Bob's list is checked against Alice: admitting Alice (not A) is what
+/// lets the message in.
+#[tokio::test]
+async fn rewrap_relay_honours_recipients_access_list() {
+    recipients_access_list_is_enforced_by_their_mediator(RelayMode::Rewrap).await;
+}
+
+async fn recipients_access_list_is_enforced_by_their_mediator(relay_mode: RelayMode) {
+    init_tracing();
+
+    let env_a = spawn_consent_environment(relay_mode).await;
+    let env_b = spawn_consent_environment(relay_mode).await;
+    let mediator_a_did = env_a.mediator.did().to_string();
+
+    let alice = add_live_user(&env_a, "Alice").await;
+    let bob = add_live_user(&env_b, "Bob").await;
+    env_b
+        .mediator
+        .set_acl(&bob.did, consent_based_default())
+        .await
+        .expect("close Bob's inbox");
+    // Single forward: the relay hop's recipient is Bob himself.
+    let admin = watch_relays_to(&env_a, &bob.did).await;
+
+    // Alice sends over WebSocket, so a refusal by A would not fail this call.
+    // That A accepted and relayed the forward is shown by the monitor events
+    // below.
+    let received = single_forward_and_receive(
+        &env_a,
+        &alice,
+        &mediator_a_did,
+        &env_b,
+        &bob,
+        "This must not arrive — Bob has not admitted Alice.",
+        Duration::from_secs(1),
+    )
+    .await;
+    assert_eq!(received, None, "B must refuse a sender off Bob's allowlist");
+
+    // A did relay it, B did not accept it, and A gave up: the attempt is seen
+    // failing before it is abandoned, so the missing delivery is B's refusal,
+    // not a slow or unattempted relay.
+    let seen = std::cell::RefCell::new(Vec::new());
+    await_monitor_event(
+        &env_a,
+        &admin,
+        |e| {
+            seen.borrow_mut().push(e.clone());
+            e["stage"] == "forwarded" && e["outcome"]["code"] == "e.p.me.res.forwarding.abandoned"
+        },
+        Duration::from_secs(15),
+    )
+    .await
+    .expect("A gives up on the relay B does not accept");
+    let codes: Vec<String> = seen
+        .borrow()
+        .iter()
+        .filter_map(|e| e["outcome"]["code"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        codes.iter().any(|c| c == "forwardingRetry"),
+        "A attempted the relay and it was not accepted: {codes:?}"
+    );
+
+    env_b
+        .mediator
+        .store()
+        .access_list_add(100, &bob.did_hash(), &[alice.did_hash()])
+        .await
+        .expect("Bob admits Alice");
+
+    let text = "Admitted, so delivered.";
+    let received = single_forward_and_receive(
+        &env_a,
+        &alice,
+        &mediator_a_did,
+        &env_b,
+        &bob,
+        text,
+        Duration::from_secs(15),
+    )
+    .await;
+    // The first message was abandoned above, so it cannot arrive late.
+    assert_eq!(received.as_deref(), Some(text), "Bob admitted Alice");
+
+    env_a.shutdown().await.expect("shutdown mediator A");
+    env_b.shutdown().await.expect("shutdown mediator B");
+}
+
+/// An access list the next hop holds on the relaying mediator is still
+/// honoured even when its DID document points elsewhere — the case of a
+/// local account this mediator fails to recognise as its own. A refuses at
+/// once, before relaying.
+#[tokio::test]
+async fn relay_honours_an_access_list_the_next_hop_holds_locally() {
+    init_tracing();
+
+    let env_a = spawn_consent_relay_environment().await;
+    let env_b = spawn_consent_relay_environment().await;
+    let mediator_a_did = env_a.mediator.did().to_string();
+
+    // Over REST, so the refusal comes back as the send's own answer.
+    let alice = env_a.add_user("Alice").await.expect("add Alice");
+    let bob = env_b.add_user("Bob").await.expect("add Bob");
+    let store_a = env_a.mediator.store();
+    store_a
+        .account_add(&bob.did_hash(), &consent_based_default(), None)
+        .await
+        .expect("Bob holds an account on A");
+    store_a
+        .access_list_add(100, &bob.did_hash(), &[sha256::digest("did:example:carol")])
+        .await
+        .expect("Bob's list on A admits only Carol");
+
+    let now = unix_secs();
+    let msg = Message::build(
+        Uuid::new_v4().to_string(),
+        "https://didcomm.org/basicmessage/2.0/message".to_string(),
+        json!({ "content": "Bob's list on A does not admit Alice." }),
+    )
+    .to(bob.did.clone())
+    .from(alice.did.clone())
+    .created_time(now)
+    .expires_time(now + 60)
+    .finalize();
+    let (packed, _) = env_a
+        .atm
+        .pack_encrypted(&msg, &bob.did, Some(&alice.did), Some(&alice.did))
+        .await
+        .expect("authcrypt for Bob");
+    let (_fwd_id, forward) = env_a
+        .atm
+        .routing()
+        .forward_message(
+            &alice.profile,
+            false,
+            &packed,
+            &mediator_a_did,
+            &bob.did,
+            None,
+            None,
+        )
+        .await
+        .expect("wrap forward");
+
+    let error = env_a
+        .atm
+        .send_message(&alice.profile, &forward, &msg.id, false, false)
+        .await
+        .expect_err("A must apply the list Bob holds there");
+    assert!(
+        format!("{error:?}").contains("delivery.refused"),
+        "expected delivery.refused, got: {error:?}"
+    );
+
+    env_a.shutdown().await.expect("shutdown mediator A");
+    env_b.shutdown().await.expect("shutdown mediator B");
+}
+
+/// An in-place upgrade keeps the accounts the old version registered. A
+/// placeholder it left for a remote recipient (the default ACL, an empty list)
+/// must not refuse the relay: the recipient's own mediator decides.
+#[tokio::test]
+async fn relay_ignores_a_placeholder_account_left_by_an_earlier_version() {
+    init_tracing();
+
+    let env_a = spawn_consent_relay_environment().await;
+    let env_b = spawn_consent_relay_environment().await;
+    let mediator_a_did = env_a.mediator.did().to_string();
+
+    let alice = add_live_user(&env_a, "Alice").await;
+    let bob = add_live_user(&env_b, "Bob").await;
+    env_a
+        .mediator
+        .store()
+        .account_add(&bob.did_hash(), &consent_based_default(), None)
+        .await
+        .expect("the old version's placeholder for Bob on A");
+    env_b
+        .mediator
+        .set_acl(&bob.did, consent_based_default())
+        .await
+        .expect("close Bob's inbox");
+    env_b
+        .mediator
+        .store()
+        .access_list_add(100, &bob.did_hash(), &[alice.did_hash()])
+        .await
+        .expect("Bob admits Alice");
+
+    let text = "Relayed past a stale placeholder.";
+    let received = single_forward_and_receive(
+        &env_a,
+        &alice,
+        &mediator_a_did,
+        &env_b,
+        &bob,
+        text,
+        Duration::from_secs(15),
+    )
+    .await;
+    assert_eq!(
+        received.as_deref(),
+        Some(text),
+        "the placeholder is ignored"
+    );
+
+    env_a.shutdown().await.expect("shutdown mediator A");
+    env_b.shutdown().await.expect("shutdown mediator B");
+}
+
+/// A forward to a local account still checks that account's access list.
+#[tokio::test]
+async fn consent_based_mediator_guards_local_forward() {
+    init_tracing();
+
+    let env = spawn_consent_relay_environment().await;
+    let mediator_did = env.mediator.did().to_string();
+    let alice = env.add_user("Alice").await.expect("add Alice");
+    let carol = env.add_user("Carol").await.expect("add Carol");
+    env.mediator
+        .set_acl(&carol.did, consent_based_default())
+        .await
+        .expect("close Carol's inbox");
+
+    let now = unix_secs();
+    let msg = Message::build(
+        Uuid::new_v4().to_string(),
+        "https://didcomm.org/basicmessage/2.0/message".to_string(),
+        json!({ "content": "Carol has not admitted Alice." }),
+    )
+    .to(carol.did.clone())
+    .from(alice.did.clone())
+    .created_time(now)
+    .expires_time(now + 60)
+    .finalize();
+    let (packed, _) = env
+        .atm
+        .pack_encrypted(&msg, &carol.did, Some(&alice.did), Some(&alice.did))
+        .await
+        .expect("authcrypt for Carol");
+    let (_fwd_id, forward) = env
+        .atm
+        .routing()
+        .forward_message(
+            &alice.profile,
+            false,
+            &packed,
+            &mediator_did,
+            &carol.did,
+            None,
+            None,
+        )
+        .await
+        .expect("wrap forward");
+
+    let error = env
+        .atm
+        .send_message(&alice.profile, &forward, &msg.id, false, false)
+        .await
+        .expect_err("a local inbox's allowlist must refuse Alice");
+    assert!(
+        format!("{error:?}").contains("delivery.refused"),
+        "expected delivery.refused, got: {error:?}"
+    );
+
+    env.shutdown().await.expect("shutdown mediator");
 }

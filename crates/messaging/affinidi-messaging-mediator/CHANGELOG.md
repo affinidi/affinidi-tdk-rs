@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.33.2 — a relay leaves a remote recipient's access list to its own mediator
+
+Backport of affinidi-messaging-mediator PR #31 (shipped upstream in 0.47.0) to
+the 0.33 line.
+
+A mediator under a closed default (`MODE_EXPLICIT_ALLOW`, every new account an
+empty access list) refused every forward whose next hop lives on another
+mediator with "delivery blocked by the recipient's access list". The forward
+handler registered a placeholder account for the next hop from
+`global_acl_default`, checked that empty list against the sender, and only then
+decided the hop was remote.
+
+The handler now decides local or remote first. For a **local** next hop nothing
+changes: `RECEIVE_FORWARDED`, the access list, `ANON_RECEIVE` and the
+receive-queue limit are checked as before. For a **remote** next hop the relaying
+mediator registers no account and applies none of them; the mediator that holds
+the inbox enforces the recipient's policy. A list the next hop already holds on
+the relaying mediator (a local account whose DID document points elsewhere) is
+still honoured. Sender authentication, `SEND_FORWARDED`, the egress guard, the
+sender and peer queue limits and the hop limit are unchanged.
+
+In `rewrap` mode, when the next hop's DID document names its mediator by DID
+(the usual single forward, `next` = the recipient), the relay layer is now
+encrypted to that peer mediator, not to the next hop itself; the old target was
+not the mediator that has to peel the layer. A next hop whose document publishes
+a plain URL is unchanged: the layer is still addressed to the next hop.
+
+Upgrade note: for a remote next hop, the ACL bits (for example a revoked
+`RECEIVE_FORWARDED`) of an account that DID holds on the relaying mediator are no
+longer applied, and an empty access list there is ignored; only a non-empty list
+is honoured. A local next hop is checked exactly as before.
+
+Not backported: the `Refused` relay outcome. A refusal by the recipient's
+mediator is retried and abandoned as before.
+
 ## Unreleased (0.33.1) — every storage backend refuses a delete the same way
 
 A delete of a message that is not there, or that the requester is not a party
