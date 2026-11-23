@@ -35,8 +35,7 @@ jobs:
     with:
       toolchain: "1.95.0"
       rustflags: "-D warnings --cfg tracing_unstable"
-      # paste (RUSTSEC-2024-0436) and crypto-bigint 0.5 (RUSTSEC-2026-0387) are
-      # suppressed, for the reasons below. Every entry must still match
+      # paste (RUSTSEC-2024-0436) is suppressed, for the reason below. Every entry must still match
       # Cargo.lock: `cargo audit` with no ignores should report each one, and
       # an entry it no longer reports is deleted rather than kept.
       #
@@ -62,14 +61,11 @@ jobs:
       # both off, so it is never compiled. The latest releases (image 0.25.10, rav1e 0.8.1, pulp 0.22.3) still use it.
       # Clears when rav1e and pulp move off `paste`: delete it then (#779).
       #
-      # RUSTSEC-2026-0387 (crypto-bigint, constant-time timing variability) is
-      # accepted for 0.5.5 only, last confirmed 2026-11-13: 0.7.x is on 0.7.10,
-      # past the fix in 0.7.6. 0.5.5 is reached
-      # solely through affinidi-bbs -> bls12_381_plus 0.9, which links
-      # elliptic-curve 0.13 (non-optionally) beside 0.14 for legacy trait
-      # compatibility; the advisory names no 0.5.x fix and no newer
-      # bls12_381_plus exists. Delete it when bls12_381_plus drops 0.13.
-      auditIgnore: "RUSTSEC-2024-0436,RUSTSEC-2026-0387"
+      # RUSTSEC-2026-0387 (crypto-bigint 0.5) was removed 2026-11-22: #1161 moved
+      # affinidi-bbs to bls12_381_plus 0.10, which dropped elliptic-curve 0.13
+      # and with it crypto-bigint 0.5.5. The lockfile has only 0.7.10, past the
+      # fix in 0.7.6, so the entry matched nothing.
+      auditIgnore: "RUSTSEC-2024-0436"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       release_debug: true
       # `workspace_publish: true` uses `cargo publish --workspace`, which errors on
