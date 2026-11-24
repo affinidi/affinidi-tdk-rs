@@ -30,10 +30,27 @@ a plain URL is unchanged: the layer is still addressed to the next hop.
 Upgrade note: for a remote next hop, the ACL bits (for example a revoked
 `RECEIVE_FORWARDED`) of an account that DID holds on the relaying mediator are no
 longer applied, and an empty access list there is ignored; only a non-empty list
-is honoured. A local next hop is checked exactly as before.
+is honoured. In other words, a relay to a DID is blocked on the relaying mediator
+only by a non-empty access list on that DID's account. A local next hop is checked
+exactly as before.
 
-Not backported: the `Refused` relay outcome. A refusal by the recipient's
-mediator is retried and abandoned as before.
+A refusal by the recipient's mediator is now final (`affinidi-messaging-mediator-common`
+0.17.8). When the peer mediator refuses a relayed message with a 4xx other than 408, 425
+or 429, the forwarding processor drops it at once instead of retrying it until
+`max_retries`. Before, a refused message could still be delivered if the recipient
+changed their policy during the retries. The sender gets a problem report with the new
+code `e.p.me.res.forwarding.refused` (args `[destination, http_status, endpoint]`), and
+the monitor reports `forwarded` with that outcome. Timeouts, rate limits, 5xx and
+connection errors are still retried, then abandoned.
+
+Relay is now reachable by every account that holds `SEND_FORWARDED`, which the default
+global ACL of a managed deployment grants to every account. A relay to an endpoint that
+never answers still occupies the forwarding processor until `max_retries`; upstream's
+per-endpoint scheduling and WebSocket bounds are not part of this release.
+
+In the lockfile, the 0.33.2 build also takes patched releases of `rustls`,
+`rustls-webpki`, `webpki-root-certs`, `quinn-proto`, `quinn-udp`, `ctutils`,
+`crypto-bigint`, `url`, `rustix` and `tokio`, which clear the open `cargo audit` findings.
 
 ## Unreleased (0.33.1) — every storage backend refuses a delete the same way
 

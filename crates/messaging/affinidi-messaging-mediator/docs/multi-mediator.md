@@ -237,6 +237,15 @@ local user's document points at a hostname missing from `server.local_endpoints`
 An account with an empty list (the placeholder earlier versions registered) is
 ignored.
 
+When B refuses the relay with a 4xx other than 408, 425 or 429, A does not
+retry it. It drops the entry, reports `forwarded` with outcome
+`e.p.me.res.forwarding.refused` to the monitor, and sends the sender a problem
+report with the same code and args `[destination, http_status, endpoint]`.
+Otherwise a refused message could be delivered later, if the recipient's
+policy changed while A was still retrying. Timeouts, rate limits, 5xx and
+connection errors are still retried until `max_retries`, then abandoned with
+`e.p.me.res.forwarding.abandoned`.
+
 **On B (recipient's mediator):**
 
 | Account | Capability | Enforced by | Error |
@@ -409,6 +418,7 @@ mediator **DIDs**, not URLs).
 | Error 71 `direct_delivery.denied` at B | a single-forward relay landed as a direct delivery | `local_direct_delivery_allowed = "true"` on B, or send the double forward |
 | Error 94 `loop_detected` | genuine loop, or `max_hops` too low for the topology | inspect the route before raising `max_hops` |
 | `FORWARD_ABANDONED` in A's logs | B unreachable through `max_retries` | check B's endpoint and TLS; the sender receives a problem report |
+| `FORWARD_REFUSED` in A's logs; sender gets `e.p.me.res.forwarding.refused` | B refused the relay with a 4xx, typically a recipient-side check on Bob | B's log names the reason; the message is not retried |
 | TSP messages never leave A | B advertises no `TSPTransport` service | add it (§8); `did:peer`/`did:webvh` need it at DID-generation time |
 | `peer … did not negotiate the \`relay-ack\` subprotocol` in A's logs | B predates the relay socket, or isn't relay-enabled | expected against an older mediator — delivery continues over REST; if B should accept it, check `enable_inter_mediator_relay` on B |
 | `peer refused the relayed message` in A's logs | B nacked the frame | the reason and mediator error code are in the log line; look it up in §6 or `ERRORS.md` — the sender gets a problem report once retries are exhausted |

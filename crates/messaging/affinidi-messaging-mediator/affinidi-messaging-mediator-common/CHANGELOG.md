@@ -1,5 +1,21 @@
 # Affinidi Messaging Mediator Common
 
+## 0.17.8 — a refusal by the peer mediator is final
+
+Backport of affinidi-messaging-mediator PR #31 (processor part) to the 0.17 line.
+0.17.2 to 0.17.7 were published from another line, so this line continues at
+0.17.8.
+
+When the peer mediator refuses a relayed message with a 4xx other than 408, 425
+or 429, the forwarding processor drops it at once instead of retrying it until
+`max_retries`. Before, a refused message could still be delivered if the
+recipient changed their policy during the retries. A refusal does not count
+towards the endpoint's backoff. The sender gets a problem report with the new
+code `e.p.me.res.forwarding.refused` (args `[destination, http_status,
+endpoint]`). `ForwardOutcome` gains a `Refused { status }` variant (the enum is
+`#[non_exhaustive]`). Timeouts, rate limits, 5xx and connection errors are
+retried as before.
+
 ## Unreleased (0.17.1) — one shape for a refused delete
 
 `store::ops` gains `delete_not_found`, `delete_permission_denied` and

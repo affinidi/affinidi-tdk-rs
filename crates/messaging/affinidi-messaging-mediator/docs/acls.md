@@ -253,7 +253,7 @@ to admit or refuse.
 ├─ next hop local:
 │    ├─ has RECEIVE_FORWARDED?                  else 403
 │    ├─ recipient's access list admits the sender?  else 403
-│    ├─ receive-queue limit?                     else 429
+│    ├─ receive-queue limit?                     else 503
 │    └─ anonymous envelope → has ANON_RECEIVE?  else 403
 ```
 

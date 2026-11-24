@@ -940,8 +940,8 @@ async fn spawn_consent_environment(relay_mode: RelayMode) -> TestEnvironment {
         .global_acl_default(consent_based_default())
         .local_direct_delivery(true, false)
         .relay_mode(relay_mode)
-        // A refusal by the peer is retried; keep the budget short so a test can
-        // wait for the abandonment instead of guessing a delay.
+        // A refusal by the peer is final, but a transport failure is retried;
+        // keep the budget short so a test never waits on a long backoff.
         .forwarding_retry_policy(1, Duration::from_millis(100), Duration::from_millis(100))
         .spawn()
         .await
@@ -1068,29 +1068,29 @@ async fn recipients_access_list_is_enforced_by_their_mediator(relay_mode: RelayM
     .await;
     assert_eq!(received, None, "B must refuse a sender off Bob's allowlist");
 
-    // A did relay it, B did not accept it, and A gave up: the attempt is seen
-    // failing before it is abandoned, so the missing delivery is B's refusal,
-    // not a slow or unattempted relay.
+    // A did relay it and B refused it. A drops it at once rather than retrying
+    // (a refusal that was retried could turn into a delivery if Bob admitted
+    // Alice meanwhile), so the monitor shows the refusal and no retry.
     let seen = std::cell::RefCell::new(Vec::new());
     await_monitor_event(
         &env_a,
         &admin,
         |e| {
             seen.borrow_mut().push(e.clone());
-            e["stage"] == "forwarded" && e["outcome"]["code"] == "e.p.me.res.forwarding.abandoned"
+            e["stage"] == "forwarded" && e["outcome"]["code"] == "e.p.me.res.forwarding.refused"
         },
         Duration::from_secs(15),
     )
     .await
-    .expect("A gives up on the relay B does not accept");
+    .expect("A drops the relay B refuses, with the refused outcome");
     let codes: Vec<String> = seen
         .borrow()
         .iter()
         .filter_map(|e| e["outcome"]["code"].as_str().map(str::to_string))
         .collect();
     assert!(
-        codes.iter().any(|c| c == "forwardingRetry"),
-        "A attempted the relay and it was not accepted: {codes:?}"
+        !codes.iter().any(|c| c == "forwardingRetry"),
+        "a refusal must not be retried: {codes:?}"
     );
 
     env_b
@@ -1111,7 +1111,7 @@ async fn recipients_access_list_is_enforced_by_their_mediator(relay_mode: RelayM
         Duration::from_secs(15),
     )
     .await;
-    // The first message was abandoned above, so it cannot arrive late.
+    // The first message was dropped above, so it cannot arrive late.
     assert_eq!(received.as_deref(), Some(text), "Bob admitted Alice");
 
     env_a.shutdown().await.expect("shutdown mediator A");

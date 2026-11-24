@@ -13,7 +13,8 @@
 //!
 //! Error handling:
 //! - Connection failures: retry with exponential backoff
-//! - Rejection from remote mediator: send problem report to sender, drop message
+//! - Refusal from remote mediator (a 4xx other than 408/425/429): drop the
+//!   message at once and send the sender a problem report; it is not retried
 
 use crate::store::{MediatorStore, types::ForwardQueueEntry};
 use crate::tasks::forwarding::config::ForwardingConfig;
@@ -284,6 +285,40 @@ enum AckFailure {
     /// The frame, or its answer, never made it: send error, closed socket,
     /// or no ack inside the timeout.
     Transport(String),
+}
+
+/// Why one relay attempt failed, which decides whether it is worth retrying.
+#[derive(Debug)]
+enum RelayFailure {
+    /// The peer answered and refused the message: a 4xx other than 408, 425
+    /// or 429. Sending it again gets the same answer, and a refusal must not
+    /// turn into a delivery just because the recipient's policy changed
+    /// while we were retrying, so it is dropped at once.
+    Refused { status: u16, reason: String },
+    /// The peer was unreachable, overloaded or failed: worth another try.
+    Retryable(String),
+}
+
+impl RelayFailure {
+    /// Classify a non-2xx answer from the peer.
+    fn from_status(status: u16, reason: String) -> Self {
+        let transient = matches!(status, 408 | 425 | 429) || !(400..500).contains(&status);
+        if transient {
+            RelayFailure::Retryable(reason)
+        } else {
+            RelayFailure::Refused { status, reason }
+        }
+    }
+}
+
+impl std::fmt::Display for RelayFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RelayFailure::Refused { reason, .. } | RelayFailure::Retryable(reason) => {
+                f.write_str(reason)
+            }
+        }
+    }
 }
 
 /// The forwarding processor that reads from FORWARD_Q and delivers to remote mediators
@@ -629,6 +664,7 @@ impl ForwardingProcessor {
 
         let mut succeeded = Vec::new();
         let mut failed = Vec::new();
+        let mut refused = Vec::new();
 
         for msg in &ready {
             match self.deliver_message(endpoint_url, msg, use_websocket).await {
@@ -652,6 +688,13 @@ impl ForwardingProcessor {
                     self.observe(msg, relayed);
                     succeeded.push(msg.stream_id.as_str());
                 }
+                Err(RelayFailure::Refused { status, reason }) => {
+                    warn!(
+                        "FORWARD_REFUSED: to_did_hash={} from_did_hash={} endpoint={} status={} error={}",
+                        msg.to_did_hash, msg.from_did_hash, endpoint_url, status, reason
+                    );
+                    refused.push((msg, status));
+                }
                 Err(e) => {
                     warn!(
                         "FORWARD_FAILED: to_did_hash={} from_did_hash={} endpoint={} error={} retry_count={}",
@@ -659,6 +702,28 @@ impl ForwardingProcessor {
                     );
                     failed.push(msg);
                 }
+            }
+        }
+
+        // A refusal is final: drop it now and tell the sender. The peer
+        // answered, so it says nothing about the endpoint's health and does
+        // not count towards backoff.
+        for (msg, status) in refused {
+            let ids = [msg.stream_id.as_str()];
+            if let Err(e) = self
+                .database
+                .forward_queue_ack(&self.config.consumer_group, &ids)
+                .await
+            {
+                warn!("Failed to ACK refused entry: {e}");
+            }
+            if let Err(e) = self.database.forward_queue_delete(&ids).await {
+                warn!("Failed to delete refused entry: {e}");
+            }
+            self.observe(msg, ForwardOutcome::Refused { status });
+            if self.config.report_errors && !msg.from_did.is_empty() {
+                self.send_forwarding_failure_report(msg, endpoint_url, Some(status))
+                    .await;
             }
         }
 
@@ -730,7 +795,8 @@ impl ForwardingProcessor {
 
                     // Send problem report to the original sender if we know their DID
                     if self.config.report_errors && !msg.from_did.is_empty() {
-                        self.send_forwarding_failure_report(msg, endpoint_url).await;
+                        self.send_forwarding_failure_report(msg, endpoint_url, None)
+                            .await;
                     }
                 } else {
                     // Re-enqueue with incremented retry count
@@ -828,7 +894,38 @@ impl ForwardingProcessor {
             ),
             "args": [destination, msg.retry_count.to_string(), endpoint_url],
         });
+        Self::problem_report_envelope(msg, problem_body, from, now)
+    }
 
+    /// The DIDComm plaintext of the report sent when the peer mediator
+    /// refused the relay outright (see [`RelayFailure::Refused`]). The peer's
+    /// own reason stays in the log: it may describe the recipient's policy,
+    /// which the sender is not told.
+    fn build_refusal_report(
+        msg: &ForwardQueueEntry,
+        endpoint_url: &str,
+        status: u16,
+        from: &str,
+        now: u64,
+    ) -> serde_json::Value {
+        let destination = Self::destination_label(msg);
+        let problem_body = serde_json::json!({
+            "code": "e.p.me.res.forwarding.refused",
+            "comment": format!(
+                "The mediator for {} refused the forwarded message (HTTP {}). Destination endpoint: {}",
+                destination, status, endpoint_url
+            ),
+            "args": [destination, status.to_string(), endpoint_url],
+        });
+        Self::problem_report_envelope(msg, problem_body, from, now)
+    }
+
+    fn problem_report_envelope(
+        msg: &ForwardQueueEntry,
+        problem_body: serde_json::Value,
+        from: &str,
+        now: u64,
+    ) -> serde_json::Value {
         serde_json::json!({
             "type": "https://didcomm.org/report-problem/2.0/problem-report",
             "id": Uuid::new_v4().to_string(),
@@ -857,7 +954,15 @@ impl ForwardingProcessor {
     /// on it. Anoncrypt is no fallback either — bare anoncrypt is outside the
     /// default accepted set too. So the abandonment surfaces as an operator-side
     /// `ERROR` naming the sender, the destination and the reason.
-    async fn send_forwarding_failure_report(&self, msg: &ForwardQueueEntry, endpoint_url: &str) {
+    ///
+    /// `refused` carries the peer's HTTP status when it refused the relay
+    /// outright rather than the retries running out.
+    async fn send_forwarding_failure_report(
+        &self,
+        msg: &ForwardQueueEntry,
+        endpoint_url: &str,
+        refused: Option<u16>,
+    ) {
         let now = unix_timestamp_secs();
 
         let Some(packer) = self.packer.as_ref() else {
@@ -871,7 +976,12 @@ impl ForwardingProcessor {
             return;
         };
 
-        let report = Self::build_problem_report(msg, endpoint_url, packer.mediator_did(), now);
+        let report = match refused {
+            Some(status) => {
+                Self::build_refusal_report(msg, endpoint_url, status, packer.mediator_did(), now)
+            }
+            None => Self::build_problem_report(msg, endpoint_url, packer.mediator_did(), now),
+        };
 
         let packed = match packer.pack(&report, &msg.from_did).await {
             Ok(packed) => packed,
@@ -925,7 +1035,7 @@ impl ForwardingProcessor {
         endpoint_url: &str,
         msg: &ForwardQueueEntry,
         use_websocket: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), RelayFailure> {
         // TSP forwards go over REST: they carry raw qb2 binary which the remote
         // mediator's ingress sniffs by its magic byte, whereas the WebSocket relay
         // path is DIDComm-text oriented.
@@ -939,7 +1049,10 @@ impl ForwardingProcessor {
                 Err(ws_err) => {
                     // WebSocket failed — fall back to REST for this message,
                     // and stop attempting it for this endpoint for a while
-                    // (see `EndpointState::ws_suppressed_until`).
+                    // (see `EndpointState::ws_suppressed_until`). A relay-ack
+                    // refusal carries a mediator error code, not an HTTP
+                    // status, so the REST answer is what classifies it as
+                    // final or retryable.
                     let until = Instant::now() + WS_SUPPRESSION_WINDOW;
                     let first = self.set_ws_suppression(endpoint_url, Some(until)).await;
                     if first {
@@ -985,7 +1098,7 @@ impl ForwardingProcessor {
         &self,
         endpoint_url: &str,
         msg: &ForwardQueueEntry,
-    ) -> Result<(), String> {
+    ) -> Result<(), RelayFailure> {
         let inbound_url = if endpoint_url.ends_with('/') {
             format!("{endpoint_url}inbound")
         } else {
@@ -997,7 +1110,9 @@ impl ForwardingProcessor {
         // request. This is the check that sees IP literals (metadata/RFC1918/
         // loopback/link-local), which the client's DNS resolver never sees.
         self.http_pool.policy.vet(&inbound_url).map_err(|e| {
-            format!("Refusing to forward to {inbound_url}: blocked by egress policy: {e}")
+            RelayFailure::Retryable(format!(
+                "Refusing to forward to {inbound_url}: blocked by egress policy: {e}"
+            ))
         })?;
 
         // A TSP forward is queued as base64url(qb2) text; send the decoded raw qb2
@@ -1019,15 +1134,18 @@ impl ForwardingProcessor {
             .body(body)
             .send()
             .await
-            .map_err(|e| format!("Connection error to {inbound_url}: {e}"))?;
+            .map_err(|e| {
+                RelayFailure::Retryable(format!("Connection error to {inbound_url}: {e}"))
+            })?;
 
         let status = response.status();
         if status.is_success() {
             Ok(())
         } else {
             let body = response.text().await.unwrap_or_default();
-            Err(format!(
-                "Remote mediator {inbound_url} returned HTTP {status}: {body}"
+            Err(RelayFailure::from_status(
+                status.as_u16(),
+                format!("Remote mediator {inbound_url} returned HTTP {status}: {body}"),
             ))
         }
     }
@@ -1425,6 +1543,51 @@ mod tests {
             report["id"].as_str().is_some_and(|id| !id.is_empty()),
             "every report needs its own message id"
         );
+    }
+
+    /// A peer's refusal is final; a timeout, rate limit or server error is not.
+    #[test]
+    fn a_client_error_is_a_refusal_and_the_rest_are_retried() {
+        for status in [400, 401, 403, 404, 413, 422] {
+            assert!(
+                matches!(
+                    RelayFailure::from_status(status, String::new()),
+                    RelayFailure::Refused { status: s, .. } if s == status
+                ),
+                "{status} is final"
+            );
+        }
+        for status in [408, 425, 429, 500, 502, 503, 504, 302] {
+            assert!(
+                matches!(
+                    RelayFailure::from_status(status, String::new()),
+                    RelayFailure::Retryable(_)
+                ),
+                "{status} is retried"
+            );
+        }
+    }
+
+    /// The refusal report has its own code, and carries the peer's HTTP
+    /// status rather than a retry count it never accumulated.
+    #[test]
+    fn refusal_report_carries_the_refused_code_and_status() {
+        let entry = abandoned_entry();
+        let report = ForwardingProcessor::build_refusal_report(
+            &entry,
+            "https://remote.example.com",
+            403,
+            "did:example:mediator",
+            1_000,
+        );
+
+        assert_eq!(report["body"]["code"], "e.p.me.res.forwarding.refused");
+        assert_eq!(
+            report["body"]["args"],
+            serde_json::json!(["did:example:recipient", "403", "https://remote.example.com"])
+        );
+        assert_eq!(report["from"], "did:example:mediator");
+        assert_eq!(report["to"], serde_json::json!(["did:example:sender"]));
     }
 
     // --- decode_tsp_forward tests ---

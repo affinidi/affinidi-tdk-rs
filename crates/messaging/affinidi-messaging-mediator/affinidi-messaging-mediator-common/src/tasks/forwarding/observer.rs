@@ -35,6 +35,10 @@ pub enum ForwardOutcome {
     /// sender is then sent a problem report, when the processor can pack one),
     /// or it could not be queued again for its retry.
     Abandoned { attempts: u32 },
+    /// The peer answered and refused it (`status` is its HTTP status, a 4xx
+    /// other than 408/425/429). It was dropped without a retry, and the
+    /// sender is sent a problem report.
+    Refused { status: u16 },
     /// The entry outlived its expiry before it could be relayed, and was
     /// dropped.
     Expired,
