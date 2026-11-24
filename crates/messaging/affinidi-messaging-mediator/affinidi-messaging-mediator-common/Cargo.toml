@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-common"
-version = "0.17.1"
+version = "0.17.8"
 description = "Shared types for the Affinidi Messaging Mediator (errors, database handler, config)"
 edition.workspace = true
 authors.workspace = true
@@ -242,7 +242,7 @@ rustls = { version = "0.23", default-features = false, features = [
 ], optional = true }
 
 # ── Async Runtime (tokio::time::sleep in retry loops, etc.) ─────────
-tokio = { workspace = true, features = ["time"], optional = true }
+tokio = { workspace = true, features = ["time", "net"], optional = true }
 
 # ── Utilities used across server modules ────────────────────────────
 ahash = { version = "0.8", features = ["serde"], optional = true }

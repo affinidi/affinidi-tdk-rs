@@ -779,6 +779,7 @@ async fn forward_tsp_remote(
         expires_at: state.clock.unix_secs() + state.limits().message_expiry_seconds,
         retry_count: 0,
         hop_count: 1,
+        not_before_ms: 0,
     };
 
     state

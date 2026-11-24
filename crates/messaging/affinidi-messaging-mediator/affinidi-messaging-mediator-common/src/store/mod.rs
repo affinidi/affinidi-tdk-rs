@@ -263,10 +263,10 @@ pub mod ops;
 pub mod redis;
 
 pub use types::{
-    DeletionAuthority, DeliveryDecision, DeliveryState, ExpiryReport, ForwardQueueEntry,
-    InboxStatusReply, MessageMetaData, MetadataStats, OutboxReceipt, PubSubRecord, RemovalReason,
-    SentMessageState, Session, SessionClaims, SessionState, SessionSweepReport, StatCounter,
-    StoreHealth, StreamingClientState,
+    DeletionAuthority, DeliveryDecision, DeliveryState, ExpiryReport, ForwardQueueClaimPage,
+    ForwardQueueEntry, InboxStatusReply, MessageMetaData, MetadataStats, OutboxReceipt,
+    PubSubRecord, RemovalReason, SentMessageState, Session, SessionClaims, SessionState,
+    SessionSweepReport, StatCounter, StoreHealth, StreamingClientState,
 };
 
 /// How long a sender's [`OutboxReceipt`] is kept after its message leaves the
@@ -1438,16 +1438,68 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     /// of acked-but-not-yet-deleted entries.
     async fn forward_queue_delete(&self, stream_ids: &[&str]) -> Result<(), MediatorError>;
 
+    /// [`Self::forward_queue_ack`] then [`Self::forward_queue_delete`], for
+    /// a consumer that is finished with the entries. A backend that can
+    /// commit both as one write should: a crash between a separate ack and
+    /// delete leaves an entry that no consumer holds and the group has read
+    /// past, so it is never read, claimed or deleted again. The default runs
+    /// the two in turn.
+    async fn forward_queue_ack_and_delete(
+        &self,
+        group_name: &str,
+        stream_ids: &[&str],
+    ) -> Result<(), MediatorError> {
+        self.forward_queue_ack(group_name, stream_ids).await?;
+        self.forward_queue_delete(stream_ids).await
+    }
+
     /// Reclaim entries idle for longer than `min_idle` (typical: a
     /// crashed/timed-out consumer). The reclaiming consumer becomes the
     /// new owner of the returned entries.
+    ///
+    /// One call examines a bounded stretch of the pending list, starting at
+    /// `cursor` (`"0-0"` for the start), and returns up to `count` entries
+    /// with the cursor to continue from. A scan of the whole list follows
+    /// `next_cursor` until it is `None`; stopping at the first short or empty
+    /// page would never reach idle entries behind a long run of busy ones.
     async fn forward_queue_autoclaim(
         &self,
         group_name: &str,
         consumer_name: &str,
         min_idle: Duration,
         count: usize,
-    ) -> Result<Vec<ForwardQueueEntry>, MediatorError>;
+        cursor: &str,
+    ) -> Result<ForwardQueueClaimPage, MediatorError>;
+
+    /// Finish with one entry, but only if `consumer_name` still has it
+    /// claimed: ack and delete it, and with `requeue`, enqueue that entry in
+    /// its place, all as one write. Returns `false`, changing nothing, when
+    /// the entry is claimed by another consumer or no longer pending — the
+    /// other consumer now owns its fate, and acking or re-queuing it here
+    /// would delete its claim or duplicate its delivery.
+    async fn forward_queue_finish(
+        &self,
+        group_name: &str,
+        consumer_name: &str,
+        stream_id: &str,
+        requeue: Option<&ForwardQueueEntry>,
+    ) -> Result<bool, MediatorError>;
+
+    /// Reset the idle time of each of `stream_ids` that `consumer_name` still
+    /// has claimed, so another consumer's
+    /// [`forward_queue_autoclaim`](Self::forward_queue_autoclaim) does not take
+    /// an entry this one is still working on. An entry claimed by another
+    /// consumer is left alone: the refresh never moves a claim.
+    ///
+    /// Returns the ids `consumer_name` no longer holds — claimed by another
+    /// consumer, acked, or gone from the queue. The caller must not deliver
+    /// those.
+    async fn forward_queue_refresh_claims(
+        &self,
+        group_name: &str,
+        consumer_name: &str,
+        stream_ids: &[&str],
+    ) -> Result<Vec<String>, MediatorError>;
 
     // ─── Live streaming (WebSocket pub/sub) ─────────────────────────────────
 

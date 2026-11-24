@@ -31,8 +31,8 @@ use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     store::{
         DeletionAuthority, DeliveryDecision, DeliveryMarkReport, DeliveryState, ExpiryReport,
-        ForwardQueueEntry, InboxStatusReply, MediatorStore, MessageMetaData, MetadataStats,
-        OUTBOX_RECEIPT_TTL, OnExpired, OutboxReceipt, POISON_ATTEMPTS, PubSubRecord,
+        ForwardQueueClaimPage, ForwardQueueEntry, InboxStatusReply, MediatorStore, MessageMetaData,
+        MetadataStats, OUTBOX_RECEIPT_TTL, OnExpired, OutboxReceipt, POISON_ATTEMPTS, PubSubRecord,
         SentMessageState, Session, SessionSweepReport, StatCounter, StoreHealth,
         StreamingClientState, TrustTaskClaim, ops,
     },
@@ -68,6 +68,10 @@ const PUBSUB_BROADCAST_CAPACITY: usize = 32;
 // ─── Internal types ─────────────────────────────────────────────────────────
 
 type StreamId = (u64, u64); // (timestamp_ms, sequence)
+
+/// Pending entries one autoclaim call examines per entry it may return, as
+/// on Redis.
+const AUTOCLAIM_SCAN_FACTOR: usize = 10;
 
 fn format_stream_id(id: StreamId) -> String {
     format!("{}-{}", id.0, id.1)
@@ -1742,24 +1746,36 @@ impl MediatorStore for MemoryStore {
         consumer_name: &str,
         min_idle: Duration,
         count: usize,
-    ) -> Result<Vec<ForwardQueueEntry>, MediatorError> {
+        cursor: &str,
+    ) -> Result<ForwardQueueClaimPage, MediatorError> {
         let now = Instant::now();
+        let start = parse_stream_id(cursor).unwrap_or((0, 0));
         let mut state = self.state.lock().await;
-        // Snapshot stale entries first to avoid borrow conflicts.
-        let stale_ids: Vec<StreamId> = state
-            .forward_groups
-            .get(group_name)
-            .map(|g| {
-                g.pending
-                    .iter()
-                    .filter(|(_, claim)| now.duration_since(claim.claimed_at) >= min_idle)
-                    .map(|(id, _)| *id)
-                    .take(count)
-                    .collect()
-            })
-            .unwrap_or_default();
-        let mut out = Vec::with_capacity(stale_ids.len());
+        // Examine a bounded stretch of the pending list per call, as Redis
+        // does, and say where to continue.
+        let scan_limit = count.max(1).saturating_mul(AUTOCLAIM_SCAN_FACTOR);
+        let mut stale_ids: Vec<StreamId> = Vec::new();
+        let mut next_cursor = None;
+        if let Some(group) = state.forward_groups.get(group_name) {
+            for (examined, (id, claim)) in group.pending.range(start..).enumerate() {
+                if examined >= scan_limit || stale_ids.len() >= count {
+                    next_cursor = Some(format_stream_id(*id));
+                    break;
+                }
+                if now.duration_since(claim.claimed_at) >= min_idle {
+                    stale_ids.push(*id);
+                }
+            }
+        }
+        let mut entries = Vec::with_capacity(stale_ids.len());
         for id in stale_ids {
+            if !state.forward_queue.contains_key(&id) {
+                // Gone from the queue: drop the claim, as XAUTOCLAIM does.
+                if let Some(group) = state.forward_groups.get_mut(group_name) {
+                    group.pending.remove(&id);
+                }
+                continue;
+            }
             if let Some(group) = state.forward_groups.get_mut(group_name)
                 && let Some(claim) = group.pending.get_mut(&id)
             {
@@ -1768,10 +1784,71 @@ impl MediatorStore for MemoryStore {
                 claim.delivery_count += 1;
             }
             if let Some(entry) = state.forward_queue.get(&id) {
-                out.push(entry.clone());
+                entries.push(entry.clone());
             }
         }
-        Ok(out)
+        Ok(ForwardQueueClaimPage {
+            entries,
+            next_cursor,
+        })
+    }
+
+    async fn forward_queue_finish(
+        &self,
+        group_name: &str,
+        consumer_name: &str,
+        stream_id: &str,
+        requeue: Option<&ForwardQueueEntry>,
+    ) -> Result<bool, MediatorError> {
+        let Some(id) = parse_stream_id(stream_id) else {
+            return Ok(false);
+        };
+        let mut state = self.state.lock().await;
+        let held = state
+            .forward_groups
+            .get(group_name)
+            .and_then(|group| group.pending.get(&id))
+            .is_some_and(|claim| claim.consumer == consumer_name);
+        if !held {
+            return Ok(false);
+        }
+        if let Some(entry) = requeue {
+            let new_id = state.alloc_stream_id();
+            let mut entry = entry.clone();
+            entry.stream_id = format_stream_id(new_id);
+            state.forward_queue.insert(new_id, entry);
+        }
+        if let Some(group) = state.forward_groups.get_mut(group_name) {
+            group.pending.remove(&id);
+        }
+        state.forward_queue.remove(&id);
+        drop(state);
+        if requeue.is_some() {
+            self.forward_notify.notify_waiters();
+        }
+        Ok(true)
+    }
+
+    async fn forward_queue_refresh_claims(
+        &self,
+        group_name: &str,
+        consumer_name: &str,
+        stream_ids: &[&str],
+    ) -> Result<Vec<String>, MediatorError> {
+        let now = Instant::now();
+        let mut state = self.state.lock().await;
+        let group = state.forward_groups.get_mut(group_name);
+        let mut lost = Vec::new();
+        let Some(group) = group else {
+            return Ok(stream_ids.iter().map(|id| id.to_string()).collect());
+        };
+        for id in stream_ids {
+            match parse_stream_id(id).and_then(|parsed| group.pending.get_mut(&parsed)) {
+                Some(claim) if claim.consumer == consumer_name => claim.claimed_at = now,
+                _ => lost.push(id.to_string()),
+            }
+        }
+        Ok(lost)
     }
 
     // ─── Live streaming (WebSocket pub/sub) ─────────────────────────────────
@@ -2531,6 +2608,7 @@ mod tests {
             expires_at: 0,
             retry_count: 0,
             hop_count: 0,
+            not_before_ms: 0,
         };
         let id = store
             .forward_queue_enqueue(&entry, 0)

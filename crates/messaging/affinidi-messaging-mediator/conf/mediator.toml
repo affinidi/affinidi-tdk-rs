@@ -661,8 +661,49 @@ max_retries = "5"
 initial_backoff_ms = "1000"
 
 ### Env: PROCESSOR_FORWARDING_MAX_BACKOFF_MS
-### Maximum backoff delay in milliseconds
+### Maximum backoff delay in milliseconds. After a failed attempt the endpoint
+### backs off (initial_backoff_ms doubling per consecutive failure, capped
+### here); the message is queued again with a not-before at the end of the
+### backoff, which every processor sharing the queue honours.
 max_backoff_ms = "60000"
+
+### Env: PROCESSOR_FORWARDING_MAX_CONCURRENT_ENDPOINTS
+### How many next-hop endpoints are delivered to at once. Messages for one
+### endpoint go out one at a time, usually in queue order (a retried message
+### can go after later ones); different endpoints proceed in parallel up to
+### this limit, so a slow endpoint holds one slot instead of the whole
+### processor. A processor holds at most batch_size x this many claimed
+### entries, and one endpoint at most half of that; an endpoint's entries
+### beyond its share are picked up again by the reclaim sweep (see
+### reclaim_idle_seconds). Must be at least 1.
+### Scale: raise for relay/hub mediators forwarding to many peers.
+max_concurrent_endpoints = "32"
+
+### Env: PROCESSOR_FORWARDING_DELIVERY_TIMEOUT_SECONDS
+### Seconds (not milliseconds) one delivery attempt may take — connect, send
+### and the peer's answer, including a WebSocket attempt and its REST
+### fallback — before it counts as a failed attempt. Keep it above 60: a
+### WebSocket attempt (connect, send and the peer's ack) takes at most 30 s
+### (and at most a third of this value) before falling back to REST, which has
+### 30 s of its own. Must be at least 1.
+delivery_timeout_seconds = "90"
+
+### Env: PROCESSOR_FORWARDING_RECLAIM_IDLE_SECONDS
+### Seconds a claimed forwarding-queue entry may sit untouched before any
+### processor in the consumer group takes it over. This is how entries held by
+### a processor that stopped or restarted get delivered by another (or by it,
+### once back). A running processor refreshes its claims, including those of
+### sends in progress, four times in this window, so it never loses one it is
+### still working on; if it cannot confirm them for half the window it stops
+### sending until it can. The same sweep picks up a requested forward delay
+### longer than max_backoff_ms when due, and an endpoint's entries beyond what
+### it may hold. Keep it at least twice delivery_timeout_seconds: a send
+### already under way when claims stop being confirmed runs on for up to the
+### delivery timeout, and a shorter window lets another processor take the
+### entry over and send it too (the processor logs a warning at start).
+### Lower values recover a stopped processor's entries sooner.
+### Must be at least 1.
+reclaim_idle_seconds = "180"
 
 ### Env: PROCESSOR_FORWARDING_CONSUMER_GROUP
 ### Consumer group name for the forwarding queue. On Redis this is the

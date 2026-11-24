@@ -1,5 +1,102 @@
 # Affinidi Messaging Mediator Common
 
+## 0.17.8 — a refusal by the peer mediator is final
+
+Backport of affinidi-messaging-mediator PR #31 (processor part) to the 0.17 line.
+0.17.2 to 0.17.7 were published from another line, so this line continues at
+0.17.8.
+
+When the peer mediator refuses a relayed message with a 4xx other than 408, 425
+or 429, the forwarding processor drops it at once instead of retrying it until
+`max_retries`. Before, a refused message could still be delivered if the
+recipient changed their policy during the retries. A refusal does not count
+towards the endpoint's backoff. The sender gets a problem report with the new
+code `e.p.me.res.forwarding.refused` (args `[destination, http_status,
+endpoint]`). `ForwardOutcome` gains a `Refused { status }` variant (the enum is
+`#[non_exhaustive]`). Timeouts, rate limits, 5xx and connection errors are
+retried as before.
+
+### Forwarding delivers to endpoints concurrently, with per-endpoint backoff
+
+Backport of affinidi-messaging-mediator #209 (commit `1d24be2a`), so one slow or
+failing next hop no longer stalls relaying to every other one.
+
+- The forwarding processor delivers to up to `max_concurrent_endpoints`
+  next-hop endpoints at once (default 32). Messages for one endpoint still go
+  out one at a time, usually in queue order; a retried message can now go
+  after later ones. Before, endpoints were served one after another, so a
+  slow peer delayed every other peer's forwards.
+- Each delivery attempt is bounded by `delivery_timeout_seconds` (default 90),
+  covering a WebSocket attempt and its REST fallback together.
+- Backoff applies to the failing endpoint only, as a not-before time. The
+  processor used to pause all forwarding for up to `max_backoff_ms` after a
+  failed batch. Now the failed message is queued again with a not-before at
+  the end of that endpoint's backoff, and the endpoint's other messages are
+  held until the same time instead of being sent into the failure. Those were
+  not sent, so they keep their retry budget. Every processor sharing the queue
+  honours the not-before.
+- A processor holds at most `batch_size` × `max_concurrent_endpoints` claimed
+  entries, one endpoint at most half of them, and an endpoint that is backing
+  off at most `batch_size`. The rest stay claimed in the queue and are picked
+  up again by the reclaim sweep.
+- Claimed entries are no longer stranded when a processor stops. A processor
+  refreshes the claims on what it holds, and any processor takes over an entry
+  whose claim has been idle for `reclaim_idle_seconds` (default 180). The sweep
+  follows its cursor over the whole pending list. A processor that cannot
+  confirm its claims for half of `reclaim_idle_seconds` stops sending, reading
+  and reclaiming until it can; a send already under way completes, so its
+  message can arrive twice. Keep `reclaim_idle_seconds` at least twice
+  `delivery_timeout_seconds`; the processor warns at start when it is not.
+- A processor only finishes an entry it still holds: acking a delivered,
+  refused, expired or abandoned entry, and replacing a failed one with its
+  retry, are each one owner-checked write. A refused entry is acked and
+  deleted this way, as one write, before its problem report is sent.
+- A next hop whose URL does not parse, or that the egress policy does not
+  admit, is final: dropped on the first attempt with the new code
+  `e.p.me.res.forwarding.endpoint-not-permitted` (new
+  `ForwardOutcome::NotPermitted`).
+- A forwarding-queue entry that cannot be parsed is dropped by the consumer
+  that claims it, instead of being reclaimed on every sweep.
+- `ForwardingConfig` gains `max_concurrent_endpoints`,
+  `delivery_timeout_seconds` and `reclaim_idle_seconds`.
+
+**Breaking for anyone implementing `MediatorStore`:** `ForwardQueueEntry` has a
+new `not_before_ms` field (unix ms, `0` = none; `#[serde(default)]`, stored as
+`NOT_BEFORE_MS` on Redis), so struct literals need it. `MediatorStore` has new
+required methods `forward_queue_finish` (owner-checked ack + delete, optionally
+enqueuing the retry in the same write) and `forward_queue_refresh_claims`, and
+`forward_queue_autoclaim` now takes a `cursor` and returns a
+`ForwardQueueClaimPage` (new) with the cursor to continue from. It also gains
+the provided method `forward_queue_ack_and_delete` (from upstream #11), which
+has a default. The Redis, Fjall and in-memory stores implement all of them.
+
+### WebSocket relay to a next hop is time-bounded and dials the checked address
+
+Backport of affinidi-messaging-mediator #216 (commit `152aa8a3`).
+
+- Every step of a WebSocket relay attempt now has a limit: name resolution,
+  TCP connect, TLS and the upgrade together get 10 s; the whole attempt
+  (pooled socket, a reconnect if that failed, the send and the peer's
+  `relay-ack`) gets 30 s, or a third of `delivery_timeout_seconds` if that is
+  less, so the REST fallback always has time left. The close handshake on a
+  discarded socket runs on its own task, bounded at 5 s. A next hop that
+  accepts the connection and never completes the handshake used to hold the
+  attempt with no REST fallback; it now falls back to REST after 10 s.
+- When a next-hop name resolves to several addresses, each gets a share of the
+  connect time (at least 2 s).
+- The processor logs a warning at startup when `delivery_timeout_seconds` is
+  below 60.
+- The socket is dialed at an address the egress policy admitted: the name is
+  resolved once, through the same guarded resolver the REST client uses, and
+  the connection goes to one of those addresses; TLS SNI, certificate
+  validation and the `Host` header still use the name. Before, the name was
+  checked and then resolved again by the WebSocket client.
+- A pooled relay socket is taken out of the pool for the exchange and put back
+  after it, so the pool lock is never held during network I/O.
+- **Behaviour change:** the 30 s wait for the peer's `relay-ack` now starts
+  when the attempt starts, not after the connection is open. Discarded relay
+  sockets are logged at `info`.
+
 ## Unreleased (0.17.1) — one shape for a refused delete
 
 `store::ops` gains `delete_not_found`, `delete_permission_denied` and

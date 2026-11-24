@@ -130,11 +130,16 @@ the forward handler in tests, never for a federated deployment.
 | Peer allowlist usable? | no | yes |
 | Both sides must agree? | — | **yes**, both mediators must run `rewrap` |
 
-In rewrap mode A calls `rewrap_for_relay`, and B peels the layer in
+In rewrap mode A calls `rewrap_for_relay`, which encrypts the layer to the peer
+mediator the next hop's DID document names (`RemoteHop::relay_to`), not to the
+recipient, because B only peels a layer addressed to itself. B peels it in
 `peel_relay_rewrap_layers` (`src/messages/inbound.rs`) before processing:
 unpack, confirm `next == B`, check the peer allowlist, decode the attachment,
 repeat. The peel loop is bounded by `max_hops`; exceeding it is error 94,
-`protocol.forwarding.loop_detected`.
+`protocol.forwarding.loop_detected`. Because the layer is peeled before any
+recipient check, Bob's access list on B is checked against the sender the
+inner envelope names (Alice), not against A. B cannot verify that name on a blind
+hop: it is what the envelope says, not an authenticated identity.
 
 `hop_count` is carried across the re-wrap rather than reset, so loop detection
 survives the mode.
@@ -196,7 +201,7 @@ federation both roles apply to both mediators.
 | `processors.forwarding.max_hops` | applies | applies | default 10; `PROCESSOR_FORWARDING_MAX_HOPS` |
 | `processors.forwarding.blocked_forwarding_dids` | JSON array string | — | own DID + every service URI in its document are added automatically |
 | `security.enable_inter_mediator_relay` | — | `true` | admits the anonymous `/inbound` hop |
-| `security.global_acl_default` | must grant `RECEIVE_FORWARDED` (§6) | must grant `SEND_FORWARDED` (§6) | a relay deployment typically runs `ALLOW_ALL`; see [`acls.md` §7](./acls.md) |
+| `security.global_acl_default` | grants Alice `SEND_FORWARDED` if she has no account of her own (§6) | must grant `SEND_FORWARDED` (§6) | a relay deployment typically runs `ALLOW_ALL`; see [`acls.md` §7](./acls.md) |
 | `security.local_direct_delivery_allowed` | — | `true` for single-forward relays (§1b) | not needed for the double forward |
 | `server.local_endpoints` | required behind a hostname/LB | required behind a hostname/LB | otherwise the mediator relays to itself; `LOCAL_ENDPOINTS`, comma-separated |
 | `processors.forwarding.ws_threshold_msgs_per_10s` | rate at which the relay socket engages | — | default 1; see §7 for what the rate actually measures |
@@ -214,12 +219,33 @@ any of them wrong produces a `403` in a place that looks unrelated.
 | Account | Capability | Enforced by | Error |
 |---|---|---|---|
 | Alice | `SEND_FORWARDED` | `resolve_forward_sender` | 60 `authorization.send_forwarded` |
-| the next hop — **B's DID** for a double forward, **Bob's DID** for a single forward | `RECEIVE_FORWARDED` | forward gate | 58 `authorization.receive_forwarded` |
+| the next hop, **only when it is local to A** | `RECEIVE_FORWARDED`, its access list, its receive-queue limit | `check_local_next_hop` | 73 `delivery.refused` (62 `limits.queue.recipient` for the queue limit) |
 
-The next-hop account is auto-created on first contact with A's
-`global_acl_default` (`resolve_next_account`). **This is why a relay mediator
-needs a default that grants `RECEIVE_FORWARDED`**: the peer mediator's DID has
-to hold an account on A, and nothing else creates it.
+A remote next hop — **B's DID** for a double forward, **Bob's DID** for a
+single forward — gets no recipient check on A, and A does not register an
+account for it. Its inbox, and so its real policy, is on B; anything A held
+would be invented from A's `global_acl_default`, and under a closed default
+(`MODE_EXPLICIT_ALLOW`) it refused every cross-mediator forward. Local versus
+remote is decided first (§2), after A's own cheap checks (sender, queue limits,
+attachments, `delay_milli`, `FORWARD_Q` capacity), so that DID resolution is
+not spent on a forward A would reject anyway.
+
+The one exception is a remote next hop that does hold an account on A with a
+non-empty access list. That list is something an owner or operator set, and A
+honours it (`check_remote_next_hop`). It covers the misconfiguration where a
+local user's document points at a hostname missing from `server.local_endpoints`
+(§2), which would otherwise class the user as remote and skip their list on A.
+An account with an empty list (the placeholder earlier versions registered) is
+ignored.
+
+When B refuses the relay with a 4xx other than 408, 425 or 429, A does not
+retry it. It drops the entry, reports `forwarded` with outcome
+`e.p.me.res.forwarding.refused` to the monitor, and sends the sender a problem
+report with the same code and args `[destination, http_status, endpoint]`.
+Otherwise a refused message could be delivered later, if the recipient's
+policy changed while A was still retrying. Timeouts, rate limits, 5xx and
+connection errors are still retried until `max_retries`, then abandoned with
+`e.p.me.res.forwarding.abandoned`.
 
 **On B (recipient's mediator):**
 
@@ -227,7 +253,7 @@ to hold an account on A, and nothing else creates it.
 |---|---|---|---|
 | Alice (no account on B) | `SEND_FORWARDED` | `resolve_forward_sender` | 60 `authorization.send_forwarded` |
 | Bob | `RECEIVE_FORWARDED` (double forward) or `RECEIVE_MESSAGES` (single forward) | forward gate / direct delivery | 58 `authorization.receive_forwarded` / 74 `authorization.receive` |
-| Bob's access list | must admit Alice | `check_access_list` | 73 `authorization.access_list.denied` |
+| Bob's access list | must admit the sender the envelope names (Alice) | `check_access_list` | 73 `authorization.access_list.denied` |
 | — (mediator policy, single forward only) | `local_direct_delivery_allowed` | direct-delivery gate | 71 `direct_delivery.denied` |
 | Bob, if the inner envelope is anon-packed | `ANON_RECEIVE` | `deliver_forward` | 69 `authorization.receive_anon` |
 
@@ -273,8 +299,39 @@ Once A classifies a next hop as remote, the forward is enqueued on `FORWARD_Q`
 - **REST shape.** `POST {endpoint}/inbound`, `Content-Type:
   application/didcomm-encrypted+json` for DIDComm, `application/tsp` (raw qb2)
   for TSP. TSP always goes over REST regardless of rate.
+- **Concurrency.** Up to `max_concurrent_endpoints` (32) next-hop endpoints
+  are delivered to at once. Messages for one endpoint go out one at a time,
+  usually in queue order; a retried message can go after later ones. Each
+  attempt is bounded by `delivery_timeout_seconds` (90). A processor holds at
+  most `batch_size` × `max_concurrent_endpoints` claimed entries, one
+  endpoint at most half of them, and an endpoint backing off at most
+  `batch_size`, so backlogs for slow or failing peers do not stop the others'
+  forwards being read.
 - **Retry.** `max_retries` (5) with exponential backoff from
-  `initial_backoff_ms` to `max_backoff_ms`, in batches of `batch_size`.
+  `initial_backoff_ms` to `max_backoff_ms`, per endpoint. A failed message is
+  queued again with a not-before at the end of the endpoint's backoff, which
+  every processor sharing the queue honours. The rest of that endpoint's
+  messages are held until the same time rather than sent into the failure;
+  they were not sent, so they keep their retry budget.
+- **Claims and recovery.** A processor refreshes the claims on everything it
+  holds four times per `reclaim_idle_seconds` (180; keep it at least twice
+  `delivery_timeout_seconds`, which the processor warns about at start). An entry whose claim goes
+  idle that long — its processor stopped, or it was left for later (a long
+  requested delay, an endpoint's share exceeded) — is taken over by the next
+  reclaim sweep of any processor in the group; the sweep follows its cursor
+  over the whole pending list. A refresh never moves a claim another
+  processor has taken, and every ack — and every retry, which replaces its
+  entry in the same write — is made only if the entry is still held, so each
+  entry is settled by whichever processor holds it. Delivered entries are
+  acked one at a time, as soon as the peer accepts them. A processor that
+  cannot confirm its claims for half of `reclaim_idle_seconds` stops sending,
+  reading and reclaiming until it can; a send already under way then
+  completes, so that one message can arrive twice (at-least-once).
+- **Refusal.** A peer's 4xx (other than 408/425/429) is final
+  (`e.p.me.res.forwarding.refused`), as is a next hop whose URL does not parse
+  or that the egress policy does not admit
+  (`e.p.me.res.forwarding.endpoint-not-permitted`): no retry, and the sender
+  gets a problem report.
 - **Abandonment.** On exhaustion the entry is ACKed and dropped, logged as
   `FORWARD_ABANDONED`, and — when `report_errors` is set — a problem report is
   packed by the mediator and stored in the *sender's* inbox
@@ -388,11 +445,12 @@ mediator **DIDs**, not URLs).
 | Message loops back to A | A's public hostname doesn't match its bind address | set `server.local_endpoints` to every public URL in A's DID document |
 | B returns `401` on `/inbound` | B isn't configured as a relay | `security.enable_inter_mediator_relay = "true"` on B |
 | Error 60 `authorization.send_forwarded` at B | B's `global_acl_default` doesn't grant `SEND_FORWARDED`, so the auto-registered sender got nothing | widen B's default (§6) |
-| Error 58 `authorization.receive_forwarded` at A | the peer mediator's auto-created account on A lacks the bit | A's `global_acl_default` must grant `RECEIVE_FORWARDED` |
+| Error 73 `delivery.refused` at A | the next hop is local to A, but its account lacks the bit (a remote next hop is not checked on A) | grant it on that account, or check that the next hop's DID document URL is in A's `server.local_endpoints` |
 | Error 60 `authorization.relay.untrusted_peer` | B's `relay_trusted_mediators` doesn't name A | add A's DID, or empty the list; confirm both sides run `rewrap` |
 | Error 71 `direct_delivery.denied` at B | a single-forward relay landed as a direct delivery | `local_direct_delivery_allowed = "true"` on B, or send the double forward |
 | Error 94 `loop_detected` | genuine loop, or `max_hops` too low for the topology | inspect the route before raising `max_hops` |
 | `FORWARD_ABANDONED` in A's logs | B unreachable through `max_retries` | check B's endpoint and TLS; the sender receives a problem report |
+| `FORWARD_REFUSED` in A's logs; sender gets `e.p.me.res.forwarding.refused` | B refused the relay with a 4xx, typically a recipient-side check on Bob | B's log names the reason; the message is not retried |
 | TSP messages never leave A | B advertises no `TSPTransport` service | add it (§8); `did:peer`/`did:webvh` need it at DID-generation time |
 | `peer … did not negotiate the \`relay-ack\` subprotocol` in A's logs | B predates the relay socket, or isn't relay-enabled | expected against an older mediator — delivery continues over REST; if B should accept it, check `enable_inter_mediator_relay` on B |
 | `peer refused the relayed message` in A's logs | B nacked the frame | the reason and mediator error code are in the log line; look it up in §6 or `ERRORS.md` — the sender gets a problem report once retries are exhausted |

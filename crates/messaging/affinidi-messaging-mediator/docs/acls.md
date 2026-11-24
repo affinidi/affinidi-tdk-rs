@@ -247,9 +247,14 @@ to admit or refuse.
 
 ```
 ├─ sender has SEND_FORWARDED?                   else 403
-├─ next hop has RECEIVE_FORWARDED?              else 403
-├─ anonymous envelope → next hop has ANON_RECEIVE? else 403
-└─ access list check
+├─ next hop remote? → no recipient check here: its own mediator applies them.
+│    (Exception: an account it already holds here with a non-empty access list
+│    is still applied, else 403.)
+├─ next hop local:
+│    ├─ has RECEIVE_FORWARDED?                  else 403
+│    ├─ recipient's access list admits the sender?  else 403
+│    ├─ receive-queue limit?                     else 503
+│    └─ anonymous envelope → has ANON_RECEIVE?  else 403
 ```
 
 ### Inter-mediator relay admission

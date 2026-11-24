@@ -18,6 +18,13 @@ max_retries = 5
 initial_backoff_ms = 1000
 # Maximum backoff delay (ms)
 max_backoff_ms = 60000
+# Next-hop endpoints delivered to at once (one endpoint's messages go one at a time)
+max_concurrent_endpoints = 32
+# Seconds (not ms) one delivery attempt may take, WebSocket + REST fallback included
+delivery_timeout_seconds = 90
+# Seconds a claimed entry may sit untouched before any processor takes it over
+# (keep at least twice delivery_timeout_seconds)
+reclaim_idle_seconds = 180
 # Redis consumer group name (all processors in same group coordinate)
 consumer_group = "forwarding"
 # Send problem reports to senders on forwarding failure

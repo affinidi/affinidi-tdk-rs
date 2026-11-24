@@ -61,6 +61,12 @@ pub struct ForwardingConfigRaw {
     pub initial_backoff_ms: String,
     #[serde(default = "default_60000")]
     pub max_backoff_ms: String,
+    #[serde(default = "default_32")]
+    pub max_concurrent_endpoints: String,
+    #[serde(default = "default_90")]
+    pub delivery_timeout_seconds: String,
+    #[serde(default = "default_180")]
+    pub reclaim_idle_seconds: String,
     #[serde(default = "default_forwarding_group")]
     pub consumer_group: String,
     #[serde(default = "default_false")]
@@ -92,6 +98,15 @@ fn default_5() -> String {
 }
 fn default_1000() -> String {
     "1000".to_string()
+}
+fn default_180() -> String {
+    "180".to_string()
+}
+fn default_90() -> String {
+    "90".to_string()
+}
+fn default_32() -> String {
+    "32".to_string()
 }
 fn default_60000() -> String {
     "60000".to_string()
