@@ -44,13 +44,65 @@ the monitor reports `forwarded` with that outcome. Timeouts, rate limits, 5xx an
 connection errors are still retried, then abandoned.
 
 Relay is now reachable by every account that holds `SEND_FORWARDED`, which the default
-global ACL of a managed deployment grants to every account. A relay to an endpoint that
-never answers still occupies the forwarding processor until `max_retries`; upstream's
-per-endpoint scheduling and WebSocket bounds are not part of this release.
+global ACL of a managed deployment grants to every account. To keep one bad next-hop
+endpoint from stalling all relaying, this release also carries upstream's per-endpoint
+concurrent delivery with backoff (#209) and the bounded WebSocket relay that dials the
+vetted address (#216); see below.
+
+Mixed-version Redis fleets: a 0.33.1 processor reclaims queue entries idle for over 60 s,
+and a 0.33.2 processor refreshes its claims every `reclaim_idle_seconds / 4` (45 s by
+default), so the default is safe. With `reclaim_idle_seconds` above 240 during a rolling
+upgrade, a 0.33.1 processor can take entries a 0.33.2 one still holds and both send them.
+Keep the default until every processor runs 0.33.2.
 
 In the lockfile, the 0.33.2 build also takes patched releases of `rustls`,
 `rustls-webpki`, `webpki-root-certs`, `quinn-proto`, `quinn-udp`, `ctutils`,
 `crypto-bigint`, `url`, `rustix` and `tokio`, which clear the open `cargo audit` findings.
+
+### One bad next hop no longer stalls relaying
+
+Backports of affinidi-messaging-mediator #209 and #216, through
+`affinidi-messaging-mediator-common` 0.17.8 (see its changelog for detail).
+
+- The forwarding processor delivers to up to `max_concurrent_endpoints` next-hop
+  endpoints at once (default 32); messages for one endpoint still go one at a
+  time, usually in queue order. Each attempt is bounded by
+  `delivery_timeout_seconds` (default 90), WebSocket attempt and REST fallback
+  together.
+- Backoff is per endpoint, as a not-before time: a failed forward is queued
+  again with `ForwardQueueEntry.not_before_ms` (new field; `NOT_BEFORE_MS` on
+  Redis) at the end of that endpoint's backoff, which every processor sharing
+  the queue honours. The processor no longer pauses all forwarding after a
+  failed batch.
+- Claims on queued forwards are refreshed while held, and an entry whose claim
+  has been idle for `reclaim_idle_seconds` (default 180) is taken over by any
+  processor, so a stopped processor's entries are delivered. Every ack and
+  retry is one owner-checked write. A next hop the egress policy does not admit
+  is dropped at once with `e.p.me.res.forwarding.endpoint-not-permitted`.
+- The WebSocket relay is bounded at every step (10 s to resolve, connect, TLS
+  and upgrade; 30 s, or a third of `delivery_timeout_seconds` if less, for the
+  whole attempt; 5 s for the close handshake, on its own task), so a next hop
+  that hangs falls back to REST in time. The socket is dialed at the address
+  the egress policy vetted, with the URL host kept for SNI, certificate
+  validation and `Host`. The pool lock is not held during network I/O. The
+  processor warns at startup when `delivery_timeout_seconds` is below 60.
+- New config keys under `[processors.forwarding]`: `max_concurrent_endpoints`
+  (`PROCESSOR_FORWARDING_MAX_CONCURRENT_ENDPOINTS`, default 32),
+  `delivery_timeout_seconds` (`PROCESSOR_FORWARDING_DELIVERY_TIMEOUT_SECONDS`,
+  default 90) and `reclaim_idle_seconds`
+  (`PROCESSOR_FORWARDING_RECLAIM_IDLE_SECONDS`, default 180); the standalone
+  processor's `conf/forwarding.toml` takes the same keys.
+- **Breaking for anyone implementing `MediatorStore`:** new required methods
+  `forward_queue_finish` and `forward_queue_refresh_claims`, and
+  `forward_queue_autoclaim` takes a cursor and returns a `ForwardQueueClaimPage`.
+  The Redis, Fjall and in-memory stores implement them.
+
+**Behaviour change:** forwards may be relayed in a different order than they
+were queued, across endpoints and, after a retry, within one; an entry a stopped
+processor held is delivered by another after `reclaim_idle_seconds`, which can
+repeat a delivery it made but had not acked. During a rolling upgrade, entries
+written by 0.33.1 read with no not-before; a 0.33.1 processor reading a retry
+written by 0.33.2 ignores its not-before and retries at once.
 
 ## Unreleased (0.33.1) — every storage backend refuses a delete the same way
 

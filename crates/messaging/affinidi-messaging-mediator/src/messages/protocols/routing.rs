@@ -450,6 +450,7 @@ async fn deliver_forward(
                 expires_at,
                 retry_count: 0,
                 hop_count: hop_count + 1,
+                not_before_ms: 0,
             };
 
             state

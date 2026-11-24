@@ -63,8 +63,8 @@ use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     store::{
         DeletionAuthority, DeliveryDecision, DeliveryMarkReport, DeliveryState, ExpiryReport,
-        ForwardQueueEntry, InboxStatusReply, MediatorStore, MessageMetaData, MetadataStats,
-        OUTBOX_RECEIPT_TTL, OnExpired, OutboxReceipt, POISON_ATTEMPTS, PubSubRecord,
+        ForwardQueueClaimPage, ForwardQueueEntry, InboxStatusReply, MediatorStore, MessageMetaData,
+        MetadataStats, OUTBOX_RECEIPT_TTL, OnExpired, OutboxReceipt, POISON_ATTEMPTS, PubSubRecord,
         SentMessageState, Session, SessionState, SessionSweepReport, StatCounter, StoreHealth,
         StreamingClientState, TrustTaskClaim, ops,
     },
@@ -351,6 +351,10 @@ fn decode_stream_id(bytes: &[u8]) -> Option<(u64, u64)> {
     let seq = u64::from_be_bytes(bytes[8..].try_into().ok()?);
     Some((ms, seq))
 }
+
+/// Pending entries one autoclaim call examines per entry it may return, as
+/// on Redis.
+const AUTOCLAIM_SCAN_FACTOR: usize = 10;
 
 fn format_stream_id(ms: u64, seq: u64) -> String {
     format!("{ms}-{seq}")
@@ -2925,6 +2929,7 @@ impl MediatorStore for FjallStore {
                 None => std::ops::Bound::Unbounded,
             };
             let mut entries = Vec::new();
+            let mut malformed: Vec<(u64, u64)> = Vec::new();
             let mut new_last: Option<(u64, u64)> = last;
             for guard in store
                 .forward_queue
@@ -2937,9 +2942,19 @@ impl MediatorStore for FjallStore {
                 let Some(sid) = decode_stream_id(key.as_ref()) else {
                     continue;
                 };
-                let entry: ForwardQueueEntry = Self::decode(&value)?;
-                entries.push((sid, entry));
                 new_last = Some(sid);
+                match Self::decode::<ForwardQueueEntry>(&value) {
+                    Ok(entry) => entries.push((sid, entry)),
+                    // Dropped below, rather than failing every read from here.
+                    Err(e) => {
+                        tracing::warn!(
+                            "Dropping malformed forward queue entry {}-{}: {e}",
+                            sid.0,
+                            sid.1
+                        );
+                        malformed.push(sid);
+                    }
+                }
             }
 
             // Persist the claims and the new cursor in one batch.
@@ -2964,9 +2979,20 @@ impl MediatorStore for FjallStore {
                     encode_stream_id(sid.0, sid.1).to_vec(),
                 );
             }
+            for sid in &malformed {
+                batch.remove(
+                    &store.forward_queue,
+                    encode_stream_id(sid.0, sid.1).to_vec(),
+                );
+            }
             batch
                 .commit()
                 .map_err(|e| Self::db_err("forward_queue_read:commit", e))?;
+            if !malformed.is_empty() {
+                store
+                    .forward_queue_len
+                    .fetch_sub(malformed.len(), Ordering::AcqRel);
+            }
 
             Ok(entries.into_iter().map(|(_, e)| e).collect())
         };
@@ -3032,40 +3058,83 @@ impl MediatorStore for FjallStore {
         Ok(())
     }
 
+    async fn forward_queue_ack_and_delete(
+        &self,
+        group_name: &str,
+        stream_ids: &[&str],
+    ) -> Result<(), MediatorError> {
+        // One batch: a crash between a separate ack and delete would leave an
+        // entry no consumer holds and the group cursor has passed — never
+        // read, claimed or deleted again.
+        let _guard = self.write_lock.lock().await;
+        let mut batch = self.db.batch();
+        let mut removed = 0usize;
+        for id in stream_ids {
+            if let Some(sid) = parse_stream_id_string(id) {
+                batch.remove(&self.forward_pending, pending_key(group_name, sid));
+                let key = encode_stream_id(sid.0, sid.1).to_vec();
+                if self
+                    .forward_queue
+                    .contains_key(&key)
+                    .map_err(|e| Self::db_err("forward_queue_ack_and_delete:contains", e))?
+                {
+                    removed += 1;
+                    batch.remove(&self.forward_queue, key);
+                }
+            }
+        }
+        batch
+            .commit()
+            .map_err(|e| Self::db_err("forward_queue_ack_and_delete:commit", e))?;
+        self.forward_queue_len.fetch_sub(removed, Ordering::AcqRel);
+        Ok(())
+    }
+
     async fn forward_queue_autoclaim(
         &self,
         group_name: &str,
         consumer_name: &str,
         min_idle: Duration,
         count: usize,
-    ) -> Result<Vec<ForwardQueueEntry>, MediatorError> {
+        cursor: &str,
+    ) -> Result<ForwardQueueClaimPage, MediatorError> {
         let now = now_ms_u64();
         let min_idle_ms = min_idle.as_millis() as u64;
+        let start = parse_stream_id_string(cursor).unwrap_or((0, 0));
 
         let _guard = self.write_lock.lock().await;
         let group_prefix_len = group_name.len() + 1; // +1 for the null byte
+        // Examine a bounded stretch of the pending list per call, as Redis
+        // does, and say where to continue.
+        let scan_limit = count.max(1).saturating_mul(AUTOCLAIM_SCAN_FACTOR);
 
-        // Snapshot pending entries for this group whose claim is older
-        // than `min_idle`.
+        // Snapshot pending entries for this group, from the cursor, whose
+        // claim is older than `min_idle`.
         let mut stale: Vec<((u64, u64), StoredPendingClaim)> = Vec::new();
-        for guard in self.forward_pending.prefix(group_name.as_bytes()) {
-            if stale.len() >= count {
-                break;
-            }
+        let mut next_cursor = None;
+        let mut examined = 0usize;
+        for guard in self
+            .forward_pending
+            .range::<Vec<u8>, _>(pending_key(group_name, start)..)
+        {
             let (key, value) = guard
                 .into_inner()
-                .map_err(|e| Self::db_err("forward_queue_autoclaim:prefix", e))?;
-            // Defensive: only consider keys that are actually for our
-            // group (the prefix iter is conservative).
+                .map_err(|e| Self::db_err("forward_queue_autoclaim:range", e))?;
+            // Past this group's keys: the scan is complete.
             if key.len() < group_prefix_len + 16
                 || &key[..group_name.len()] != group_name.as_bytes()
                 || key[group_name.len()] != 0x00
             {
-                continue;
+                break;
             }
             let Some(sid) = decode_stream_id(&key[group_prefix_len..]) else {
                 continue;
             };
+            if examined >= scan_limit || stale.len() >= count {
+                next_cursor = Some(format_stream_id(sid.0, sid.1));
+                break;
+            }
+            examined += 1;
             let claim: StoredPendingClaim = Self::decode(&value)?;
             if now.saturating_sub(claim.claimed_at_ms) >= min_idle_ms {
                 stale.push((sid, claim));
@@ -3076,8 +3145,36 @@ impl MediatorStore for FjallStore {
         // delivery count. Persist updated claims + collect the
         // associated queue entries to return.
         let mut batch = self.db.batch();
-        let mut out = Vec::with_capacity(stale.len());
+        let mut entries = Vec::with_capacity(stale.len());
+        let mut dropped = 0usize;
         for (sid, claim) in stale {
+            let Some(raw) = self
+                .forward_queue
+                .get(encode_stream_id(sid.0, sid.1))
+                .map_err(|e| Self::db_err("forward_queue_autoclaim:fetch", e))?
+            else {
+                // The entry is gone (trimmed, or deleted after a crash between
+                // ack and delete): nothing left to deliver, so drop the claim
+                // rather than re-claiming it forever — as Redis's XAUTOCLAIM
+                // does for deleted entries.
+                batch.remove(&self.forward_pending, pending_key(group_name, sid));
+                continue;
+            };
+            let entry = match Self::decode::<ForwardQueueEntry>(&raw) {
+                Ok(entry) => entry,
+                // Dropped, claim and all, rather than reclaimed on every sweep.
+                Err(e) => {
+                    tracing::warn!(
+                        "Dropping malformed forward queue entry {}-{}: {e}",
+                        sid.0,
+                        sid.1
+                    );
+                    batch.remove(&self.forward_pending, pending_key(group_name, sid));
+                    batch.remove(&self.forward_queue, encode_stream_id(sid.0, sid.1).to_vec());
+                    dropped += 1;
+                    continue;
+                }
+            };
             let new_claim = StoredPendingClaim {
                 consumer: consumer_name.to_string(),
                 claimed_at_ms: now,
@@ -3088,19 +3185,119 @@ impl MediatorStore for FjallStore {
                 pending_key(group_name, sid),
                 Self::encode(&new_claim)?,
             );
-            if let Some(raw) = self
-                .forward_queue
-                .get(encode_stream_id(sid.0, sid.1))
-                .map_err(|e| Self::db_err("forward_queue_autoclaim:fetch", e))?
-            {
-                let entry: ForwardQueueEntry = Self::decode(&raw)?;
-                out.push(entry);
-            }
+            entries.push(entry);
         }
         batch
             .commit()
             .map_err(|e| Self::db_err("forward_queue_autoclaim:commit", e))?;
-        Ok(out)
+        if dropped > 0 {
+            self.forward_queue_len.fetch_sub(dropped, Ordering::AcqRel);
+        }
+        Ok(ForwardQueueClaimPage {
+            entries,
+            next_cursor,
+        })
+    }
+
+    async fn forward_queue_finish(
+        &self,
+        group_name: &str,
+        consumer_name: &str,
+        stream_id: &str,
+        requeue: Option<&ForwardQueueEntry>,
+    ) -> Result<bool, MediatorError> {
+        let Some(sid) = parse_stream_id_string(stream_id) else {
+            return Ok(false);
+        };
+        // Under the write lock, so the ownership check and the write cannot
+        // be split by an autoclaim moving the claim.
+        let guard = self.write_lock.lock().await;
+        let claim_key = pending_key(group_name, sid);
+        let held = self
+            .forward_pending
+            .get(&claim_key)
+            .map_err(|e| Self::db_err("forward_queue_finish:get", e))?
+            .map(|raw| Self::decode::<StoredPendingClaim>(&raw))
+            .transpose()?
+            .is_some_and(|claim| claim.consumer == consumer_name);
+        if !held {
+            return Ok(false);
+        }
+
+        let mut batch = self.db.batch();
+        let mut len = self.forward_queue_count_inner();
+        if let Some(entry) = requeue {
+            let id = self.alloc_stream_id();
+            let mut entry = entry.clone();
+            entry.stream_id = format_stream_id(id.0, id.1);
+            batch.insert(
+                &self.forward_queue,
+                encode_stream_id(id.0, id.1).to_vec(),
+                Self::encode(&entry)?,
+            );
+            len += 1;
+        }
+        batch.remove(&self.forward_pending, claim_key);
+        let key = encode_stream_id(sid.0, sid.1).to_vec();
+        if self
+            .forward_queue
+            .contains_key(&key)
+            .map_err(|e| Self::db_err("forward_queue_finish:contains", e))?
+        {
+            len -= 1;
+            batch.remove(&self.forward_queue, key);
+        }
+        batch
+            .commit()
+            .map_err(|e| Self::db_err("forward_queue_finish:commit", e))?;
+        // Only after the batch is durable. Still under `write_lock`.
+        self.forward_queue_len.store(len, Ordering::Release);
+        drop(guard);
+        if requeue.is_some() {
+            self.forward_notify.notify_waiters();
+        }
+        Ok(true)
+    }
+
+    async fn forward_queue_refresh_claims(
+        &self,
+        group_name: &str,
+        consumer_name: &str,
+        stream_ids: &[&str],
+    ) -> Result<Vec<String>, MediatorError> {
+        let now = now_ms_u64();
+        // Under the write lock, so a concurrent autoclaim cannot move a claim
+        // between the ownership check and the refresh.
+        let _guard = self.write_lock.lock().await;
+        let mut batch = self.db.batch();
+        let mut lost = Vec::new();
+        for id in stream_ids {
+            let Some(sid) = parse_stream_id_string(id) else {
+                lost.push(id.to_string());
+                continue;
+            };
+            let key = pending_key(group_name, sid);
+            let claim = self
+                .forward_pending
+                .get(&key)
+                .map_err(|e| Self::db_err("forward_queue_refresh_claims:get", e))?
+                .map(|raw| Self::decode::<StoredPendingClaim>(&raw))
+                .transpose()?;
+            match claim {
+                Some(claim) if claim.consumer == consumer_name => {
+                    let refreshed = StoredPendingClaim {
+                        claimed_at_ms: now,
+                        ..claim
+                    };
+                    batch.insert(&self.forward_pending, key, Self::encode(&refreshed)?);
+                }
+                _ => lost.push(id.to_string()),
+            }
+        }
+        batch
+            .commit()
+            .map_err(|e| Self::db_err("forward_queue_refresh_claims:commit", e))?;
+        Ok(lost)
     }
 
     // ─── Live streaming (WebSocket pub/sub) ─────────────────────────────────
@@ -4359,6 +4556,7 @@ mod tests {
             expires_at: 0,
             retry_count: 0,
             hop_count: 0,
+            not_before_ms: 0,
         };
         let id = store
             .forward_queue_enqueue(&entry, 0)
@@ -4402,6 +4600,7 @@ mod tests {
             expires_at: 0,
             retry_count: 0,
             hop_count: 0,
+            not_before_ms: 0,
         };
 
         let id = {
@@ -4430,9 +4629,10 @@ mod tests {
         assert!(read.is_empty());
         // ...but autoclaim recovers it for the new consumer.
         let claimed = store
-            .forward_queue_autoclaim("forwarding", "c2", Duration::from_millis(0), 10)
+            .forward_queue_autoclaim("forwarding", "c2", Duration::from_millis(0), 10, "0-0")
             .await
-            .expect("autoclaim");
+            .expect("autoclaim")
+            .entries;
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].stream_id, id);
         assert_eq!(claimed[0].message, "encrypted");
@@ -4477,6 +4677,7 @@ mod tests {
             expires_at: 0,
             retry_count: 0,
             hop_count: 0,
+            not_before_ms: 0,
         };
         store
             .forward_queue_enqueue(&entry, 0)
@@ -4560,6 +4761,56 @@ mod tests {
         );
     }
 
+    /// A forward-queue row that does not decode is dropped, by a read or by
+    /// the reclaim sweep, rather than failing every read or being reclaimed
+    /// on every sweep.
+    #[tokio::test]
+    async fn malformed_forward_queue_rows_are_dropped() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+
+        // One bad row read fresh, and one already claimed when it went bad.
+        store
+            .forward_queue
+            .insert(encode_stream_id(1, 0).to_vec(), b"not json".to_vec())
+            .expect("insert bad row");
+        store.forward_queue_len.fetch_add(1, Ordering::AcqRel);
+        let good = store
+            .forward_queue_enqueue(&forward_entry(), 0)
+            .await
+            .expect("enqueue");
+        let read = store
+            .forward_queue_read("g", "c1", 10, Duration::ZERO)
+            .await
+            .expect("a bad row does not fail the read");
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].stream_id, good);
+        assert!(
+            store
+                .forward_queue
+                .get(encode_stream_id(1, 0))
+                .expect("get")
+                .is_none(),
+            "the bad row is gone"
+        );
+
+        let sid = parse_stream_id_string(&good).expect("stream id");
+        store
+            .forward_queue
+            .insert(
+                encode_stream_id(sid.0, sid.1).to_vec(),
+                b"gone bad".to_vec(),
+            )
+            .expect("corrupt the claimed row");
+        let page = store
+            .forward_queue_autoclaim("g", "c2", Duration::ZERO, 10, "0-0")
+            .await
+            .expect("a bad row does not fail the sweep");
+        assert!(page.entries.is_empty());
+        assert_eq!(store.forward_pending.iter().count(), 0, "claim dropped");
+        assert_eq!(store.forward_queue_len().await.expect("len"), 0);
+    }
+
     #[tokio::test]
     async fn forward_queue_autoclaim_recovers_idle_entries() {
         let dir = TempDir::new().expect("tempdir");
@@ -4577,6 +4828,7 @@ mod tests {
             expires_at: 0,
             retry_count: 0,
             hop_count: 0,
+            not_before_ms: 0,
         };
         let id = store
             .forward_queue_enqueue(&entry, 0)
@@ -4594,11 +4846,86 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         let reclaimed = store
-            .forward_queue_autoclaim("g", "consumer-b", Duration::from_millis(10), 10)
+            .forward_queue_autoclaim("g", "consumer-b", Duration::from_millis(10), 10, "0-0")
             .await
-            .expect("autoclaim");
+            .expect("autoclaim")
+            .entries;
         assert_eq!(reclaimed.len(), 1);
         assert_eq!(reclaimed[0].stream_id, id);
+    }
+
+    fn forward_entry() -> ForwardQueueEntry {
+        ForwardQueueEntry {
+            stream_id: String::new(),
+            message: "msg".into(),
+            to_did_hash: hash("to"),
+            from_did_hash: hash("from"),
+            from_did: "did:from".into(),
+            to_did: "did:to".into(),
+            endpoint_url: "http://example".into(),
+            received_at_ms: 0,
+            delay_milli: 0,
+            expires_at: 0,
+            retry_count: 0,
+            hop_count: 0,
+            not_before_ms: 0,
+        }
+    }
+
+    /// Ack and delete land together: the claim and the entry are both gone,
+    /// and the queue length follows.
+    #[tokio::test]
+    async fn forward_queue_ack_and_delete_releases_claim_and_entry() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+        let id = store
+            .forward_queue_enqueue(&forward_entry(), 0)
+            .await
+            .expect("enqueue");
+        let read = store
+            .forward_queue_read("g", "c", 10, Duration::from_millis(0))
+            .await
+            .expect("read");
+        assert_eq!(read.len(), 1);
+
+        store
+            .forward_queue_ack_and_delete("g", &[id.as_str()])
+            .await
+            .expect("ack and delete");
+        assert_eq!(store.forward_queue.iter().count(), 0);
+        assert_eq!(store.forward_pending.iter().count(), 0);
+        assert_eq!(store.forward_queue_len().await.unwrap(), 0);
+    }
+
+    /// A claim whose entry is gone (trimmed, or deleted after a crash between
+    /// a separate ack and delete) is dropped by autoclaim, not re-claimed
+    /// forever.
+    #[tokio::test]
+    async fn autoclaim_drops_claims_whose_entry_is_gone() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+        let id = store
+            .forward_queue_enqueue(&forward_entry(), 0)
+            .await
+            .expect("enqueue");
+        store
+            .forward_queue_read("g", "c", 10, Duration::from_millis(0))
+            .await
+            .expect("read");
+        store
+            .forward_queue_delete(&[id.as_str()])
+            .await
+            .expect("delete without ack");
+        assert_eq!(store.forward_pending.iter().count(), 1, "orphaned claim");
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let reclaimed = store
+            .forward_queue_autoclaim("g", "c2", Duration::from_millis(10), 10, "0-0")
+            .await
+            .expect("autoclaim")
+            .entries;
+        assert!(reclaimed.is_empty());
+        assert_eq!(store.forward_pending.iter().count(), 0, "claim dropped");
     }
 
     #[tokio::test]

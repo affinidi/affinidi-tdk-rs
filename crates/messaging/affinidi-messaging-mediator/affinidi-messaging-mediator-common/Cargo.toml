@@ -242,7 +242,7 @@ rustls = { version = "0.23", default-features = false, features = [
 ], optional = true }
 
 # ── Async Runtime (tokio::time::sleep in retry loops, etc.) ─────────
-tokio = { workspace = true, features = ["time"], optional = true }
+tokio = { workspace = true, features = ["time", "net"], optional = true }
 
 # ── Utilities used across server modules ────────────────────────────
 ahash = { version = "0.8", features = ["serde"], optional = true }

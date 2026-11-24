@@ -43,6 +43,7 @@ fn forward_entry(i: usize) -> ForwardQueueEntry {
         expires_at: 0,
         retry_count: 0,
         hop_count: 0,
+        not_before_ms: 0,
     }
 }
 

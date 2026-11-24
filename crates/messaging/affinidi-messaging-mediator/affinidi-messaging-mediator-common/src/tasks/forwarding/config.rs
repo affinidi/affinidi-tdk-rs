@@ -59,6 +59,35 @@ pub struct ForwardingConfig {
     pub initial_backoff_ms: u64,
     /// Maximum backoff delay in milliseconds for retry
     pub max_backoff_ms: u64,
+    /// How many next-hop endpoints are delivered to at once. Messages for one
+    /// endpoint go out one at a time; different endpoints proceed in parallel
+    /// up to this limit, so a slow endpoint holds one slot rather than the
+    /// whole processor.
+    #[serde(default = "default_max_concurrent_endpoints")]
+    pub max_concurrent_endpoints: usize,
+    /// Upper bound, in seconds, on one delivery attempt (connect, send and
+    /// the peer's answer, including a WebSocket attempt and its REST
+    /// fallback). An attempt that runs over is a retryable failure. Keep it
+    /// above 60: a WebSocket attempt (connect, send and the peer's ack) takes
+    /// at most 30 s before the REST fallback, which has 30 s of its own.
+    /// Below 90 the WebSocket attempt is cut to a third of this, so the
+    /// fallback always has time; below 60 a warning is logged at startup.
+    #[serde(default = "default_delivery_timeout_seconds")]
+    pub delivery_timeout_seconds: u64,
+    /// Seconds a claimed queue entry may sit untouched before any processor
+    /// in the consumer group takes it over: how soon the entries a stopped or
+    /// restarted processor held are delivered by another. A running processor
+    /// refreshes its claims four times in this window, so it never loses one
+    /// it is still working on. The same sweep picks up a requested delay
+    /// longer than `max_backoff_ms` once it is due.
+    ///
+    /// Keep it at least twice `delivery_timeout_seconds`. A processor stops
+    /// starting sends once its claims have gone unconfirmed for half this
+    /// window, but a send already under way runs on for up to the delivery
+    /// timeout; a shorter window lets another processor take the entry over
+    /// and send it too.
+    #[serde(default = "default_reclaim_idle_seconds")]
+    pub reclaim_idle_seconds: u64,
     /// Redis consumer group name for forwarding processors
     pub consumer_group: String,
     /// Whether to accept invalid TLS certificates when forwarding to remote mediators.
@@ -93,6 +122,18 @@ pub struct ForwardingConfig {
     pub relay_trusted_mediators: HashSet<String>,
 }
 
+fn default_max_concurrent_endpoints() -> usize {
+    32
+}
+
+fn default_delivery_timeout_seconds() -> u64 {
+    90
+}
+
+fn default_reclaim_idle_seconds() -> u64 {
+    180
+}
+
 impl Default for ForwardingConfig {
     fn default() -> Self {
         ForwardingConfig {
@@ -108,6 +149,9 @@ impl Default for ForwardingConfig {
             max_retries: 5,
             initial_backoff_ms: 1000,
             max_backoff_ms: 60000,
+            max_concurrent_endpoints: default_max_concurrent_endpoints(),
+            delivery_timeout_seconds: default_delivery_timeout_seconds(),
+            reclaim_idle_seconds: default_reclaim_idle_seconds(),
             consumer_group: "forwarding".to_string(),
             accept_invalid_certs: false,
             max_hops: 10,

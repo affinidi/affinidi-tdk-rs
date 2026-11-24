@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-processors"
-version = "0.15.0"
+version = "0.15.1"
 description = "Standalone background processor binaries for the Affinidi Messaging Mediator (Redis-only, horizontal scaling)"
 edition.workspace = true
 authors.workspace = true

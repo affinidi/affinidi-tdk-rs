@@ -39,6 +39,11 @@ pub enum ForwardOutcome {
     /// other than 408/425/429). It was dropped without a retry, and the
     /// sender is sent a problem report.
     Refused { status: u16 },
+    /// The next-hop endpoint is not one this mediator forwards to: its URL
+    /// does not parse, or the egress policy does not admit it (scheme or
+    /// address class). No request was made, it was dropped without a retry,
+    /// and the sender is sent a problem report.
+    NotPermitted,
     /// The entry outlived its expiry before it could be relayed, and was
     /// dropped.
     Expired,

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-test-mediator"
-version = "0.14.0"
+version = "0.14.1"
 description = "Embedded mediator fixture for integration tests against affinidi-messaging-mediator"
 edition.workspace = true
 authors.workspace = true
@@ -25,6 +25,14 @@ tsp = ["affinidi-messaging-mediator/tsp", "affinidi-messaging-sdk/tsp"]
 ## Spawn the mediator with DIDComm v1 (Aries RFC 0019) support so the e2e suite
 ## can exercise forward ingress, coordinate-mediation and message pickup.
 didcomm-v1 = ["affinidi-messaging-mediator/didcomm-v1", "dep:affinidi-messaging-didcomm-v1"]
+## Compile in `RedisStore` so the Redis variants of
+## `tests/forwarding_processor.rs` can run against a real Redis named by
+## `REDIS_URL`. Nothing else here needs Redis.
+redis-backend = [
+  "affinidi-messaging-mediator/redis-backend",
+  "affinidi-messaging-mediator-common/redis-backend",
+  "dep:redis",
+]
 
 [dependencies]
 ## Optional: v1 message construction for the didcomm-v1 e2e tests.
@@ -46,6 +54,11 @@ affinidi-messaging-mediator-common = { version = "0.17", path = "../affinidi-mes
 ## Wraps each FjallStore in a temp directory that's cleaned up when the
 ## handle drops, so tests don't leak partition files on disk.
 tempfile = { version = "3", optional = true }
+
+# ── Optional: Redis backend support (gated on `redis-backend`) ──────────
+## `FLUSHDB` before each Redis-backed forwarding test, so each starts from an
+## empty keyspace.
+redis = { version = "1.1", optional = true, features = ["tokio-comp"] }
 
 # ── DID + key generation ────────────────────────────────────────────────
 ## Used for `DID::generate_did_peer` (Ed25519 + X25519, with service URI).
@@ -114,6 +127,8 @@ futures-util = "0.3"
 ## browser scenario can't go through tokio-tungstenite's client, which
 ## errors when it offers a subprotocol the server doesn't echo back).
 tokio = { workspace = true, features = ["io-util"] }
+## The stub remote mediator in `tests/forwarding_processor.rs`.
+axum = "0.8"
 
 [lints]
 workspace = true

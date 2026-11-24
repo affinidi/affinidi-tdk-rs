@@ -631,6 +631,8 @@ struct Subscription {
 ///   carries;
 /// - refused by the peer, not retried → `forwarded` with outcome
 ///   `e.p.me.res.forwarding.refused`, likewise;
+/// - next hop not a permitted endpoint, not retried → `forwarded` with
+///   outcome `e.p.me.res.forwarding.endpoint-not-permitted`, likewise;
 /// - expired in the queue → `expired`.
 ///
 /// The peer's error text is not passed on: it stays in the server log.
@@ -669,6 +671,14 @@ impl ForwardingObserver for TrafficMonitor {
                     Some((
                         "e.p.me.res.forwarding.refused".to_string(),
                         Some(format!("refused by the peer mediator (HTTP {status})")),
+                    )),
+                    None,
+                ),
+                ForwardOutcome::NotPermitted => (
+                    Stage::Forwarded,
+                    Some((
+                        "e.p.me.res.forwarding.endpoint-not-permitted".to_string(),
+                        Some("the next-hop endpoint is not a permitted target".to_string()),
                     )),
                     None,
                 ),
@@ -1249,6 +1259,7 @@ mod tests {
             expires_at: u64::MAX,
             retry_count: 0,
             hop_count: 1,
+            not_before_ms: 0,
         }
     }
 
@@ -1277,6 +1288,7 @@ mod tests {
             },
             ForwardOutcome::Abandoned { attempts: 4 },
             ForwardOutcome::Refused { status: 403 },
+            ForwardOutcome::NotPermitted,
             ForwardOutcome::Expired,
         ];
         for outcome in outcomes {
@@ -1286,9 +1298,17 @@ mod tests {
         let relayed = rx.try_recv().unwrap();
         let abandoned = rx.try_recv().unwrap();
         let refused = rx.try_recv().unwrap();
+        let not_permitted = rx.try_recv().unwrap();
         let expired = rx.try_recv().unwrap();
 
-        for e in [&retry, &relayed, &abandoned, &refused, &expired] {
+        for e in [
+            &retry,
+            &relayed,
+            &abandoned,
+            &refused,
+            &not_permitted,
+            &expired,
+        ] {
             assert_eq!(e.msg_id, queued.msg_id, "one message, one id");
             assert_eq!(e.from.as_deref(), Some("alice"));
             assert_eq!(e.to.as_deref(), Some("bob"));
@@ -1317,6 +1337,12 @@ mod tests {
                 "e.p.me.res.forwarding.refused".to_string(),
                 Some("refused by the peer mediator (HTTP 403)".to_string())
             )
+        );
+
+        assert_eq!(not_permitted.stage, Stage::Forwarded);
+        assert_eq!(
+            not_permitted.outcome.clone().unwrap().0,
+            "e.p.me.res.forwarding.endpoint-not-permitted"
         );
 
         assert_eq!(expired.stage, Stage::Expired);

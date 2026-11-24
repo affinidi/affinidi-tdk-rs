@@ -759,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator-config"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "affinidi-messaging-mediator-common",
  "serde",
@@ -772,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator-processors"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "affinidi-messaging-mediator-common",
  "clap",
@@ -896,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-test-mediator"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -912,8 +912,10 @@ dependencies = [
  "affinidi-tdk",
  "affinidi-tsp",
  "async-trait",
+ "axum",
  "base64 0.23.1",
  "futures-util",
+ "redis",
  "reqwest",
  "ring",
  "rustls",

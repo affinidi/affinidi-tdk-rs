@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (0.14.1) — forwarding processor tests
+
+The forwarding-processor tests (`tests/forwarding_processor.rs`) move here from the
+mediator crate, as upstream did, because the mediator's egress guard refuses the
+loopback endpoints they use and this crate builds the mediator with the test relaxation.
+New `redis-backend` feature and optional `redis` dependency, so the Redis variants of
+those tests compile; `axum` is a dev-dependency for the fake peer endpoints. 0.15.0 was
+published from another line, so this line continues at 0.14.1; do not publish it.
+
 ## Unreleased (0.14.0) — embeds mediator 0.33
 
 Embeds mediator 0.33 (vta-sdk 0.56). A minor rather than a patch because this

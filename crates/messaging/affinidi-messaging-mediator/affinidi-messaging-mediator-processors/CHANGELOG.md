@@ -1,5 +1,11 @@
 # Affinidi Messaging Mediator Processors
 
+## 0.15.1 — forwarding settings in the shipped config
+
+`conf/forwarding.toml` documents the new forwarding keys `max_concurrent_endpoints`,
+`delivery_timeout_seconds` and `reclaim_idle_seconds` (upstream #209). Configuration only.
+Do not publish this line to crates.io.
+
 ## Unreleased (0.15.0) — mediator-common 0.17
 
 Takes mediator-common 0.17, whose types this crate's API carries. No source change.

@@ -1,5 +1,12 @@
 # Affinidi Messaging Mediator Config
 
+## 0.5.1 — forwarding processor settings
+
+`ForwardingConfigRaw` gains `max_concurrent_endpoints`, `delivery_timeout_seconds` and
+`reclaim_idle_seconds`, with the `PROCESSOR_FORWARDING_*` environment overrides, as in
+upstream affinidi-messaging-mediator (#209). The mediator 0.33.2 reads them, so it requires
+this version. Do not publish this line to crates.io.
+
 ## Unreleased (0.5.0) — two retired security keys
 
 `SecurityConfigRaw` loses `legacy_admin_protocols` and
