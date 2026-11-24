@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.51.0] - 2026-11-24
+
+trust-tasks-rs and trust-tasks-proof 0.41
+
+**Breaking.** trust-tasks-rs and trust-tasks-proof 0.40 -> 0.41. Trust Task
+types (`TrustTask`, `Payload`, the generated `crate::tasks`) are in this
+crate's public API, so a consumer has to be on trust-tasks-rs 0.41 too.
+trust-tasks-rs 0.41 itself changes no API; the leading component moved because
+its sibling crates (trust-tasks-didcomm, -tsp, -https) moved to the affinidi-tdk
+0.49 generation and jsonwebtoken 12. trust-tasks-build stays on 0.2.1;
+`trust-tasks.lock` and the vendored bundles are unchanged. No source change;
+send / ack / reconnect / receive semantics are unchanged.
+
 ## [0.50.0] - 2026-11-17
 
 trust-tasks 0.40; new generation of affinidi crates
