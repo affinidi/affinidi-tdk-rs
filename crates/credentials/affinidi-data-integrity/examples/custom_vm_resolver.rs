@@ -11,7 +11,7 @@
 //! `affinidi-did-resolver-cache-sdk` for cache-backed resolution.
 //!
 //! Run:
-//! `cargo run --example custom_resolver -p affinidi-data-integrity`
+//! `cargo run --example custom_vm_resolver -p affinidi-data-integrity`
 
 use affinidi_data_integrity::{
     DataIntegrityError, DataIntegrityProof, DidKeyResolver, ResolvedKey, SignOptions,
