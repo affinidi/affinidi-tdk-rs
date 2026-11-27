@@ -147,14 +147,12 @@ impl MuxRefused {
 pub(crate) fn event_is_well_formed(event: &MuxEvent) -> bool {
     match event.event {
         MuxEventKind::Ready => MuxReady::from_event(event).is_some(),
-        MuxEventKind::Attached => {
-            !event.dids.is_empty()
-                && event
-                    .dids
-                    .iter()
+        MuxEventKind::Attached => event.dids.as_deref().is_some_and(|d| {
+            !d.is_empty()
+                && d.iter()
                     .all(|c| c.scope.is_some() && c.delivery_active.is_some())
-        }
-        MuxEventKind::Detached => !event.dids.is_empty(),
+        }),
+        MuxEventKind::Detached => event.dids.as_deref().is_some_and(|d| !d.is_empty()),
         MuxEventKind::Refused => MuxRefused::from_event(event).is_some(),
     }
 }
@@ -317,7 +315,7 @@ impl MuxMembers {
                 changed
             }
             MuxEventKind::Attached if self.ready => {
-                for c in &event.dids {
+                for c in event.dids.iter().flatten() {
                     let member = MuxMember {
                         did: c.did.to_string(),
                         scope: c
@@ -336,7 +334,7 @@ impl MuxMembers {
             }
             MuxEventKind::Detached if self.ready => {
                 let mut changed = false;
-                for c in &event.dids {
+                for c in event.dids.iter().flatten() {
                     let did: &str = &c.did;
                     if c.reason == MemberChangeReason::Superseded {
                         if let Some(m) = self.members.get_mut(did) {
@@ -1038,7 +1036,7 @@ mod tests {
         }));
         let decoded = decode_mux_event(&detached).expect("a connectionFull detach parses");
         assert_eq!(
-            decoded.payload.dids[0].reason,
+            decoded.payload.dids.as_deref().expect("dids")[0].reason,
             mux::event::v0_1::MemberChangeReason::ConnectionFull
         );
         assert!(
@@ -1048,7 +1046,7 @@ mod tests {
         );
         let ev = s.events.recv().await.expect("delivered to mux_events()");
         assert_eq!(
-            ev.dids[0].reason,
+            ev.dids.as_deref().expect("dids")[0].reason,
             mux::event::v0_1::MemberChangeReason::ConnectionFull
         );
     }

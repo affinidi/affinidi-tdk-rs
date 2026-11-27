@@ -2010,7 +2010,7 @@ mod tests {
             Some(TspMuxFrame::Event(e)) => {
                 assert_eq!(e.event, MuxEventKind::Detached);
                 assert_eq!(
-                    e.dids[0].reason,
+                    e.dids.as_deref().expect("dids")[0].reason,
                     super::super::mux::MemberChangeReason::ConnectionFull
                 );
             }

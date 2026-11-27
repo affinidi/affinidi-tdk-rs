@@ -666,7 +666,7 @@ impl<W: GrantWire> Keeper<W> {
     /// Apply a notice to the members it names. Returns them.
     fn notice(&mut self, notice: &MuxNotice) -> Vec<String> {
         let mut concerned = Vec::new();
-        for s in &notice.suspensions {
+        for s in notice.suspensions.iter().flatten() {
             let ids: Vec<String> = s.grant_ids.iter().map(|g| g.as_str().to_string()).collect();
             if let Some(m) = self.members.get_mut(s.did.as_str())
                 && m.concerns(&ids)
@@ -685,7 +685,7 @@ impl<W: GrantWire> Keeper<W> {
                 concerned.push(m.cfg.member_did.clone());
             }
         }
-        for r in &notice.revocations {
+        for r in notice.revocations.iter().flatten() {
             let ids: Vec<String> = r.grant_ids.iter().map(|g| g.as_str().to_string()).collect();
             if let Some(m) = self.members.get_mut(r.did.as_str())
                 && m.concerns(&ids)
@@ -696,7 +696,7 @@ impl<W: GrantWire> Keeper<W> {
                 concerned.push(m.cfg.member_did.clone());
             }
         }
-        for e in &notice.expiring {
+        for e in notice.expiring.iter().flatten() {
             let id = e.grant_id.as_str().to_string();
             if let Some(m) = self.members.get_mut(e.did.as_str())
                 && !m.revoked
