@@ -1,5 +1,15 @@
 # Changelog — `affinidi-tdk`
 
+## [0.51.0] - 2026-11-27
+
+affinidi-messaging-sdk 0.52 (trust-tasks-rs 0.43)
+
+**Breaking:** the `messaging` feature (on by default) re-exports
+affinidi-messaging-sdk, which moves to 0.52 for trust-tasks-rs 0.43 and
+trust-tasks-build 0.3.0 (optional array members of generated payload types are
+now `Option<Vec<T>>`). Every other re-exported crate is unchanged. No source
+change.
+
 ## [0.50.0] - 2026-11-24
 
 affinidi-messaging-sdk 0.51 (trust-tasks-rs 0.41)

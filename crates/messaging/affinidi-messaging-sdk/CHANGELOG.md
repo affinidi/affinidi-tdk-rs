@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.52.0] - 2026-11-27
+
+trust-tasks-rs and trust-tasks-proof 0.43, trust-tasks-build 0.3.0
+
+**Breaking.** trust-tasks-rs and trust-tasks-proof 0.41 -> 0.43, trust-tasks-build
+0.2.1 -> 0.3.0. Trust Task types (`TrustTask`, `Payload`, the generated
+`crate::tasks`) are in this crate's public API, so a consumer has to be on
+trust-tasks-rs 0.43 too.
+
+- **Generated payload types keep member presence** (trust-tasks-tf #1385). An
+  optional array member is now `Option<Vec<T>>`, so absent and `[]` stay apart:
+  `MuxEvent::dids`, `MuxNotice::{suspensions, revocations, expiring}`,
+  `admin_revoke` `unmatched_grant_ids` and the monitor 0.3 batch's `membership`
+  among them. Code that read these as `Vec<T>` reads them with
+  `.as_deref().unwrap_or_default()` or `.iter().flatten()`.
+- **Empty access-list arrays are left out.** `access_list_update` and
+  `access_list_list` omit an empty `add`, `remove` or `entries`: the schema
+  bounds each with `minItems: 1`, and the generated type now sends `[]` for
+  `Some(vec![])` where it used to drop an empty `Vec`.
+- **Typed consume validates the payload as received** (trust-tasks-tf #1398): a
+  forbidden `null` on an optional member is now refused `malformedRequest`.
+
+The SDK's own behaviour is unchanged: an absent array is handled as the empty
+one was, and `MuxAdminRevokeOutcome::unmatched_grant_ids` is still a `Vec`.
+
 ## [0.51.0] - 2026-11-24
 
 trust-tasks-rs and trust-tasks-proof 0.41

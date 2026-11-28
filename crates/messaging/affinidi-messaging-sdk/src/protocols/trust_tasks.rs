@@ -92,6 +92,13 @@ pub struct TrustTasksOps<'a> {
 /// becomes an `ATMError` at send time rather than a compile error — which is
 /// why every call below sets its required members explicitly and lets only the
 /// optional ones default.
+/// An optional array the schema bounds with `minItems: 1` is left out when
+/// empty: trust-tasks-build 0.3 keeps presence, so `Some(vec![])` would be
+/// sent as `[]` and refused.
+fn non_empty<T>(v: Vec<T>) -> Option<Vec<T>> {
+    (!v.is_empty()).then_some(v)
+}
+
 fn payload<P, B>(builder: B) -> Result<P, ATMError>
 where
     B: TryInto<P>,
@@ -417,10 +424,10 @@ impl TrustTasksOps<'_> {
         };
         let p: access_list::update::v0_1::Payload = payload(
             access_list::update::v0_1::Payload::builder()
-                .add(to_vids(add)?)
+                .add(non_empty(to_vids(add)?))
                 .clear(clear.then_some(true))
                 .did(did)
-                .remove(to_vids(remove)?),
+                .remove(non_empty(to_vids(remove)?)),
         )?;
         let mut task = TrustTask::for_payload(new_id(), p);
         task.issuer = Some(profile_did.to_string());
@@ -462,7 +469,7 @@ impl TrustTasksOps<'_> {
             access_list::list::v0_1::Payload::builder()
                 .cursor(cursor)
                 .did(did)
-                .entries(entries)
+                .entries(non_empty(entries))
                 .limit(limit),
         )?;
         let mut task = TrustTask::for_payload(new_id(), p);
@@ -2254,7 +2261,14 @@ mod mux_connections_tests {
         .expect("admin-revoke response");
         assert_eq!(revoke.revoked.len(), 1);
         assert_eq!(revoke.remaining, 4);
-        assert_eq!(revoke.unmatched_grant_ids.len(), 1);
+        assert_eq!(
+            revoke
+                .unmatched_grant_ids
+                .as_deref()
+                .unwrap_or_default()
+                .len(),
+            1
+        );
 
         let all: mux_tasks::admin_revoke_all::v0_1::Response = serde_json::from_value(json!({
             "did": "did:example:m", "epoch": 4, "epochAdvanced": true, "revokedGrants": 2
@@ -2525,7 +2539,7 @@ where
         };
         outcome.rounds += 1;
         if outcome.rounds == 1 {
-            outcome.unmatched_grant_ids = response.unmatched_grant_ids;
+            outcome.unmatched_grant_ids = response.unmatched_grant_ids.unwrap_or_default();
         }
         let progressed = !response.revoked.is_empty();
         outcome.revoked.extend(response.revoked);
@@ -3150,9 +3164,17 @@ mod tests {
         let batch = decode_monitor_event_v0_3(&v0_3_message(Some(membership_event())))
             .expect("a 0.3 batch");
         assert_eq!(batch.payload.events.len(), 1);
-        assert_eq!(batch.payload.membership.len(), 1);
+        assert_eq!(
+            batch
+                .payload
+                .membership
+                .as_deref()
+                .unwrap_or_default()
+                .len(),
+            1
+        );
         assert_eq!(batch.payload.membership_dropped, Some(2));
-        let event = &batch.payload.membership[0];
+        let event = &batch.payload.membership.as_deref().expect("membership")[0];
         assert_eq!(
             event.change,
             monitor::event::v0_3::MembershipChange::Attached
@@ -3168,7 +3190,7 @@ mod tests {
     fn a_0_3_batch_without_membership_decodes() {
         let batch = decode_monitor_event_v0_3(&v0_3_message(None)).expect("a 0.3 batch");
         assert_eq!(batch.payload.events.len(), 1);
-        assert!(batch.payload.membership.is_empty());
+        assert!(batch.payload.membership.is_none());
         assert_eq!(batch.payload.membership_dropped, None);
     }
 
@@ -3178,7 +3200,15 @@ mod tests {
         message.body["payload"]["events"] = json!([]);
         let batch = decode_monitor_event_v0_3(&message).expect("a 0.3 batch");
         assert!(batch.payload.events.is_empty());
-        assert_eq!(batch.payload.membership.len(), 1);
+        assert_eq!(
+            batch
+                .payload
+                .membership
+                .as_deref()
+                .unwrap_or_default()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -3190,7 +3220,7 @@ mod tests {
         );
         let batch = decode_monitor_event_v0_3(&v0_2).expect("a 0.2 batch, as 0.3");
         assert_eq!(batch.payload.events.len(), 1);
-        assert!(batch.payload.membership.is_empty());
+        assert!(batch.payload.membership.is_none());
 
         let v0_1 = monitor_message(MONITOR_EVENT_V0_1, monitor_event("at"));
         let batch = decode_monitor_event_v0_3(&v0_1).expect("a 0.1 batch, as 0.3");

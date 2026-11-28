@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.40.0] - 2026-11-27
+
+affinidi-messaging-sdk 0.52 (trust-tasks-rs 0.43)
+
+**Breaking:** affinidi-messaging-sdk's types appear in this crate's public API,
+so it moves a minor with the SDK's move to trust-tasks-rs 0.43. No source
+change; behaviour is unchanged.
+
 ## [0.39.0] - 2026-11-24
 
 affinidi-messaging-sdk 0.51 (trust-tasks-rs 0.41)
